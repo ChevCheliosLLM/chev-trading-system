@@ -1,0 +1,43 @@
+# ─── CREDENTIALS — NEVER commit these ───────────────────────────────────────
+google_credentials.json
+*.json.key
+.env
+secrets.py
+
+# ─── Python environments (huge, not needed) ──────────────────────────────────
+.venv/
+venv/
+env/
+chev_env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# ─── Open WebUI full installation (too large, Kev installs this separately) ──
+open-webui/
+
+# ─── Personal trade / runtime data (each person has their own instance) ─────
+performance.jsonl
+chev_journal.json
+chev_decisions.jsonl
+jane_journal.json
+*.log
+
+# ─── Binaries / executables ──────────────────────────────────────────────────
+*.exe
+cloudflared.exe
+
+# ─── OS junk ────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── IDE settings ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.user

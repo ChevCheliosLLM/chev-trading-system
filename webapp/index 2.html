@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Chev Terminal</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #0c0e15;
+    color: #d1d4dc;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- Top bar: timeframes + watchlist toggle ---------- */
+  #topbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 14px;
+    background: #131722;
+    border-bottom: 1px solid #1e222d;
+    flex-wrap: wrap;
+  }
+  #topbar .label {
+    font-size: 11px;
+    color: #787b86;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-right: 6px;
+    margin-left: 10px;
+  }
+  #topbar .label:first-child { margin-left: 0; }
+
+  .pill {
+    background: #1c2030;
+    border: 1px solid #2a2e39;
+    color: #9598a1;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+    font-family: inherit;
+  }
+  .pill:hover { background: #262b3a; color: #d1d4dc; }
+  .pill.active { background: #2962ff; color: #ffffff; border-color: #2962ff; }
+
+  #watchlistToggle {
+    margin-right: 4px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+  #watchlistToggle svg { width: 16px; height: 16px; }
+
+  /* ---------- Body: collapsible watchlist + chart ---------- */
+  #body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    position: relative;
+  }
+
+  #watchlistPanel {
+    width: 0;
+    overflow: hidden;
+    background: #131722;
+    border-right: 1px solid #1e222d;
+    transition: width 0.18s ease;
+    flex-shrink: 0;
+  }
+  #watchlistPanel.open { width: 220px; }
+
+  #watchlistInner { width: 220px; padding: 8px 0; }
+
+  .watchRow {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .watchRow:hover { background: #1c2030; }
+  .watchRow.active { background: #1c2030; border-left-color: #2962ff; }
+  .watchRow .sym { font-size: 13px; color: #d1d4dc; font-weight: 600; }
+  .watchRow .right { text-align: right; }
+  .watchRow .px { font-size: 12px; color: #d1d4dc; }
+  .watchRow .chg { font-size: 11px; }
+  .watchRow .chg.up { color: #089981; }
+  .watchRow .chg.down { color: #f23645; }
+
+  /* ---------- Chart area ---------- */
+  #chartWrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+  }
+  #chart { width: 100%; height: 100%; }
+
+  #priceInfo {
+    position: absolute;
+    top: 12px;
+    left: 16px;
+    z-index: 5;
+    font-size: 13px;
+    color: #9598a1;
+    pointer-events: none;
+    line-height: 1.5;
+  }
+  #priceInfo .sym {
+    font-size: 16px;
+    color: #d1d4dc;
+    font-weight: 600;
+    margin-right: 8px;
+  }
+  #priceInfo .price {
+    font-size: 16px;
+    font-weight: 600;
+  }
+  #priceInfo .up { color: #089981; }
+  #priceInfo .down { color: #f23645; }
+
+  #status {
+    position: absolute;
+    bottom: 10px;
+    left: 16px;
+    z-index: 5;
+    font-size: 11px;
+    color: #5d6068;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+  <div id="topbar">
+    <button class="pill" id="watchlistToggle" title="Watchlist">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+
+    <span class="label">Timeframe</span>
+    <button class="pill" data-tf="15m">15m</button>
+    <button class="pill" data-tf="30m">30m</button>
+    <button class="pill active" data-tf="1h">1h</button>
+    <button class="pill" data-tf="4h">4h</button>
+    <button class="pill" data-tf="1d">1d</button>
+  </div>
+
+  <div id="body">
+    <div id="watchlistPanel">
+      <div id="watchlistInner"></div>
+    </div>
+
+    <div id="chartWrap">
+      <div id="chart"></div>
+      <div id="priceInfo">
+        <span class="sym" id="symLabel">SOLUSDT</span>
+        <span class="price" id="priceLabel">--</span>
+      </div>
+      <div id="status">Loading...</div>
+    </div>
+  </div>
+
+<script>
+  const chartWrap = document.getElementById('chartWrap');
+  const statusEl = document.getElementById('status');
+  const symLabel = document.getElementById('symLabel');
+  const priceLabel = document.getElementById('priceLabel');
+
+  let currentSymbol = 'SOLUSDT';
+  let currentTf = '1h';
+  let pollTimer = null;
+
+  const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+    layout: {
+      background: { color: '#131722' },
+      textColor: '#787b86',
+    },
+    grid: {
+      vertLines: { color: '#1e222d' },
+      horzLines: { color: '#1e222d' },
+    },
+    rightPriceScale: { borderColor: '#2a2e39' },
+    timeScale: {
+      borderColor: '#2a2e39',
+      timeVisible: true,
+      secondsVisible: false,
+    },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  });
+
+  const candleSeries = chart.addCandlestickSeries({
+    upColor: '#089981',
+    downColor: '#f23645',
+    borderVisible: false,
+    wickUpColor: '#089981',
+    wickDownColor: '#f23645',
+  });
+
+  const volumeSeries = chart.addHistogramSeries({
+    priceFormat: { type: 'volume' },
+    priceScaleId: '',
+    scaleMargins: { top: 0.85, bottom: 0 },
+  });
+
+  function resizeChart() {
+    chart.resize(chartWrap.clientWidth, chartWrap.clientHeight);
+  }
+  window.addEventListener('resize', resizeChart);
+  resizeChart();
+
+  function volColor(candle) {
+    return candle.close >= candle.open ? 'rgba(8,153,129,0.5)' : 'rgba(242,54,69,0.5)';
+  }
+
+  async function fetchCandles(symbol, interval, limit = 500) {
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Binance error ${res.status}`);
+    const raw = await res.json();
+    return raw.map(c => ({
+      time: Math.floor(c[0] / 1000),
+      open: parseFloat(c[1]),
+      high: parseFloat(c[2]),
+      low: parseFloat(c[3]),
+      close: parseFloat(c[4]),
+      volume: parseFloat(c[5]),
+    }));
+  }
+
+  function updatePriceLabel(candles) {
+    const last = candles[candles.length - 1];
+    const prev = candles[candles.length - 2] || last;
+    const up = last.close >= prev.close;
+    priceLabel.textContent = last.close.toLocaleString(undefined, { maximumFractionDigits: 6 });
+    priceLabel.className = 'price ' + (up ? 'up' : 'down');
+  }
+
+  async function loadChart(symbol, interval) {
+    statusEl.textContent = 'Loading...';
+    symLabel.textContent = symbol;
+    try {
+      const candles = await fetchCandles(symbol, interval);
+      candleSeries.setData(candles);
+      volumeSeries.setData(candles.map(c => ({ time: c.time, value: c.volume, color: volColor(c) })));
+      updatePriceLabel(candles);
+      chart.timeScale().fitContent();
+      statusEl.textContent = `${symbol} · ${interval} · live`;
+    } catch (err) {
+      statusEl.textContent = 'Error loading data: ' + err.message;
+    }
+  }
+
+  async function pollLatestCandle() {
+    try {
+      const candles = await fetchCandles(currentSymbol, currentTf, 2);
+      const latest = candles[candles.length - 1];
+      candleSeries.update(latest);
+      volumeSeries.update({ time: latest.time, value: latest.volume, color: volColor(latest) });
+      updatePriceLabel(candles);
+    } catch (err) {
+      // silent fail on a single poll - next poll will retry
+    }
+  }
+
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(pollLatestCandle, 5000);
+  }
+
+  const WATCHLIST = [
+    { symbol: 'BTCUSDT', label: 'BTC' },
+    { symbol: 'ETHUSDT', label: 'ETH' },
+    { symbol: 'SOLUSDT', label: 'SOL' },
+    { symbol: 'XRPUSDT', label: 'XRP' },
+    { symbol: 'ADAUSDT', label: 'ADA' },
+    { symbol: 'XLMUSDT', label: 'XLM' },
+  ];
+
+  const watchlistPanel = document.getElementById('watchlistPanel');
+  const watchlistInner = document.getElementById('watchlistInner');
+  const watchlistToggle = document.getElementById('watchlistToggle');
+
+  watchlistToggle.addEventListener('click', () => {
+    watchlistPanel.classList.toggle('open');
+  });
+
+  function buildWatchlistRows() {
+    watchlistInner.innerHTML = WATCHLIST.map(item => `
+      <div class="watchRow${item.symbol === currentSymbol ? ' active' : ''}" data-symbol="${item.symbol}">
+        <span class="sym">${item.label}</span>
+        <span class="right">
+          <div class="px" id="px-${item.symbol}">--</div>
+          <div class="chg" id="chg-${item.symbol}">--</div>
+        </span>
+      </div>
+    `).join('');
+
+    watchlistInner.querySelectorAll('.watchRow').forEach(row => {
+      row.addEventListener('click', () => {
+        currentSymbol = row.dataset.symbol;
+        watchlistInner.querySelectorAll('.watchRow').forEach(r => r.classList.remove('active'));
+        row.classList.add('active');
+        loadChart(currentSymbol, currentTf).then(startPolling);
+        watchlistPanel.classList.remove('open');
+      });
+    });
+  }
+
+  async function refreshWatchlistPrices() {
+    try {
+      const symbolsParam = encodeURIComponent(JSON.stringify(WATCHLIST.map(w => w.symbol)));
+      const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${symbolsParam}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      data.forEach(t => {
+        const pxEl = document.getElementById(`px-${t.symbol}`);
+        const chgEl = document.getElementById(`chg-${t.symbol}`);
+        if (!pxEl || !chgEl) return;
+        const price = parseFloat(t.lastPrice);
+        const changePct = parseFloat(t.priceChangePercent);
+        pxEl.textContent = price.toLocaleString(undefined, { maximumFractionDigits: 4 });
+        chgEl.textContent = (changePct >= 0 ? '+' : '') + changePct.toFixed(2) + '%';
+        chgEl.className = 'chg ' + (changePct >= 0 ? 'up' : 'down');
+      });
+    } catch (err) {
+      // silent - next refresh will retry
+    }
+  }
+
+  buildWatchlistRows();
+  refreshWatchlistPrices();
+  setInterval(refreshWatchlistPrices, 10000);
+
+  function setActive(buttons, target) {
+    buttons.forEach(b => b.classList.remove('active'));
+    target.classList.add('active');
+  }
+
+  const tfButtons = Array.from(document.querySelectorAll('[data-tf]'));
+
+  tfButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentTf = btn.dataset.tf;
+      setActive(tfButtons, btn);
+      loadChart(currentSymbol, currentTf).then(startPolling);
+    });
+  });
+
+  loadChart(currentSymbol, currentTf).then(startPolling);
+</script>
+
+</body>
+</html>

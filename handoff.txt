@@ -1,0 +1,277 @@
+================================================================================
+CHEV CHELIOS PROJECT — AI HANDOFF DOCUMENT
+Generated: 2026-06-30
+================================================================================
+
+## WHAT THIS PROJECT IS
+
+A fully local, private AI trading terminal built for one user (Kev). Three parts:
+
+1. CHEV CHELIOS — AI trading partner running in Open WebUI (local, private)
+   Model: qwen3-vl:30b via Ollama. Personality: witty Londoner, Chelsea fan, Seinfeld
+   references. Has chart analysis tools. Makes trade recommendations, NEVER executes.
+
+2. DEXTER — Python trading bot at C:\ChevTools\dexter.py (4700+ lines, runs 24/7)
+   Scans watchlist for technical confluences, escalates to Chev via Open WebUI API,
+   logs trades to Google Sheets, monitors/closes positions. Also hosts the web terminal
+   as a Flask server on port 8080.
+
+3. WEB TERMINAL — C:\ChevTools\webapp\index.html
+   Dark TradingView-style chart terminal. Live candles, watchlist, trade logs, Chev's
+   Corner (pending ideas), multi-conversation Chev chat panel, drawing tools.
+
+================================================================================
+## FILE LOCATIONS
+================================================================================
+
+C:\ChevTools\dexter.py              — Main bot + Flask server (port 8080)
+C:\ChevTools\webapp\index.html      — Web terminal (single HTML file, ~3500 lines)
+C:\ChevTools\google_credentials.json — Google service account (must stay here)
+C:\ChevTools\chev_journal.json      — Chev's trade history
+C:\ChevTools\chev_playbook.txt      — Auto-updated playbook from learning sessions
+C:\ChevTools\chart_drawer.py        — Open WebUI tool (2458 lines, copy-pasted into
+                                       Open WebUI's tool editor)
+C:\open-webui-dev\ChevTools\webapp\Confluence_Analyzer — Open WebUI tool (SR analysis)
+
+Open WebUI runs at: http://localhost:3000
+Dexter/Flask runs at: http://localhost:8080
+Model ID in Open WebUI: "chev-chelios"
+Open WebUI API key: sk-91bd167cca0142c983379ebe27b4e621
+
+================================================================================
+## WATCHLIST
+================================================================================
+
+Crypto:  BTCUSDT, ETHUSDT, XRPUSDT, XLMUSDT, ADAUSDT, SOLUSDT  (Binance)
+Forex:   EUR/USD, GBP/USD, USD/JPY, AUD/USD                     (yfinance + Twelve Data)
+Stocks:  NVDA, TSLA, AMZN, AMD                                   (yfinance + Twelve Data)
+
+================================================================================
+## HOW DEXTER WORKS
+================================================================================
+
+Every 2 minutes Dexter scans all pairs across timeframes:
+- Crypto: 5m/15m/30m/1h/4h (full Tier A/B SR model, Binance free)
+- Forex/Stocks: 15m/30m/1h/4h (Tier B only — protects Twelve Data API budget)
+
+When 3+ confluences align on a pair/TF, Dexter calls Chev via Open WebUI API:
+  POST http://localhost:3000/api/chat/completions
+  model: "chev-chelios"
+  message: [full market brief + candle data + SR levels + Chev's playbook + journal]
+
+Chev replies in strict format:
+  POST: <15-word max summary>
+  TRADE: direction=long, entry=X, sl=Y, tp=Z, risk_pct=N, leverage=N,
+         position_size_usd=N, tags=sr_4h,fib_1h,rsi, trade_type=day,
+         sr_level=X, fib_high=X, fib_low=X, vp_start=YYYY-MM-DD,
+         rsi_div_t1=YYYY-MM-DD, rsi_div_t2=YYYY-MM-DD
+  REASONING: <full analysis, no word limit>
+
+  OR: SKIP: <one sentence why>
+
+Dexter parses the TRADE: line, validates confluence score, checks SL direction,
+logs to Google Sheets, and monitors until TP/SL/expiry.
+
+================================================================================
+## CONFLUENCE SCORING SYSTEM
+================================================================================
+
+Minimum score to open a trade: crypto=10, forex/stock=7
+
+Tags and their scores:
+  sr_4h=4  sr_1h=3  sr_30m=2  sr_15m=1
+  fib_4h=3  fib_1h=2  fib_30m=2  fib_15m=1
+  rsi_4h=4  rsi_1h=4  rsi_30m=3  rsi_15m=2
+  ema_4h=3  ema_1h=2  ema_30m=1  ema_15m=1
+  bb_4h=3   bb_1h=2   bb_30m=2   bb_15m=1
+  tri_4h=3  tri_1h=2  tri_30m=1  tri_15m=1
+  gp=4  (Golden Pocket 0.618-0.65 fib zone)
+  vp=3  (Volume Profile POC/VAH/VAL)
+  vw=3  (VWAP)
+  dv=3  (Divergence non-RSI)
+  cp=1  (Candle Pattern — confirmation only)
+  ms_1d=5  ms_4h=4  ms_1h=3  ms_30m=2  ms_15m=1  (Market Structure)
+
+================================================================================
+## VISUAL ANCHORS (drawn on chart when trade is clicked)
+================================================================================
+
+If Chev tags sr or sr_Xtf  → adds sr_level=<price> to TRADE: line
+If Chev tags fib or fib_Xtf → adds fib_high=<price>, fib_low=<price>
+If Chev tags vp             → adds vp_start=<YYYY-MM-DD>
+If Chev tags rsi or rsi_Xtf → adds rsi_div_t1=<date>, rsi_div_t2=<date>
+If Chev tags ms or ms_Xtf  → no anchor needed, chart auto-overlays higher TF candles
+
+================================================================================
+## GOOGLE SHEETS
+================================================================================
+
+Sheet ID: 1V1b2aU3SJu_R7VjFKGp9J6uFwucGSamhRWyq6jgCbFs
+
+Trade Log tab columns:
+  A: Pair | B: Direction | C: Entry | D: Stop-Loss | E: Take-Profit
+  F: Risk % | G: Leverage | H: Position Size | I: Margin Used ($)
+  J: Confluences Used | K: Live Price | L: Live PnL $ | M: Status
+  N: Result $ | O: Timestamp | P: Trade Type | Q: Expiry At
+  R: Confluence Prices JSON | S: Chev's Notes (annotate_trade)
+
+Dashboard tab: B1 = live balance (starts $10,000, updates on realized close)
+Jane tab: paper trading account for comparison
+
+================================================================================
+## WEB TERMINAL — CHART TOOLBAR BUTTONS
+================================================================================
+
+Drawing tools: Crosshair, Horizontal Line, Ray, Trend Line, Rectangle,
+               Fibonacci, Channel, Volume Profile, Measure, Triangle
+
+Analysis buttons (all call Dexter's /api/analysis/* endpoints):
+  S/R  — multi-TF validated SR zones (Tier A preferred, Tier B fallback, JS fallback)
+  VP   — Volume Profile: POC (orange hline), VAH + VAL (gold hlines)
+  ATR  — shows floating toast: ATR value, avg, state, suggested SL distances
+  Fib  — multi-TF golden pockets (15m=blue, 1h=gold, 4h=orange), overlap=white
+  RSI÷ — RSI divergence: type, bias, note shown in toast overlay
+
+Other buttons: Bollinger Bands toggle, VWAP toggle, EMA toggle, S/R auto-draw,
+               Magnet, Object Tree, Clear All
+
+================================================================================
+## DEXTER FLASK API ENDPOINTS
+================================================================================
+
+/api/ping                    — health check
+/api/trades                  — open/pending trades for Chev's Corner
+/api/prices                  — live watchlist prices
+/api/chev_chat               — proxy to Open WebUI (avoids CORS from webapp)
+/api/forex_candles           — Twelve Data candles proxy (keeps API keys server-side)
+/api/analysis/sr             — multi-TF SR levels (Tier A + Tier B fallback)
+/api/analysis/vp             — Volume Profile (POC, VAH, VAL)
+/api/analysis/atr            — ATR + stop suggestion
+/api/analysis/fib_stack      — multi-TF Fibonacci golden pockets + overlaps
+/api/analysis/rsi_div        — RSI divergence detection
+
+Analysis endpoint parameters: ?symbol=SOLUSDT&tf=1h
+
+================================================================================
+## CHEV'S OPEN WEBUI TOOLS (chart_drawer.py)
+================================================================================
+
+Public functions (async, in Tools class):
+  get_live_chart(symbol, timeframe, zoom_candles)
+  get_support_resistance(symbol, timeframe, zoom_candles)
+  get_fibonacci_levels(symbol, timeframe, zoom_candles)
+  get_volume_profile(symbol, timeframe, anchor_candles_ago, zoom_candles)
+  get_atr_stop_suggestion(symbol, timeframe, entry_price, direction, multiplier)
+  mark_price_level(symbol, timeframe, price, label, color)
+  draw_trend_line(symbol, timeframe, x1, y1, x2, y2, label)
+  draw_zone_box(symbol, timeframe, price_high, price_low, label, color)
+  show_confluences(symbol, primary_timeframe)
+  get_stacked_fibonacci(symbol, primary_timeframe)
+  detect_rsi_divergence(symbol, timeframe, lookback)
+  detect_chart_patterns(symbol, timeframe)
+  detect_candlestick_patterns(symbol, timeframe)
+  get_multitime_structure(symbol, timeframe)
+  get_trade_performance()
+  annotate_trade(row_number, notes)
+
+================================================================================
+## HOW DEXTER CALLS CHEV (key function: ask_chev_to_judge)
+================================================================================
+
+Located at ~line 3590 in dexter.py. Called when scan_pair_tf() detects 3+ confluences.
+
+The message sent to Chev includes:
+1. Chev's playbook (last 500 chars)
+2. Recent relevant journal entries (last 3 same asset type + last 2 any type)
+3. Full market brief: primary TF candles + OHLCV + RSI + EMA + volume trend
+4. Higher TF summary (4H context)
+5. Dexter's detected confluence zone + reasons
+6. Direction hint (near support = long bias, near resistance = short bias)
+7. TOOLS AVAILABLE block — explicit instructions to call these before deciding:
+   - get_support_resistance(symbol, tf) — ALWAYS, verify Dexter's zone
+   - get_stacked_fibonacci(symbol, tf) — if fib retracement visible
+   - get_volume_profile(symbol, tf) — if near volume cluster
+   - detect_rsi_divergence(symbol, tf) — if RSI diverging
+   - get_atr_stop_suggestion(symbol, tf, entry, direction) — SL sanity check
+8. Full trading rules (SL placement, RR expectations, pending orders, etc.)
+9. ABSOLUTE RULES (SL must be below entry for long, above for short)
+10. Confluence scoring table + threshold
+
+If Chev's reply doesn't start with POST:/SKIP:, Dexter retries once with reminder.
+
+================================================================================
+## JANE (PAPER TRADING COMPARISON)
+================================================================================
+
+Jane is a second paper trading account tracking Kev's human trades from the Jane tab
+of Google Sheets. Chev evaluates each Jane trade (APPROVED/CAUTION/REJECTED) and
+Dexter tracks advisory accuracy. Used for cross-analysis and learning sessions.
+
+_ask_chev_about_jane_trade() — Chev gets Jane's entry/SL/TP/tags and gives verdict.
+  Also told to call get_support_resistance() and get_atr_stop_suggestion() to verify
+  Jane's tags before deciding.
+
+================================================================================
+## CRITICAL RULES (never violate)
+================================================================================
+
+- No vision/screenshot chart reading ever. All data from real API calls.
+- Chev's tools must actually be CALLED, never narrated or faked.
+- No code changes without Kev explicitly asking for them.
+- SL for LONG must be numerically below entry. SL for SHORT above entry.
+  Dexter hard-rejects SIP-direction violations.
+- Risk: 0.5–3% of balance per trade.
+- Leverage caps: crypto scalp/day=10x swing=5x. Forex/stock scalp/day=5x swing=2x.
+- Dexter is the execution layer. Chev recommends only. Never give Chev order-placement
+  tools (no Alpaca/Binance trade execution tools in Open WebUI).
+- Always use localhost:8080 (Dexter's Flask). Never 5500 (VS Code Live Server).
+- google_credentials.json must stay at C:\ChevTools\ (not in subfolders).
+
+================================================================================
+## WHAT WAS JUST BUILT (2026-06-30 session)
+================================================================================
+
+1. 5 new Flask endpoints in dexter.py (analysis suite):
+   - /api/analysis/sr  — multi-TF SR with Tier A validation
+   - /api/analysis/vp  — real volume profile
+   - /api/analysis/atr — ATR + volatility state + SL suggestions
+   - /api/analysis/fib_stack — golden pockets across 15m/1h/4h + overlap detection
+   - /api/analysis/rsi_div — regular/hidden bull/bear RSI divergence
+
+2. Webapp toolbar additions (index.html):
+   - VP, ATR, Fib, RSI÷ buttons wired to above endpoints
+   - S/R button upgraded to use /api/analysis/sr (JS fallback if offline)
+   - #analysisToast div for non-drawing results (ATR, RSI div)
+   - _pushZonesToDrawings(tag, zones, tfSec) shared helper
+
+3. Dexter prompt updates:
+   - ask_chev_to_judge(): added TOOLS AVAILABLE block with exact function names
+   - _ask_chev_about_jane_trade(): lighter tools block for Jane advisory
+
+================================================================================
+## WHAT TO WORK ON NEXT
+================================================================================
+
+Priority order:
+1. Test analysis endpoints — restart Dexter, click VP/ATR/Fib/SR buttons in webapp,
+   verify drawings appear on chart for a live symbol (e.g. SOLUSDT on 1h).
+2. Analysis overlay test — click a trade in Trade Logs that has Fib/SR anchors,
+   verify the overlay draws correctly on the chart.
+3. Monitor vs main page trade sync — verify Firebase push thread fires correctly
+   so both the main page and monitor page show the same open trades.
+4. Performance Review prompt — Chev reads Google Sheet win-rate stats by confluence
+   combo and writes updated playbook.
+
+================================================================================
+## INFRASTRUCTURE
+================================================================================
+
+OS: Windows 10
+Python venv: C:\ChevTools (requests, pandas, numpy, gspread, google-auth, flask)
+GPU: RTX 3090 (Ollama uses it for qwen3-vl:30b)
+Ollama: OLLAMA_KEEP_ALIVE=0 (unloads when idle, GPU sits at 0%)
+VS Code workspace root: C:\open-webui-dev\ChevTools\webapp
+
+================================================================================
+END OF HANDOFF
+================================================================================

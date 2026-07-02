@@ -1,0 +1,34 @@
+CHEV TRADING PLAYBOOK
+Last updated: 2026-07-02 08:58:20 | Based on 60 Chev + 2 Jane closed trades
+========================================
+
+### CONFLUENCE CONDITIONS
+- Combinations with Fibonacci golden pocket (GP), EMA crossovers, RSI divergence, and structural support/resistance at 4-hour or 15-minute timeframes have shown higher win-rates.
+- SR levels at the 4H timeframe tend to be more reliable than those at 1H when market conditions are trending; in ranging markets, 1H SR may provide better entry points.
+- RSI divergence signals are most reliable in setups with clear structural support/resistance and additional confluences like EMA crossovers or Fibonacci levels.
+
+### MARKET STRUCTURE RULES
+- Trend context improves setup quality when there is a clear directional bias (e.g., head & shoulders breakout) supported by multiple technical indicators.
+- Confidence in reaching TP increases when setups align with strong structural support/resistance and are confirmed by recent price action, such as EMA crossovers or Bollinger Bands squeezes.
+- High-quality setups often show robust market sentiment through high volume spikes at key levels or confluence of multiple bullish/bearish signals.
+
+### ENTRY QUALITY STANDARDS
+- High-conviction entries are defined by clear structural support/resistance, strong technical indicators (EMA crossovers, Fibonacci levels), and confirmatory price action.
+- Winners typically had a combination of well-defined SR zones, hidden divergences, and confluence at multiple timeframes, whereas losers lacked robust structural context or clear trend confirmation.
+- Marginal entries often failed due to insufficient support/resistance validation or reliance on single indicators like RSI divergence without additional confirmatory signals.
+
+### TRADE MANAGEMENT PATTERNS
+- Insufficient data — revisit next session.
+
+### REASONING QUALITY
+- 8 out of the last 30 setups were fully validated, indicating that about 27% of reasoning is supported by price action.
+- Invalidated setups often lacked clear structural support/resistance or relied too heavily on single indicators like RSI divergence without additional confirmation.
+- A+ setups showed higher validation rates (100%) compared to B setups (25%), suggesting more robust confluence and clearer market structure.
+
+### ASSET NOTES
+- Cryptocurrencies show better performance in setups with multiple confluences at key support/resistance levels, whereas forex pairs require a clear trend context or strong structural confirmation.
+- Stocks like AMZN benefit from setups aligned with historical patterns (e.g., head & shoulders breakouts) and robust technical indicators.
+
+### JANE'S PATTERNS
+- Jane consistently shows profitability on setups with hidden bullish/bearish divergences confirmed by strong structural support/resistance levels at 4-hour timeframes.
+- Her instincts often diverge from models in volatile markets where single indicator signals (e.g., RSI divergence) are less reliable; her approach tends to outperform when she waits for additional confirmatory price action.

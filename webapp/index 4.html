@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Chev Terminal</title>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #0c0e15;
+    color: #d1d4dc;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- Top bar: timeframes + watchlist toggle ---------- */
+  #topbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 14px;
+    background: #131722;
+    border-bottom: 1px solid #1e222d;
+    flex-wrap: wrap;
+  }
+  #topbar .label {
+    font-size: 11px;
+    color: #787b86;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-right: 6px;
+    margin-left: 10px;
+  }
+  #topbar .label:first-child { margin-left: 0; }
+
+  .pill {
+    background: #1c2030;
+    border: 1px solid #2a2e39;
+    color: #9598a1;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+    font-family: inherit;
+  }
+  .pill:hover { background: #262b3a; color: #d1d4dc; }
+  .pill.active { background: #2962ff; color: #ffffff; border-color: #2962ff; }
+
+  #watchlistToggle {
+    margin-right: 4px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+  #watchlistToggle svg { width: 16px; height: 16px; }
+
+  /* ---------- Body: collapsible watchlist + chart ---------- */
+  #body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    position: relative;
+  }
+
+  #watchlistPanel {
+    width: 0;
+    overflow: hidden;
+    background: #131722;
+    border-right: 1px solid #1e222d;
+    transition: width 0.18s ease;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  #watchlistPanel.open { width: 240px; }
+
+  #watchlistInner { width: 240px; flex: 1; overflow-y: auto; }
+
+  /* Group tabs */
+  #groupTabs {
+    width: 240px;
+    display: flex;
+    border-bottom: 1px solid #1e222d;
+    flex-shrink: 0;
+  }
+  .groupTab {
+    flex: 1;
+    text-align: center;
+    padding: 9px 0;
+    font-size: 11px;
+    color: #787b86;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .groupTab:hover { color: #d1d4dc; }
+  .groupTab.active { color: #2962ff; border-bottom-color: #2962ff; }
+
+  .watchRow {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 10px 9px 14px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .watchRow:hover { background: #1c2030; }
+  .watchRow:hover .removeBtn { opacity: 1; }
+  .watchRow.active { background: #1c2030; border-left-color: #2962ff; }
+  .watchRow .left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .watchRow .logo { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; }
+  .watchRow .tradeDot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: transparent;
+  }
+  .watchRow .tradeDot.live { background: #089981; box-shadow: 0 0 4px #089981; }
+  .watchRow .tradeDot.loss { background: #f23645; box-shadow: 0 0 4px #f23645; }
+  .watchRow .sym { font-size: 13px; color: #d1d4dc; font-weight: 600; white-space: nowrap; }
+  .watchRow .right { display: flex; align-items: center; gap: 8px; }
+  .watchRow .priceBlock { text-align: right; }
+  .watchRow .px { font-size: 12px; color: #d1d4dc; }
+  .watchRow .chg { font-size: 11px; }
+  .watchRow .chg.up { color: #089981; }
+  .watchRow .chg.down { color: #f23645; }
+  .removeBtn {
+    opacity: 0;
+    background: none;
+    border: none;
+    color: #787b86;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 2px 4px;
+    line-height: 1;
+  }
+  .removeBtn:hover { color: #f23645; }
+
+  #addRow {
+    padding: 10px 14px;
+    border-top: 1px solid #1e222d;
+    flex-shrink: 0;
+  }
+  #addRow button {
+    width: 100%;
+    background: #1c2030;
+    border: 1px dashed #2a2e39;
+    color: #787b86;
+    padding: 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  #addRow button:hover { color: #d1d4dc; border-color: #2962ff; }
+
+  /* ---------- Chart area ---------- */
+  #chartWrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+  }
+  #chart { width: 100%; height: 100%; }
+
+  #priceInfo {
+    position: absolute;
+    top: 12px;
+    left: 16px;
+    z-index: 5;
+    font-size: 13px;
+    color: #9598a1;
+    pointer-events: none;
+    line-height: 1.5;
+    transition: left 0.18s ease;
+  }
+  #priceInfo .sym {
+    font-size: 16px;
+    color: #d1d4dc;
+    font-weight: 600;
+    margin-right: 8px;
+  }
+  #priceInfo .price {
+    font-size: 16px;
+    font-weight: 600;
+  }
+  #priceInfo .up { color: #089981; }
+  #priceInfo .down { color: #f23645; }
+
+  #ohlcInfo {
+    margin-top: 4px;
+    font-family: "SF Mono", "Consolas", "Courier New", monospace;
+    font-size: 11px;
+    color: #787b86;
+    white-space: nowrap;
+  }
+  #ohlcInfo .o, #ohlcInfo .h, #ohlcInfo .l, #ohlcInfo .c, #ohlcInfo .v { margin-right: 10px; }
+  #ohlcInfo .val { color: #d1d4dc; }
+  #ohlcInfo .val.up { color: #089981; }
+  #ohlcInfo .val.down { color: #f23645; }
+
+  #status {
+    position: absolute;
+    bottom: 10px;
+    left: 16px;
+    z-index: 5;
+    font-size: 11px;
+    color: #5d6068;
+    pointer-events: none;
+    transition: left 0.18s ease;
+  }
+</style>
+</head>
+<body>
+
+  <div id="topbar">
+    <button class="pill" id="watchlistToggle" title="Watchlist">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+
+    <span class="label">Timeframe</span>
+    <button class="pill" data-tf="15m">15m</button>
+    <button class="pill" data-tf="30m">30m</button>
+    <button class="pill active" data-tf="1h">1h</button>
+    <button class="pill" data-tf="4h">4h</button>
+    <button class="pill" data-tf="1d">1d</button>
+  </div>
+
+  <div id="body">
+    <div id="watchlistPanel">
+      <div id="groupTabs">
+        <div class="groupTab active" data-group="crypto">Crypto</div>
+        <div class="groupTab" data-group="forex">Forex</div>
+        <div class="groupTab" data-group="stocks">Stocks</div>
+      </div>
+      <div id="watchlistInner"></div>
+      <div id="addRow"><button id="addPairBtn">+ Add pair</button></div>
+    </div>
+
+    <div id="chartWrap">
+      <div id="chart"></div>
+      <div id="priceInfo">
+        <div>
+          <span class="sym" id="symLabel">SOLUSDT</span>
+          <span class="price" id="priceLabel">--</span>
+        </div>
+        <div id="ohlcInfo"></div>
+      </div>
+      <div id="status">Loading...</div>
+    </div>
+  </div>
+
+<script>
+  /* ============================================================
+     STATE
+     ============================================================ */
+  const chartWrap = document.getElementById('chartWrap');
+  const statusEl = document.getElementById('status');
+  const symLabel = document.getElementById('symLabel');
+  const priceLabel = document.getElementById('priceLabel');
+  const priceInfo = document.getElementById('priceInfo');
+  const ohlcInfo = document.getElementById('ohlcInfo');
+
+  const DEFAULT_GROUPS = {
+    crypto: [
+      { symbol: 'BTCUSDT', label: 'BTC', icon: 'btc', type: 'crypto' },
+      { symbol: 'ETHUSDT', label: 'ETH', icon: 'eth', type: 'crypto' },
+      { symbol: 'SOLUSDT', label: 'SOL', icon: 'sol', type: 'crypto' },
+      { symbol: 'XRPUSDT', label: 'XRP', icon: 'xrp', type: 'crypto' },
+      { symbol: 'ADAUSDT', label: 'ADA', icon: 'ada', type: 'crypto' },
+      { symbol: 'XLMUSDT', label: 'XLM', icon: 'xlm', type: 'crypto' },
+    ],
+    forex: [
+      { symbol: 'EUR/USD', label: 'EUR/USD', icon: null, type: 'forex' },
+      { symbol: 'GBP/USD', label: 'GBP/USD', icon: null, type: 'forex' },
+      { symbol: 'USD/JPY', label: 'USD/JPY', icon: null, type: 'forex' },
+      { symbol: 'AUD/USD', label: 'AUD/USD', icon: null, type: 'forex' },
+    ],
+    stocks: [
+      { symbol: 'NVDA', label: 'NVDA', icon: null, type: 'stock' },
+      { symbol: 'TSLA', label: 'TSLA', icon: null, type: 'stock' },
+      { symbol: 'AMZN', label: 'AMZN', icon: null, type: 'stock' },
+      { symbol: 'AMD', label: 'AMD', icon: null, type: 'stock' },
+    ],
+  };
+
+  function loadGroups() {
+    const saved = localStorage.getItem('chevWatchlistGroups');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { /* fall through to default */ }
+    }
+    return JSON.parse(JSON.stringify(DEFAULT_GROUPS));
+  }
+  function saveGroups() {
+    localStorage.setItem('chevWatchlistGroups', JSON.stringify(groups));
+  }
+
+  let groups = loadGroups();
+  let currentGroup = 'crypto';
+  let currentSymbol = groups.crypto[2].symbol; // SOL default
+  let currentType = 'crypto';
+  let currentTf = '1h';
+  let pollTimer = null;
+
+  function getTwelveDataKey() {
+    let key = localStorage.getItem('chevTwelveDataKey');
+    if (!key) {
+      key = prompt('Forex/stock data needs a free Twelve Data API key (the same one Dexter uses). Paste it here once - it will be remembered:');
+      if (key) localStorage.setItem('chevTwelveDataKey', key.trim());
+    }
+    return key;
+  }
+
+  /* ============================================================
+     CHART SETUP
+     ============================================================ */
+  const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+    layout: { background: { color: '#131722' }, textColor: '#787b86' },
+    grid: { vertLines: { color: '#1e222d' }, horzLines: { color: '#1e222d' } },
+    rightPriceScale: { borderColor: '#2a2e39' },
+    timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: false },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  });
+
+  const candleSeries = chart.addCandlestickSeries({
+    upColor: '#089981', downColor: '#f23645', borderVisible: false,
+    wickUpColor: '#089981', wickDownColor: '#f23645',
+  });
+
+  const volumeSeries = chart.addHistogramSeries({
+    priceFormat: { type: 'volume' },
+    priceScaleId: '',
+    scaleMargins: { top: 0.85, bottom: 0 },
+  });
+
+  function resizeChart() { chart.resize(chartWrap.clientWidth, chartWrap.clientHeight); }
+  window.addEventListener('resize', resizeChart);
+  resizeChart();
+
+  function volColor(c) { return c.close >= c.open ? 'rgba(8,153,129,0.5)' : 'rgba(242,54,69,0.5)'; }
+
+  function formatVolume(v) {
+    if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+    if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(2) + 'K';
+    return v.toFixed(2);
+  }
+
+  /* ---------- Data fetching: crypto (Binance) vs forex/stock (Twelve Data) ---------- */
+  const TWELVE_INTERVAL_MAP = { '15m': '15min', '30m': '30min', '1h': '1h', '4h': '4h', '1d': '1day' };
+
+  async function fetchCandles(symbol, interval, type, limit = 500) {
+    if (type === 'crypto') {
+      const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Binance error ${res.status}`);
+      const raw = await res.json();
+      return raw.map(c => ({
+        time: Math.floor(c[0] / 1000),
+        open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]),
+        volume: parseFloat(c[5]),
+      }));
+    } else {
+      const key = getTwelveDataKey();
+      const td_interval = TWELVE_INTERVAL_MAP[interval] || '1h';
+      const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${td_interval}&outputsize=${limit}&apikey=${key}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!data.values) throw new Error(data.message || 'Twelve Data error');
+      return data.values.slice().reverse().map(c => ({
+        time: Math.floor(new Date(c.datetime).getTime() / 1000),
+        open: parseFloat(c.open), high: parseFloat(c.high), low: parseFloat(c.low), close: parseFloat(c.close),
+        volume: c.volume ? parseFloat(c.volume) : 0,
+      }));
+    }
+  }
+
+  function updatePriceLabel(candles) {
+    const last = candles[candles.length - 1];
+    const prev = candles[candles.length - 2] || last;
+    const up = last.close >= prev.close;
+    priceLabel.textContent = last.close.toLocaleString(undefined, { maximumFractionDigits: 6 });
+    priceLabel.className = 'price ' + (up ? 'up' : 'down');
+    renderOhlc(last, up);
+  }
+
+  function renderOhlc(c, up) {
+    const cls = up ? 'up' : 'down';
+    ohlcInfo.innerHTML =
+      `<span class="o">O <span class="val">${c.open.toFixed(4)}</span></span>` +
+      `<span class="h">H <span class="val">${c.high.toFixed(4)}</span></span>` +
+      `<span class="l">L <span class="val">${c.low.toFixed(4)}</span></span>` +
+      `<span class="c">C <span class="val ${cls}">${c.close.toFixed(4)}</span></span>` +
+      `<span class="v">Vol <span class="val">${formatVolume(c.volume || 0)}</span></span>`;
+  }
+
+  async function loadChart(symbol, interval, type) {
+    statusEl.textContent = 'Loading...';
+    symLabel.textContent = symbol;
+    try {
+      const candles = await fetchCandles(symbol, interval, type);
+      candleSeries.setData([]);
+      volumeSeries.setData([]);
+      candleSeries.setData(candles);
+      volumeSeries.setData(candles.map(c => ({ time: c.time, value: c.volume, color: volColor(c) })));
+      updatePriceLabel(candles);
+      chart.priceScale('right').applyOptions({ autoScale: true });
+      chart.timeScale().fitContent();
+      statusEl.textContent = `${symbol} · ${interval} · live`;
+    } catch (err) {
+      statusEl.textContent = 'Error loading data: ' + err.message;
+    }
+  }
+
+  async function pollLatestCandle() {
+    try {
+      const candles = await fetchCandles(currentSymbol, currentTf, currentType, 2);
+      const latest = candles[candles.length - 1];
+      candleSeries.update(latest);
+      volumeSeries.update({ time: latest.time, value: latest.volume, color: volColor(latest) });
+      updatePriceLabel(candles);
+    } catch (err) { /* silent - next poll retries */ }
+  }
+
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(pollLatestCandle, currentType === 'crypto' ? 5000 : 15000);
+  }
+
+  /* ---------- Hover tooltip (crosshair) showing OHLC + volume of hovered candle ---------- */
+  chart.subscribeCrosshairMove(param => {
+    if (!param.time) return;
+    const candleData = param.seriesData.get(candleSeries);
+    const volData = param.seriesData.get(volumeSeries);
+    if (!candleData) return;
+    const up = candleData.close >= candleData.open;
+    renderOhlc({ ...candleData, volume: volData ? volData.value : 0 }, up);
+  });
+
+  /* ============================================================
+     WATCHLIST PANEL
+     ============================================================ */
+  const watchlistPanel = document.getElementById('watchlistPanel');
+  const watchlistInner = document.getElementById('watchlistInner');
+  const watchlistToggle = document.getElementById('watchlistToggle');
+  const groupTabs = document.querySelectorAll('.groupTab');
+  const addPairBtn = document.getElementById('addPairBtn');
+
+  watchlistToggle.addEventListener('click', () => {
+    watchlistPanel.classList.toggle('open');
+    const open = watchlistPanel.classList.contains('open');
+    priceInfo.style.left = open ? '256px' : '16px';
+    statusEl.style.left = open ? '256px' : '16px';
+  });
+
+  groupTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      groupTabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      currentGroup = tab.dataset.group;
+      buildWatchlistRows();
+      refreshWatchlistPrices();
+    });
+  });
+
+  function iconUrl(ticker) {
+    return `https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@master/32/color/${ticker}.png`;
+  }
+
+  function buildWatchlistRows() {
+    const items = groups[currentGroup] || [];
+    watchlistInner.innerHTML = items.map(item => `
+      <div class="watchRow${item.symbol === currentSymbol ? ' active' : ''}" data-symbol="${item.symbol}" data-type="${item.type}">
+        <span class="left">
+          <span class="tradeDot" id="dot-${cssId(item.symbol)}" title="No open trade"></span>
+          ${item.icon ? `<img class="logo" src="${iconUrl(item.icon)}" alt="" onerror="this.style.display='none'" />` : ''}
+          <span class="sym">${item.label}</span>
+        </span>
+        <span class="right">
+          <span class="priceBlock">
+            <div class="px" id="px-${cssId(item.symbol)}">--</div>
+            <div class="chg" id="chg-${cssId(item.symbol)}">--</div>
+          </span>
+          <button class="removeBtn" data-remove="${item.symbol}" title="Remove from watchlist">×</button>
+        </span>
+      </div>
+    `).join('');
+
+    watchlistInner.querySelectorAll('.watchRow').forEach(row => {
+      row.addEventListener('click', (e) => {
+        if (e.target.classList.contains('removeBtn')) return;
+        currentSymbol = row.dataset.symbol;
+        currentType = row.dataset.type;
+        watchlistInner.querySelectorAll('.watchRow').forEach(r => r.classList.remove('active'));
+        row.classList.add('active');
+        loadChart(currentSymbol, currentTf, currentType).then(startPolling);
+        watchlistPanel.classList.remove('open');
+        priceInfo.style.left = '16px';
+        statusEl.style.left = '16px';
+      });
+    });
+
+    watchlistInner.querySelectorAll('.removeBtn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const symbolToRemove = btn.dataset.remove;
+        groups[currentGroup] = groups[currentGroup].filter(p => p.symbol !== symbolToRemove);
+        saveGroups();
+        buildWatchlistRows();
+      });
+    });
+  }
+
+  function cssId(symbol) { return symbol.replace(/[^a-zA-Z0-9]/g, ''); }
+
+  async function refreshWatchlistPrices() {
+    const items = groups[currentGroup] || [];
+    const cryptoItems = items.filter(i => i.type === 'crypto');
+    const otherItems = items.filter(i => i.type !== 'crypto');
+
+    if (cryptoItems.length) {
+      try {
+        const symbolsParam = encodeURIComponent(JSON.stringify(cryptoItems.map(i => i.symbol)));
+        const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${symbolsParam}`);
+        if (res.ok) {
+          const data = await res.json();
+          data.forEach(t => applyWatchPrice(t.symbol, parseFloat(t.lastPrice), parseFloat(t.priceChangePercent)));
+        }
+      } catch (e) { /* silent */ }
+    }
+
+    if (otherItems.length) {
+      const key = localStorage.getItem('chevTwelveDataKey');
+      if (!key) return;
+      for (const item of otherItems) {
+        try {
+          const url = `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(item.symbol)}&apikey=${key}`;
+          const res = await fetch(url);
+          const data = await res.json();
+          if (data.close) applyWatchPrice(item.symbol, parseFloat(data.close), parseFloat(data.percent_change));
+        } catch (e) { /* silent */ }
+      }
+    }
+  }
+
+  function applyWatchPrice(symbol, price, changePct) {
+    const pxEl = document.getElementById(`px-${cssId(symbol)}`);
+    const chgEl = document.getElementById(`chg-${cssId(symbol)}`);
+    if (!pxEl || !chgEl) return;
+    pxEl.textContent = price.toLocaleString(undefined, { maximumFractionDigits: 4 });
+    chgEl.textContent = (changePct >= 0 ? '+' : '') + changePct.toFixed(2) + '%';
+    chgEl.className = 'chg ' + (changePct >= 0 ? 'up' : 'down');
+  }
+
+  addPairBtn.addEventListener('click', () => {
+    const input = prompt(
+      `Add a pair to ${currentGroup.toUpperCase()}.\n\n` +
+      (currentGroup === 'crypto'
+        ? 'Enter the Binance symbol, e.g. DOGEUSDT'
+        : currentGroup === 'forex'
+        ? 'Enter the pair, e.g. USD/CAD'
+        : 'Enter the stock ticker, e.g. AAPL')
+    );
+    if (!input) return;
+    const symbol = input.trim().toUpperCase();
+    const exists = groups[currentGroup].some(p => p.symbol === symbol);
+    if (exists) { alert('Already in this list.'); return; }
+    groups[currentGroup].push({
+      symbol,
+      label: symbol,
+      icon: currentGroup === 'crypto' ? symbol.replace('USDT', '').toLowerCase() : null,
+      type: currentGroup === 'crypto' ? 'crypto' : currentGroup === 'forex' ? 'forex' : 'stock',
+    });
+    saveGroups();
+    buildWatchlistRows();
+    refreshWatchlistPrices();
+  });
+
+  buildWatchlistRows();
+  refreshWatchlistPrices();
+  setInterval(refreshWatchlistPrices, 10000);
+
+  /* ============================================================
+     TIMEFRAME BUTTONS
+     ============================================================ */
+  const tfButtons = Array.from(document.querySelectorAll('[data-tf]'));
+  tfButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentTf = btn.dataset.tf;
+      tfButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadChart(currentSymbol, currentTf, currentType).then(startPolling);
+    });
+  });
+
+  loadChart(currentSymbol, currentTf, currentType).then(startPolling);
+</script>
+
+</body>
+</html>

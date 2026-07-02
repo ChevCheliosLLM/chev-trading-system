@@ -1,0 +1,990 @@
+import requests
+import pandas as pd
+import numpy as np
+import mplfinance as mpf
+import io
+import base64
+import traceback
+
+
+class Tools:
+    def __init__(self):
+        pass
+
+    def _fetch_candles(self, symbol: str, timeframe: str, limit: int = 700):
+        clean_symbol = symbol.upper().replace("BINANCE:", "").replace(":", "")
+        url = "https://api.binance.com/api/v3/klines"
+        params = {"symbol": clean_symbol, "interval": timeframe, "limit": limit}
+        response = requests.get(url, params=params, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        df = pd.DataFrame(
+            data,
+            columns=[
+                "open_time",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "close_time",
+                "qav",
+                "trades",
+                "tb_base",
+                "tb_quote",
+                "ignore",
+            ],
+        )
+        df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
+        for col in ["open", "high", "low", "close", "volume"]:
+            df[col] = df[col].astype(float)
+        df.set_index("open_time", inplace=True)
+        return df[["open", "high", "low", "close", "volume"]]
+
+    def _add_indicators(self, df):
+        df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
+        typical_price = (df["high"] + df["low"] + df["close"]) / 3
+        df["VWAP"] = (typical_price * df["volume"]).cumsum() / df["volume"].cumsum()
+        delta = df["close"].diff()
+        gain = delta.clip(lower=0).rolling(14).mean()
+        loss = (-delta.clip(upper=0)).rolling(14).mean()
+        rs = gain / loss
+        df["RSI"] = 100 - (100 / (1 + rs))
+        return df
+
+    def _find_swing_points_indexed(
+        self, df, window=3, threshold_pct=0.3, confirm_window=8
+    ):
+        highs = df["high"].values
+        lows = df["low"].values
+        n = len(df)
+        swing_highs, swing_lows = [], []
+        for i in range(window, n - window):
+            if highs[i] == max(highs[i - window : i + window + 1]):
+                future_lows = lows[i + 1 : min(i + 1 + confirm_window, n)]
+                if (
+                    len(future_lows) > 0
+                    and (highs[i] - future_lows.min()) / highs[i] * 100 >= threshold_pct
+                ):
+                    swing_highs.append((i, highs[i]))
+            if lows[i] == min(lows[i - window : i + window + 1]):
+                future_highs = highs[i + 1 : min(i + 1 + confirm_window, n)]
+                if (
+                    len(future_highs) > 0
+                    and (future_highs.max() - lows[i]) / lows[i] * 100 >= threshold_pct
+                ):
+                    swing_lows.append((i, lows[i]))
+        return swing_highs, swing_lows
+
+    def _get_timed_touches(self, df, window=3, threshold_pct=0.3, confirm_window=8):
+        highs = df["high"].values
+        lows = df["low"].values
+        n = len(df)
+        touches = []
+        for i in range(window, n - window):
+            if highs[i] == max(highs[i - window : i + window + 1]):
+                future_lows = lows[i + 1 : min(i + 1 + confirm_window, n)]
+                if (
+                    len(future_lows) > 0
+                    and (highs[i] - future_lows.min()) / highs[i] * 100 >= threshold_pct
+                ):
+                    touches.append((df.index[i], highs[i], "resistance"))
+            if lows[i] == min(lows[i - window : i + window + 1]):
+                future_highs = highs[i + 1 : min(i + 1 + confirm_window, n)]
+                if (
+                    len(future_highs) > 0
+                    and (future_highs.max() - lows[i]) / lows[i] * 100 >= threshold_pct
+                ):
+                    touches.append((df.index[i], lows[i], "support"))
+        return touches
+
+    def _build_validated_levels(
+        self, touches_by_tf, kind, tolerance_pct=0.6, episode_gap_hours=12
+    ):
+        min_touches = {"15m": 5, "30m": 3, "1h": 2, "4h": 2}
+        all_prices = [p for tf in touches_by_tf for (_, p) in touches_by_tf[tf]]
+        if not all_prices:
+            return []
+        sorted_prices = sorted(all_prices)
+        zones, current = [], [sorted_prices[0]]
+        for p in sorted_prices[1:]:
+            if abs(p - current[-1]) / current[-1] * 100 <= tolerance_pct:
+                current.append(p)
+            else:
+                zones.append(current)
+                current = [p]
+        zones.append(current)
+        zone_centers = [sum(z) / len(z) for z in zones]
+
+        results = []
+        for center in zone_centers:
+            zone_lo = center * (1 - tolerance_pct / 100)
+            zone_hi = center * (1 + tolerance_pct / 100)
+            combined = []
+            for tf, touches in touches_by_tf.items():
+                for ts, p in touches:
+                    if zone_lo <= p <= zone_hi:
+                        combined.append((ts, tf))
+            if not combined:
+                continue
+            combined.sort(key=lambda x: x[0])
+            episodes, current_episode = [], [combined[0]]
+            for item in combined[1:]:
+                gap = (item[0] - current_episode[-1][0]).total_seconds() / 3600
+                if gap > episode_gap_hours:
+                    episodes.append(current_episode)
+                    current_episode = [item]
+                else:
+                    current_episode.append(item)
+            episodes.append(current_episode)
+
+            validated_count = 0
+            for ep in episodes:
+                counts = {"15m": 0, "30m": 0, "1h": 0, "4h": 0}
+                for ts, tf in ep:
+                    counts[tf] += 1
+                if all(counts[tf] >= min_touches[tf] for tf in min_touches):
+                    validated_count += 1
+            if validated_count >= 1:
+                results.append(
+                    {
+                        "price": round(center, 4),
+                        "instances": validated_count,
+                        "kind": kind,
+                    }
+                )
+        return sorted(results, key=lambda r: r["instances"], reverse=True)
+
+    def _build_single_tf_levels(self, touches, min_touches=3, tolerance_pct=0.5):
+        prices = [p for _, p in touches]
+        if not prices:
+            return []
+        prices_sorted = sorted(prices)
+        clusters, current = [], [prices_sorted[0]]
+        for p in prices_sorted[1:]:
+            if abs(p - current[-1]) / current[-1] * 100 <= tolerance_pct:
+                current.append(p)
+            else:
+                clusters.append(current)
+                current = [p]
+        clusters.append(current)
+        results = []
+        for c in clusters:
+            if len(c) >= min_touches:
+                results.append({"price": round(sum(c) / len(c), 4), "touches": len(c)})
+        return results
+
+    def _pick_nearest_level(
+        self, current_price, tier_a, tier_b, primary_timeframe, near_threshold_pct=5.0
+    ):
+        nearest_a = (
+            min(tier_a, key=lambda z: abs(z["price"] - current_price))
+            if tier_a
+            else None
+        )
+        nearest_b = (
+            min(tier_b, key=lambda z: abs(z["price"] - current_price))
+            if tier_b
+            else None
+        )
+        if (
+            nearest_a
+            and abs(nearest_a["price"] - current_price) / current_price * 100
+            <= near_threshold_pct
+        ):
+            return {
+                "price": nearest_a["price"],
+                "label": f"{nearest_a['instances']}x validated (multi-TF confirmed)",
+            }
+        if nearest_b:
+            return {
+                "price": nearest_b["price"],
+                "label": f"{nearest_b['touches']}x touches ({primary_timeframe} only - lower confidence)",
+            }
+        if nearest_a:
+            return {
+                "price": nearest_a["price"],
+                "label": f"{nearest_a['instances']}x validated (multi-TF, but distant from price)",
+            }
+        return None
+
+    def _detect_rsi_divergence(self, df):
+        if "RSI" not in df.columns:
+            return []
+        swing_highs, swing_lows = self._find_swing_points_indexed(df)
+        found = []
+        if len(swing_highs) >= 2:
+            i1, p1 = swing_highs[-2]
+            i2, p2 = swing_highs[-1]
+            r1, r2 = df["RSI"].iloc[i1], df["RSI"].iloc[i2]
+            if p2 > p1 and r2 < r1:
+                found.append(
+                    {
+                        "type": "Regular Bearish Divergence",
+                        "price": p2,
+                        "note": "price made a higher high but RSI made a lower high - upside momentum fading",
+                    }
+                )
+            elif p2 < p1 and r2 > r1:
+                found.append(
+                    {
+                        "type": "Hidden Bearish Divergence",
+                        "price": p2,
+                        "note": "price made a lower high but RSI made a higher high - downtrend likely continuing",
+                    }
+                )
+        if len(swing_lows) >= 2:
+            i1, p1 = swing_lows[-2]
+            i2, p2 = swing_lows[-1]
+            r1, r2 = df["RSI"].iloc[i1], df["RSI"].iloc[i2]
+            if p2 < p1 and r2 > r1:
+                found.append(
+                    {
+                        "type": "Regular Bullish Divergence",
+                        "price": p2,
+                        "note": "price made a lower low but RSI made a higher low - selling momentum fading",
+                    }
+                )
+            elif p2 > p1 and r2 < r1:
+                found.append(
+                    {
+                        "type": "Hidden Bullish Divergence",
+                        "price": p2,
+                        "note": "price made a higher low but RSI made a lower low - uptrend likely continuing",
+                    }
+                )
+        return found
+
+    def _detect_rsi_divergence_forming(self, df, lookback=10):
+        if "RSI" not in df.columns:
+            return []
+        swing_highs, swing_lows = self._find_swing_points_indexed(df)
+        found = []
+        recent = df.tail(lookback)
+        recent_high_pos = df.index.get_loc(recent["high"].idxmax())
+        recent_low_pos = df.index.get_loc(recent["low"].idxmin())
+        if swing_highs:
+            i1, p1 = swing_highs[-1]
+            p2 = df["high"].iloc[recent_high_pos]
+            if recent_high_pos > i1:
+                r1, r2 = df["RSI"].iloc[i1], df["RSI"].iloc[recent_high_pos]
+                if p2 > p1 and r2 < r1 and df["RSI"].iloc[-1] > 65:
+                    found.append(
+                        {
+                            "type": "Early Bearish Divergence (forming)",
+                            "price": p2,
+                            "note": "price pushing to new highs while RSI lags and sits overbought (>65) - momentum may be running out, not yet a fully confirmed divergence",
+                        }
+                    )
+        if swing_lows:
+            i1, p1 = swing_lows[-1]
+            p2 = df["low"].iloc[recent_low_pos]
+            if recent_low_pos > i1:
+                r1, r2 = df["RSI"].iloc[i1], df["RSI"].iloc[recent_low_pos]
+                if p2 < p1 and r2 > r1 and df["RSI"].iloc[-1] < 35:
+                    found.append(
+                        {
+                            "type": "Early Bullish Divergence (forming)",
+                            "price": p2,
+                            "note": "price pushing to new lows while RSI lags and sits oversold (<35) - selling pressure may be running out, not yet a fully confirmed divergence",
+                        }
+                    )
+        return found
+
+    def _volume_trend(self, df, n=10):
+        recent = df["volume"].tail(n).values
+        x = np.arange(len(recent))
+        slope = np.polyfit(x, recent, 1)[0]
+        avg = recent.mean()
+        if avg == 0:
+            return "flat"
+        pct_slope = (slope / avg) * 100
+        if pct_slope > 3:
+            return "increasing"
+        elif pct_slope < -3:
+            return "decreasing"
+        return "flat"
+
+    def _fib_from_real_impulse(self, df, lookback=150):
+        window = df.tail(lookback)
+        idx_max = window["high"].idxmax()
+        idx_min = window["low"].idxmin()
+        high_price = window.loc[idx_max, "high"]
+        low_price = window.loc[idx_min, "low"]
+        pos_max = window.index.get_loc(idx_max)
+        pos_min = window.index.get_loc(idx_min)
+        diff = high_price - low_price
+        if diff == 0:
+            return {}, "flat", None, None
+        if idx_min < idx_max:
+            direction = "uptrend"
+            levels = {
+                "50%": high_price - diff * 0.5,
+                "61.8% (golden pocket)": high_price - diff * 0.618,
+                "65%": high_price - diff * 0.65,
+                "78.6%": high_price - diff * 0.786,
+            }
+        else:
+            direction = "downtrend"
+            levels = {
+                "50%": low_price + diff * 0.5,
+                "61.8% (golden pocket)": low_price + diff * 0.618,
+                "65%": low_price + diff * 0.65,
+                "78.6%": low_price + diff * 0.786,
+            }
+        return levels, direction, (pos_max, high_price), (pos_min, low_price)
+
+    def _detect_consolidation_range(
+        self, df, max_range_pct=5.0, min_candles=20, max_candles=150
+    ):
+        n = len(df)
+        if n < min_candles:
+            return None
+        best = None
+        step = 5
+        for window in range(min_candles, min(max_candles, n) + 1, step):
+            segment = df.iloc[n - window : n]
+            rng_pct = (
+                (segment["high"].max() - segment["low"].min())
+                / segment["close"].mean()
+                * 100
+            )
+            if rng_pct <= max_range_pct:
+                best = (n - window, n - 1)
+        return best
+
+    def _volume_profile(self, df, start_idx, end_idx, n_bins=24):
+        lo, hi = (start_idx, end_idx) if start_idx <= end_idx else (end_idx, start_idx)
+        segment = df.iloc[lo : hi + 1]
+        if len(segment) < 2:
+            return None
+        price_min = segment["low"].min()
+        price_max = segment["high"].max()
+        if price_max == price_min:
+            return None
+        bin_edges = np.linspace(price_min, price_max, n_bins + 1)
+        bin_volumes = np.zeros(n_bins)
+        for _, row in segment.iterrows():
+            low, high, vol = row["low"], row["high"], row["volume"]
+            candle_range = high - low
+            if candle_range == 0:
+                idx = min(
+                    int((low - price_min) / (price_max - price_min) * n_bins),
+                    n_bins - 1,
+                )
+                bin_volumes[idx] += vol
+                continue
+            for b in range(n_bins):
+                bin_low, bin_high = bin_edges[b], bin_edges[b + 1]
+                overlap = max(0, min(high, bin_high) - max(low, bin_low))
+                if overlap > 0:
+                    bin_volumes[b] += vol * (overlap / candle_range)
+        poc_idx = int(np.argmax(bin_volumes))
+        poc_price = (bin_edges[poc_idx] + bin_edges[poc_idx + 1]) / 2
+        total_vol = bin_volumes.sum()
+        if total_vol == 0:
+            return None
+        included = {poc_idx}
+        included_vol = bin_volumes[poc_idx]
+        left, right = poc_idx - 1, poc_idx + 1
+        while included_vol < total_vol * 0.7 and (left >= 0 or right < n_bins):
+            left_vol = bin_volumes[left] if left >= 0 else -1
+            right_vol = bin_volumes[right] if right < n_bins else -1
+            if left_vol >= right_vol and left >= 0:
+                included.add(left)
+                included_vol += bin_volumes[left]
+                left -= 1
+            elif right < n_bins:
+                included.add(right)
+                included_vol += bin_volumes[right]
+                right += 1
+            else:
+                break
+        va_low_idx, va_high_idx = min(included), max(included)
+        return {
+            "poc": poc_price,
+            "vah": bin_edges[va_high_idx + 1],
+            "val": bin_edges[va_low_idx],
+            "start_idx": lo,
+            "end_idx": hi,
+        }
+
+    def _volume_profile_behavior_signals(self, df, vp, lookback=20):
+        signals = []
+        recent = df.tail(min(lookback, len(df)))
+        closes = recent["close"].values
+        highs = recent["high"].values
+        lows = recent["low"].values
+        crossed_above = (
+            np.any(closes[:-1] < vp["poc"])
+            and closes[-1] > vp["poc"]
+            and np.any(closes < vp["poc"])
+        )
+        crossed_below = (
+            np.any(closes[:-1] > vp["poc"])
+            and closes[-1] < vp["poc"]
+            and np.any(closes > vp["poc"])
+        )
+        near_poc_now = abs(closes[-1] - vp["poc"]) / vp["poc"] * 100 <= 1.0
+        if near_poc_now and (crossed_above or crossed_below):
+            signals.append(
+                {
+                    "type": "POC Break & Retest",
+                    "price": vp["poc"],
+                    "note": "price broke through the Point of Control and is now retesting it - classic continuation/reversal confirmation zone",
+                }
+            )
+        if np.max(highs) >= vp["vah"] * 0.998 and closes[-1] < vp["vah"]:
+            signals.append(
+                {
+                    "type": "VAH Rejection",
+                    "price": vp["vah"],
+                    "note": "price approached the Value Area High and got rejected back down - potential short/fade opportunity",
+                }
+            )
+        if np.min(lows) <= vp["val"] * 1.002 and closes[-1] > vp["val"]:
+            signals.append(
+                {
+                    "type": "VAL Rejection",
+                    "price": vp["val"],
+                    "note": "price approached the Value Area Low and got rejected back up - potential long/bounce opportunity",
+                }
+            )
+        return signals
+
+    def _render_analysis_chart(
+        self,
+        df,
+        symbol,
+        timeframe,
+        zones,
+        fib_levels,
+        fib_origin_high=None,
+        fib_origin_low=None,
+    ):
+        mc = mpf.make_marketcolors(
+            up="#089981",
+            down="#f23645",
+            edge="inherit",
+            wick="inherit",
+            volume={"up": "#089981", "down": "#f23645"},
+        )
+        style = mpf.make_mpf_style(
+            marketcolors=mc,
+            base_mpf_style="nightclouds",
+            facecolor="#131722",
+            edgecolor="#2a2e39",
+            figcolor="#131722",
+            gridcolor="#1e222d",
+            gridstyle="-",
+            rc={
+                "axes.labelcolor": "#d1d4dc",
+                "xtick.color": "#787b86",
+                "ytick.color": "#787b86",
+            },
+        )
+        addplots = [
+            mpf.make_addplot(df["EMA20"], color="orange", width=1),
+            mpf.make_addplot(df["VWAP"], color="cyan", width=1),
+        ]
+        fig, axes = mpf.plot(
+            df,
+            type="candle",
+            style=style,
+            addplot=addplots,
+            volume=True,
+            returnfig=True,
+            figsize=(12, 7),
+            datetime_format="%H:%M",
+            xrotation=0,
+        )
+        price_ax = axes[0]
+        price_ax.yaxis.tick_right()
+        price_ax.yaxis.set_label_position("right")
+        volume_ax = None
+        for ax in fig.axes:
+            label = ax.get_ylabel()
+            if label and "volume" in label.lower():
+                volume_ax = ax
+        if volume_ax:
+            volume_ax.set_yticklabels([])
+            volume_ax.set_ylabel("")
+            volume_ax.tick_params(axis="y", length=0)
+        clean_symbol = symbol.upper().replace("BINANCE:", "").replace(":", "")
+        price_ax.text(
+            0.5,
+            0.5,
+            f"{clean_symbol}  {timeframe.upper()}",
+            transform=price_ax.transAxes,
+            fontsize=42,
+            color="white",
+            alpha=0.06,
+            ha="center",
+            va="center",
+            zorder=0,
+            weight="bold",
+        )
+        price_ax.text(
+            0.01,
+            0.97,
+            "EMA 20",
+            transform=price_ax.transAxes,
+            color="orange",
+            fontsize=9,
+            va="top",
+        )
+        price_ax.text(
+            0.01,
+            0.92,
+            "VWAP",
+            transform=price_ax.transAxes,
+            color="cyan",
+            fontsize=9,
+            va="top",
+        )
+
+        for price, top, bottom, label, color in zones:
+            price_ax.axhspan(
+                bottom, top, xmin=0, xmax=1, color=color, alpha=0.15, zorder=0
+            )
+            price_ax.axhline(
+                price, color=color, linestyle="--", linewidth=0.8, alpha=0.7
+            )
+            price_ax.text(
+                0.4,
+                top,
+                label,
+                transform=price_ax.get_yaxis_transform(),
+                color="#d1d4dc",
+                fontsize=8,
+                va="bottom",
+                ha="left",
+                style="italic",
+            )
+            price_ax.text(
+                1.001,
+                price,
+                f" {price:.2f} ",
+                transform=price_ax.get_yaxis_transform(),
+                color="white",
+                fontsize=9,
+                va="center",
+                ha="left",
+                bbox=dict(facecolor=color, edgecolor="none", pad=2),
+            )
+
+        golden_low = min(
+            fib_levels.get("61.8% (golden pocket)", 0), fib_levels.get("65%", 0)
+        )
+        golden_high = max(
+            fib_levels.get("61.8% (golden pocket)", 0), fib_levels.get("65%", 0)
+        )
+        if golden_high > golden_low:
+            price_ax.axhspan(
+                golden_low,
+                golden_high,
+                xmin=0,
+                xmax=1,
+                color="#d4af37",
+                alpha=0.20,
+                zorder=0,
+            )
+        for name, price in fib_levels.items():
+            if "golden pocket" in name:
+                price_ax.axhline(
+                    price, color="#d4af37", linestyle="-", linewidth=1.2, alpha=0.7
+                )
+                price_ax.scatter(
+                    [int(len(df) * 0.05)],
+                    [price],
+                    marker="s",
+                    s=60,
+                    color="#d4af37",
+                    zorder=5,
+                )
+                price_ax.text(
+                    0.06,
+                    price,
+                    f" {name}",
+                    transform=price_ax.get_yaxis_transform(),
+                    color="#d4af37",
+                    fontsize=8,
+                    va="center",
+                    ha="left",
+                    weight="bold",
+                )
+            elif name in ("50%", "78.6%"):
+                price_ax.axhline(
+                    price, color="#e8d98a", linestyle="--", linewidth=1.0, alpha=0.55
+                )
+                price_ax.text(
+                    0.06,
+                    price,
+                    f" {name}",
+                    transform=price_ax.get_yaxis_transform(),
+                    color="#e8d98a",
+                    fontsize=7,
+                    va="center",
+                    ha="left",
+                )
+            else:
+                price_ax.axhline(
+                    price, color="#d4af37", linestyle="-", linewidth=1.0, alpha=0.4
+                )
+                price_ax.text(
+                    0.06,
+                    price,
+                    f" {name}",
+                    transform=price_ax.get_yaxis_transform(),
+                    color="#d4af37",
+                    fontsize=7,
+                    va="center",
+                    ha="left",
+                )
+        if fib_origin_high:
+            price_ax.scatter(
+                [fib_origin_high[0]],
+                [fib_origin_high[1]],
+                marker="o",
+                s=45,
+                color="white",
+                edgecolor="black",
+                linewidth=0.8,
+                zorder=6,
+            )
+        if fib_origin_low:
+            price_ax.scatter(
+                [fib_origin_low[0]],
+                [fib_origin_low[1]],
+                marker="o",
+                s=45,
+                color="white",
+                edgecolor="black",
+                linewidth=0.8,
+                zorder=6,
+            )
+        last_price = df["close"].iloc[-1]
+        last_color = (
+            "#089981" if df["close"].iloc[-1] >= df["open"].iloc[-1] else "#f23645"
+        )
+        price_ax.text(
+            1.001,
+            last_price,
+            f" {last_price:.2f} ",
+            transform=price_ax.get_yaxis_transform(),
+            color="white",
+            fontsize=9,
+            va="center",
+            ha="left",
+            bbox=dict(facecolor=last_color, edgecolor="none", pad=2),
+        )
+        fig.subplots_adjust(left=0.02, right=0.90, top=0.96, bottom=0.08)
+        buf = io.BytesIO()
+        fig.savefig(
+            buf,
+            format="png",
+            facecolor=fig.get_facecolor(),
+            bbox_inches="tight",
+            pad_inches=0.15,
+        )
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+async def analyze_confluence(
+    self,
+    symbol: str,
+    primary_timeframe: str = "1h",
+    zoom_candles: int = 300,
+    __event_emitter__=None,
+) -> str:
+    """
+    Scans 15m, 30m, 1h, and 4h timeframes using Kev's validated-instance model.
+    Tier A: level validated across ALL timeframes simultaneously (15m>=5, 30m>=3, 1h>=2, 4h>=2).
+    Tier B: single-TF fallback near current price so the chart is never empty.
+    Also detects the active auction (balance zone), anchors VP and Fibonacci to the impulse
+    that created the auction, computes market direction and participation, and annotates
+    the output with auction-level confluence (VAH/VAL vs S/R alignment).
+    :param symbol: e.g. SOLUSDT, BTCUSDT
+    :param primary_timeframe: Timeframe for chart display, volume trend, and Fib reference (default 1h)
+    :param zoom_candles: Candles to display — lower zooms in, higher zooms out (default 300)
+    """
+    try:
+        timeframes = ["15m", "30m", "1h", "4h"]
+        resistance_touches_by_tf, support_touches_by_tf = {}, {}
+        primary_df = None
+
+        for tf in timeframes:
+            df = self._fetch_candles(symbol, tf, limit=700)
+            if tf == primary_timeframe:
+                primary_df = df
+            touches = self._get_timed_touches(df)
+            resistance_touches_by_tf[tf] = [(ts, p) for ts, p, k in touches if k == "resistance"]
+            support_touches_by_tf[tf]    = [(ts, p) for ts, p, k in touches if k == "support"]
+
+        # BUG FIX: primary_df is set inside the loop above; this is the fallback only
+        if primary_df is None:
+            primary_df = self._fetch_candles(symbol, primary_timeframe, limit=700)
+
+        # ── Analysis begins here (was mistakenly inside `if primary_df is None:`) ──
+        current_price = primary_df["close"].iloc[-1]
+
+        resistance_levels = self._build_validated_levels(resistance_touches_by_tf, "resistance")
+        support_levels    = self._build_validated_levels(support_touches_by_tf,    "support")
+
+        resistance_zones = [z for z in resistance_levels if z["price"] > current_price]
+        support_zones    = [z for z in support_levels    if z["price"] < current_price]
+
+        tier_b_resistance = [z for z in self._build_single_tf_levels(resistance_touches_by_tf[primary_timeframe]) if z["price"] > current_price]
+        tier_b_support    = [z for z in self._build_single_tf_levels(support_touches_by_tf[primary_timeframe])    if z["price"] < current_price]
+
+        top_resistance = self._pick_nearest_level(current_price, resistance_zones, tier_b_resistance, primary_timeframe)
+        top_support    = self._pick_nearest_level(current_price, support_zones,    tier_b_support,    primary_timeframe)
+
+        vol_trend = self._volume_trend(primary_df)
+
+        fib_lookback = min(zoom_candles, 300)
+        fib_levels_dict, fib_direction, fib_origin_high, fib_origin_low = (
+            self._fib_from_real_impulse(primary_df, lookback=fib_lookback)
+        )
+
+        def near_other_signals(price):
+            agree, near = 0, []
+            if top_resistance and abs(price - top_resistance["price"]) / price * 100 <= 1.5:
+                agree += 1; near.append("resistance zone")
+            if top_support    and abs(price - top_support["price"])    / price * 100 <= 1.5:
+                agree += 1; near.append("support zone")
+            for name, fib_price in fib_levels_dict.items():
+                if abs(price - fib_price) / price * 100 <= 1.5:
+                    agree += 1; near.append(f"Fibonacci {name}"); break
+            return agree, near
+
+        chart_df      = self._add_indicators(self._fetch_candles(symbol, primary_timeframe, limit=zoom_candles))
+        display_low   = chart_df["low"].min()
+        display_high  = chart_df["high"].max()
+
+        draw_zones = []
+        drawn_prices = set()
+        for r_lvl in resistance_zones:
+            if display_low <= r_lvl["price"] <= display_high:
+                p = r_lvl["price"]; pad = p * 0.0025
+                draw_zones.append((p, p + pad, p - pad, f"R: {r_lvl['instances']}x validated (multi-TF)", "#f23645"))
+                drawn_prices.add(round(p, 4))
+        for s_lvl in support_zones:
+            if display_low <= s_lvl["price"] <= display_high:
+                p = s_lvl["price"]; pad = p * 0.0025
+                draw_zones.append((p, p + pad, p - pad, f"S: {s_lvl['instances']}x validated (multi-TF)", "#089981"))
+                drawn_prices.add(round(p, 4))
+        if top_resistance and round(top_resistance["price"], 4) not in drawn_prices:
+            p = top_resistance["price"]; pad = p * 0.0025
+            draw_zones.append((p, p + pad, p - pad, f"R: {top_resistance['label']}", "#f23645"))
+        if top_support and round(top_support["price"], 4) not in drawn_prices:
+            p = top_support["price"]; pad = p * 0.0025
+            draw_zones.append((p, p + pad, p - pad, f"S: {top_support['label']}", "#089981"))
+
+        img_b64 = self._render_analysis_chart(
+            chart_df, symbol, primary_timeframe, draw_zones,
+            fib_levels_dict, fib_origin_high, fib_origin_low,
+        )
+
+        if __event_emitter__:
+            await __event_emitter__({
+                "type": "files",
+                "data": {"files": [{"type": "image", "url": f"data:image/png;base64,{img_b64}"}]},
+            })
+
+        # ── Auction detection (inline swing->leg->balance) ────────────────────
+        n     = len(primary_df)
+        raw_h = primary_df["high"].values.astype(float)
+        raw_l = primary_df["low"].values.astype(float)
+        raw_c = primary_df["close"].values.astype(float)
+        raw_o = primary_df["open"].values.astype(float)
+        raw_v = primary_df["volume"].values.astype(float) if "volume" in primary_df.columns else np.ones(n)
+
+        prev_c = np.roll(raw_c, 1); prev_c[0] = raw_c[0]
+        tr_v   = np.maximum(raw_h - raw_l, np.maximum(np.abs(raw_h - prev_c), np.abs(raw_l - prev_c)))
+        atr_v  = np.zeros(n); atr_v[0] = tr_v[0]; alpha_a = 1.0 / 14
+        for k in range(1, n): atr_v[k] = alpha_a * tr_v[k] + (1 - alpha_a) * atr_v[k - 1]
+        atr_now = float(atr_v[-1]) if atr_v[-1] > 0 else 1e-6
+
+        wn, cw = 3, 8
+        raw_sw = []
+        for i in range(wn, n - cw):
+            if all(raw_h[i] >= raw_h[i - j] for j in range(1, wn + 1)) and all(raw_h[i] >= raw_h[i + j] for j in range(1, cw + 1)):
+                raw_sw.append((i, raw_h[i], "H"))
+            if all(raw_l[i] <= raw_l[i - j] for j in range(1, wn + 1)) and all(raw_l[i] <= raw_l[i + j] for j in range(1, cw + 1)):
+                raw_sw.append((i, raw_l[i], "L"))
+        raw_sw.sort(key=lambda x: x[0])
+        sw = []
+        for s in raw_sw:
+            if not sw: sw.append(s); continue
+            if s[2] == sw[-1][2]:
+                if s[2] == "H" and s[1] >= sw[-1][1]: sw[-1] = s
+                elif s[2] == "L" and s[1] <= sw[-1][1]: sw[-1] = s
+            else: sw.append(s)
+
+        avg_vol = float(raw_v.mean()) if raw_v.mean() > 0 else 1.0
+        legs = []
+        for i in range(len(sw) - 1):
+            i0, p0, _ = sw[i]; i1, p1, _ = sw[i + 1]
+            atr_at  = float(atr_v[min(i0, n - 1)])
+            dist_a  = abs(p1 - p0) / max(atr_at, 1e-10)
+            bc      = max(1, i1 - i0)
+            bodies  = np.abs(raw_c[i0:i1+1] - raw_o[i0:i1+1])
+            ranges  = np.maximum(raw_h[i0:i1+1] - raw_l[i0:i1+1], 1e-10)
+            br      = float(np.mean(bodies / ranges))
+            vexp    = float(raw_v[i0:i1+1].mean()) / max(avg_vol, 1e-10)
+            spdn    = min(1.0, (abs(p1 - p0) / max(p0, 1e-10) * 100.0 / bc) / 0.4)
+            energy  = min(1.0, spdn * 0.4 + br * 0.4 + min(1.0, vexp / 1.5) * 0.2)
+            if   dist_a >= 2.0 and energy >= 0.55: char = "IMPULSIVE"
+            elif dist_a <= 1.0 or  energy <= 0.35: char = "CORRECTIVE"
+            else:                                   char = "NEUTRAL"
+            legs.append({"i0": i0, "p0": p0, "i1": i1, "p1": p1,
+                         "direction": "UP" if p1 > p0 else "DOWN",
+                         "dist_atr": dist_a, "energy": energy, "character": char})
+
+        bal_legs = []
+        for leg in reversed(legs[-8:]):
+            if leg["character"] in ("CORRECTIVE", "NEUTRAL") or leg["energy"] < 0.5:
+                bal_legs.insert(0, leg)
+            else: break
+
+        if len(bal_legs) >= 2:
+            bal_high       = max(max(l["p0"], l["p1"]) for l in bal_legs)
+            bal_low        = min(min(l["p0"], l["p1"]) for l in bal_legs)
+            anchor_bar     = bal_legs[0]["i0"]
+            auction_reason = f"Balance zone — {len(bal_legs)} corrective legs"
+        elif legs:
+            last           = legs[-1]
+            bal_high, bal_low = max(last["p0"], last["p1"]), min(last["p0"], last["p1"])
+            anchor_bar     = last["i0"]
+            auction_reason = "No balance — using last leg range"
+        else:
+            bal_high       = float(primary_df["high"].iloc[-20:].max())
+            bal_low        = float(primary_df["low"].iloc[-20:].min())
+            anchor_bar     = max(0, n - 20)
+            auction_reason = "No legs detected — using recent range"
+
+        bal_width_atr = (bal_high - bal_low) / max(atr_now, 1e-10)
+        anchor_price  = (bal_high + bal_low) / 2.0
+        auction_age   = n - 1 - anchor_bar
+        maturity      = round(min(1.0, auction_age / 30.0), 2)
+
+        imp_anchor = None
+        for leg in reversed(legs):
+            if leg["i1"] <= anchor_bar and leg["character"] == "IMPULSIVE":
+                imp_anchor = leg; break
+
+        # VP anchored to the auction window
+        vp_poc = vp_vah = vp_val = None
+        seg = primary_df.iloc[max(0, anchor_bar):]
+        if len(seg) >= 5:
+            sh = float(seg["high"].max()); sl = float(seg["low"].min())
+            if sh > sl:
+                N = 24; bsz = (sh - sl) / N; bins_vp = np.zeros(N)
+                for _, row in seg.iterrows():
+                    bh, bl, bv = float(row["high"]), float(row["low"]), float(row.get("volume", 0))
+                    for b in range(N):
+                        blo = sl + b * bsz; bhi = blo + bsz
+                        if bh >= blo and bl <= bhi:
+                            bins_vp[b] += bv / max(1, int((bh - bl) / bsz + 1))
+                pb = int(np.argmax(bins_vp))
+                vp_poc = round(sl + (pb + 0.5) * bsz, 6)
+                tot = bins_vp.sum(); tgt = tot * 0.70
+                vb = hb = pb; acc = bins_vp[pb]; lo_b, hi_b = pb - 1, pb + 1
+                while acc < tgt:
+                    lv = bins_vp[lo_b] if lo_b >= 0 else -1.0
+                    hv = bins_vp[hi_b] if hi_b < N else -1.0
+                    if lv <= 0 and hv <= 0: break
+                    if lv >= hv: acc += lv; vb = lo_b; lo_b -= 1
+                    else:        acc += hv; hb = hi_b; hi_b += 1
+                vp_vah = round(sl + (hb + 1) * bsz, 6)
+                vp_val = round(sl + vb * bsz, 6)
+
+        if   current_price > bal_high * 1.005 or current_price < bal_low * 0.995: auction_state = "INACTIVE"
+        elif bal_width_atr < 0.8:                                                  auction_state = "BALANCING"
+        else:                                                                       auction_state = "ACTIVE"
+
+        rl = legs[-6:]
+        dir_score = 0.0
+        if rl:
+            w_s = w_t = 0.0
+            for leg in rl:
+                sgn = 1.0 if leg["direction"] == "UP" else -1.0
+                w = leg["dist_atr"] * leg["energy"]; w_s += sgn * w; w_t += w
+            dir_score = round(max(-100.0, min(100.0, w_s / max(w_t, 1e-10) * 100.0)), 1)
+        dir_lbl = "BULLISH" if dir_score > 30 else ("BEARISH" if dir_score < -30 else "NEUTRAL")
+
+        # ── Output ────────────────────────────────────────────────────────────
+        lines = [
+            f"Chart drawn with S/R zones and Fibonacci levels.",
+            f"Current price: {current_price:.6f}",
+            f"",
+            f"AUCTION STRUCTURE [{auction_state}] | Maturity: {maturity:.0%}:",
+            f"  Balance zone : {bal_low:.6f} – {bal_high:.6f} ({bal_width_atr:.1f} ATR wide)",
+            f"  Anchor price : {anchor_price:.6f} | Age: {auction_age} bars",
+            f"  Leg direction: {dir_lbl} ({dir_score:+.0f}) | {len(legs)} legs | {len(sw)} swings",
+            f"  Created from : {auction_reason}",
+        ]
+        if vp_poc:
+            lines.append(f"  VP (auction) : POC={vp_poc:.6f} | VAH={vp_vah:.6f} | VAL={vp_val:.6f}")
+        if imp_anchor:
+            a_lo = round(min(imp_anchor["p0"], imp_anchor["p1"]), 6)
+            a_hi = round(max(imp_anchor["p0"], imp_anchor["p1"]), 6)
+            lines.append(f"  Impulse anchor: {a_lo:.6f} – {a_hi:.6f} (leg that created this auction)")
+        lines.append("")
+
+        lines.append(f"Volume trend (last 10 candles, {primary_timeframe}): {vol_trend}")
+        lines.append(f"Fibonacci measured from the most significant recent swing ({fib_direction}):")
+        for name, price in fib_levels_dict.items():
+            lines.append(f"  {name}: {price:.6f}")
+
+        if top_resistance:
+            lines.append(f"\nSTRONGEST RESISTANCE: {top_resistance['price']:.6f} — {top_resistance['label']}")
+            if vol_trend == "decreasing":
+                lines.append("-> Volume fading into resistance: weak breakout attempt — favors SHORT/fade over chasing.")
+            elif vol_trend == "increasing":
+                lines.append("-> Volume building into resistance: real breakout possible if it clears with conviction.")
+            for name, fib_price in fib_levels_dict.items():
+                if abs(top_resistance["price"] - fib_price) / top_resistance["price"] * 100 <= 1.5:
+                    lines.append(f"-> CONFLUENCE: resistance aligns with Fibonacci {name} — extra weight behind this zone.")
+
+        if top_support:
+            lines.append(f"\nSTRONGEST SUPPORT: {top_support['price']:.6f} — {top_support['label']}")
+            for name, fib_price in fib_levels_dict.items():
+                if abs(top_support["price"] - fib_price) / top_support["price"] * 100 <= 1.5:
+                    extra = " plus fading volume" if vol_trend == "decreasing" else ""
+                    lines.append(f"-> CONFLUENCE: support aligns with Fibonacci {name}{extra} — strong reversal zone if other signals agree.")
+
+        # Auction-level confluence notes
+        if vp_poc:
+            if abs(current_price - vp_poc) / max(current_price, 1e-10) * 100 <= 1.0:
+                lines.append(f"\nATTENTION: Price is AT the VP POC ({vp_poc:.6f}) — highest-volume agreement zone. Expect choppiness or a strong reaction here.")
+            if top_support and vp_val and abs(top_support["price"] - vp_val) / max(top_support["price"], 1e-10) * 100 <= 1.5:
+                lines.append(f"\nAUCTION CONFLUENCE: Support {top_support['price']:.6f} aligns with VAL {vp_val:.6f} — value area floor defended by both price structure AND volume. Elevated bounce probability.")
+            if top_resistance and vp_vah and abs(top_resistance["price"] - vp_vah) / max(top_resistance["price"], 1e-10) * 100 <= 1.5:
+                lines.append(f"\nAUCTION CONFLUENCE: Resistance {top_resistance['price']:.6f} aligns with VAH {vp_vah:.6f} — value area ceiling defended by both price structure AND volume. Elevated rejection probability.")
+
+        all_extra_signals = []
+        all_extra_signals.extend(self._detect_rsi_divergence(primary_df))
+        all_extra_signals.extend(self._detect_rsi_divergence_forming(primary_df))
+
+        consolidation = self._detect_consolidation_range(primary_df)
+        if consolidation:
+            vp = self._volume_profile(primary_df, consolidation[0], consolidation[1])
+            if vp:
+                all_extra_signals.append({
+                    "type": "Volume Profile POC",
+                    "price": vp["poc"],
+                    "note": f"heaviest traded price in recent consolidation (Value Area: {vp['val']:.4f} – {vp['vah']:.4f})",
+                })
+                for sig in self._volume_profile_behavior_signals(primary_df, vp):
+                    all_extra_signals.append(sig)
+
+        for sig in all_extra_signals:
+            agree, near = near_other_signals(sig["price"])
+            if agree >= 2:
+                lines.append(f"\nTRIPLE CONFLUENCE: {sig['type']} at {sig['price']:.4f} — {sig['note']}, AND lines up with {' + '.join(near)}. High-conviction zone.")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error analyzing confluence:\n{str(e)}\n\n{traceback.format_exc()}"
