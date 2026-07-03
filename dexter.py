@@ -7331,18 +7331,46 @@ while True:
                     _chev_messages.append({"role": "assistant", "content": chev_response})
                     _chev_messages.append({"role": "user",      "content": _correction})
                     _revised_reply = _call_chev(_chev_messages, timeout=180)
+                    _revision_ok = False
                     if _revised_reply:
                         _revised_parsed = parse_chev_reply(_revised_reply)
                         if _revised_parsed and _revised_parsed.get("post") is not None:
-                            chev_response = _revised_reply
-                            parsed        = _revised_parsed
-                            print(f"[{datetime.now()}] GEOMETRY REVIEW — {result['symbol']}: revision accepted.")
+                            # Re-check geometry on the revised trade before accepting
+                            _rt = (_revised_parsed.get("trade") or {})
+                            _r_entry = float(_rt.get("entry") or 0)
+                            _r_sl    = float(_rt.get("sl")    or 0)
+                            _r_tp    = float(_rt.get("tp")    or 0)
+                            _r_dist  = abs(_r_entry - _r_sl) if _r_entry and _r_sl else 0
+                            _r_rr    = abs(_r_tp - _r_entry) / _r_dist if _r_dist > 0 else 0
+                            _r_atr_dist = abs(_r_entry - _r_sl)
+                            _r_atr_ok   = (_r_atr_dist >= _atr * {"scalp": 1.0, "day": 1.5, "swing": 2.5}.get(_ttype, 1.5) * 0.5
+                                           if _atr > 0 else True)
+                            if _revised_parsed.get("trade") is None:
+                                # Chev chose to SKIP on revision — accept that
+                                chev_response = _revised_reply
+                                parsed        = _revised_parsed
+                                _revision_ok  = True
+                                print(f"[{datetime.now()}] GEOMETRY REVIEW — {result['symbol']}: Chev chose SKIP on revision.")
+                            elif _r_rr >= _min_rr and _r_atr_ok:
+                                chev_response = _revised_reply
+                                parsed        = _revised_parsed
+                                _revision_ok  = True
+                                print(f"[{datetime.now()}] GEOMETRY REVIEW — {result['symbol']}: revision accepted (R:R={_r_rr:.2f}).")
+                            else:
+                                print(f"[{datetime.now()}] GEOMETRY REVIEW — {result['symbol']}: "
+                                      f"revision still fails geometry (R:R={_r_rr:.2f}, ATR_ok={_r_atr_ok}) — BLOCKING trade.")
                         else:
                             print(f"[{datetime.now()}] GEOMETRY REVIEW — {result['symbol']}: "
-                                  "revision unparseable — keeping original response.")
+                                  "revision unparseable — BLOCKING trade.")
                     else:
                         print(f"[{datetime.now()}] GEOMETRY REVIEW — {result['symbol']}: "
-                              "no reply to revision request — keeping original response.")
+                              "no reply to revision request — BLOCKING trade.")
+                    if not _revision_ok:
+                        _log_chev_decision(
+                            result["symbol"], primary_tf, _dexter_score, result["reasons"],
+                            "GEOMETRY_REJECT", "; ".join(_geo_issues[:1]), _regime_str
+                        )
+                        parsed["trade"] = None
 
             if parsed is None:
                 _last_escalated[esc_key] = time.time() + skip_cool
