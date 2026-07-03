@@ -5571,10 +5571,15 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
 
     msg = (
         f"⚡ OUTPUT FORMAT — READ FIRST:\n"
-        f"Your reply MUST begin with one of these two lines — nothing before it:\n"
-        f"  POST: <your read in 15 words max>      ← you're taking the trade\n"
-        f"  SKIP: <one sentence reason>             ← you're passing\n"
-        f"No preamble. No intro. No analysis header. POST: or SKIP: is literally the first word you write.\n\n"
+        f"Your reply MUST follow this EXACT structure — nothing before POST:/SKIP:, nothing after REASONING::\n\n"
+        f"  POST: <your read in 15 words max>\n"
+        f"  REASONING: <full analysis — why this setup, what structure shows, what invalidates it. No word limit.>\n\n"
+        f"  OR:\n\n"
+        f"  SKIP: <one sentence reason>\n"
+        f"  REASONING: <what you saw that made you pass — be specific about what was missing or wrong>\n\n"
+        f"REASONING is MANDATORY on every response — both POST and SKIP. Dexter will not log the trade without it.\n"
+        f"POST: summary stays 15 words. REASONING: is where you think out loud with no limit.\n"
+        f"No preamble. No intro. No headers. POST: or SKIP: is literally the first word you write.\n\n"
         f"Hey Chev, Dexter here with REAL computed numbers. I've given you the full market data above — candles, volume, all levels. Study it yourself and make your own read.\n\n"
         f"I've detected a confluence zone at {confluence_zone:.5f} with {result['count']} factor(s) aligning: {', '.join(result['reasons'])}.\n"
         f"{direction_hint}\n\n"
@@ -5701,10 +5706,10 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"    Use ms_4h when the 4H candle structure is a confluence, ms_1d for daily structure, ms_1h for 1H structure.\n"
         f"If anchors are missing for a tagged tool, it will not be drawn on the chart.\n"
         f"Example: TRADE: direction=long, entry=1.2340, sl=1.2280, tp=1.2500, ..., tags=sr_4h,fib_1h,rsi_1h, trade_type=day, sr_level=1.2300, fib_high=1.2650, fib_low=1.2100, rsi_div_t1=2024-06-01, rsi_div_t2=2024-06-15\n\n"
-        f"REASONING — after your TRADE: line, on a new line write:\n"
-        f"  REASONING: <your full analysis — no word limit. Why this setup, what the chart structure shows, what could invalidate it, what you're watching.>\n"
-        f"This is stored for learning sessions and never censored for length. The POST: summary stays 15 words — REASONING is where you think out loud.\n\n"
-        f"If not convinced: start with SKIP: <one sentence on why>\n\n"
+        f"REASONING is REQUIRED — write it on the line immediately after TRADE: (or after SKIP:):\n"
+        f"  REASONING: <full analysis — why this setup, what the structure shows, what invalidates it, what you're watching. No word limit.>\n"
+        f"Dexter stores REASONING for every trade and uses it in post-mortems and learning sessions. Missing = blind spot.\n\n"
+        f"If not convinced: SKIP: <one sentence>, then REASONING: <what was wrong or missing>\n\n"
         f"ACCOUNT & RISK STATUS:\n"
         f"  Balance: ${balance:.2f} (updates only when trades CLOSE at TP or SL)\n"
         f"  {heat_context}\n\n"
@@ -6316,9 +6321,30 @@ def load_state_from_sheet(worksheet):
                 trade_entry["open_ts"]    = row[14] if len(row) > 14 and row[14] else ""
                 trade_entry["trade_type"] = (row[15].lower() if len(row) > 15 and row[15] else "day")
                 try:
-                    trade_entry["confluence_prices"] = json.loads(row[17]) if len(row) > 17 and row[17] else {}
+                    _raw_meta = json.loads(row[17]) if len(row) > 17 and row[17] else {}
+                    # New format: {"prices": {...}, "setup_grade": "A", ...}
+                    # Old format: {"SR_LEVEL": ..., "VP_START": ...} (just prices)
+                    if "prices" in _raw_meta:
+                        trade_entry["confluence_prices"] = _raw_meta.get("prices", {})
+                        trade_entry["setup_grade"]       = _raw_meta.get("setup_grade", "")
+                        trade_entry["session_quality"]   = _raw_meta.get("session_quality", "")
+                        trade_entry["heat_at_entry"]     = _raw_meta.get("heat_at_entry", 0)
+                        trade_entry["reasoning"]         = _raw_meta.get("reasoning", "")
+                        trade_entry["primary_tf"]        = _raw_meta.get("primary_tf", "1h")
+                    else:
+                        trade_entry["confluence_prices"] = _raw_meta  # old format
+                        trade_entry["setup_grade"]       = ""
+                        trade_entry["session_quality"]   = ""
+                        trade_entry["heat_at_entry"]     = 0
+                        trade_entry["reasoning"]         = ""
+                        trade_entry["primary_tf"]        = "1h"
                 except Exception:
                     trade_entry["confluence_prices"] = {}
+                    trade_entry.setdefault("setup_grade", "")
+                    trade_entry.setdefault("session_quality", "")
+                    trade_entry.setdefault("heat_at_entry", 0)
+                    trade_entry.setdefault("reasoning", "")
+                    trade_entry.setdefault("primary_tf", "1h")
                 # Detect SIP state on load (SL already above entry from a previous trail)
                 _is_long_load = direction.lower() == "long"
                 _sl_val = float(sl)
@@ -7377,16 +7403,30 @@ while True:
                             except Exception as _e:
                                 print(f"[Dexter] RSI div parse error ({td[_rdi_key]}): {_e}")
                     new_trade = log_new_trade(worksheet, dashboard_ws, result["symbol"], item["type"], parsed["trade"], result["current_price"], confluence_prices=conf_prices)
-                    new_trade["reasoning"]   = parsed["trade"].get("reasoning") or parsed.get("telegram_message", "")
+                    new_trade["reasoning"]   = parsed["trade"].get("reasoning") or ""
                     new_trade["opened_at"]   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     new_trade["original_sl"] = new_trade.get("sl", 0)
                     new_trade["primary_tf"]  = primary_tf
                     _g, _      = _setup_grade(result, asset_type)
                     _, _sq     = _session_grade(asset_type)
                     _open_risk = [t for t in open_trades if t.get("status") == "OPEN"]
+                    _heat      = round(sum(t.get("risk_pct", 0) for t in _open_risk), 1)
                     new_trade["setup_grade"]     = _g
                     new_trade["session_quality"] = _sq
-                    new_trade["heat_at_entry"]   = round(sum(t.get("risk_pct", 0) for t in _open_risk), 1)
+                    new_trade["heat_at_entry"]   = _heat
+                    # Persist metadata into the sheet's conf_json cell (col 18) so it survives restarts
+                    try:
+                        _meta_json = json.dumps({
+                            "prices":          conf_prices,
+                            "setup_grade":     _g,
+                            "session_quality": _sq,
+                            "heat_at_entry":   _heat,
+                            "reasoning":       new_trade["reasoning"],
+                            "primary_tf":      primary_tf,
+                        })
+                        worksheet.update_cell(new_trade["row"], 18, _meta_json)
+                    except Exception as _me:
+                        print(f"[Dexter] Metadata sheet write failed: {_me}")
                     if new_trade.get("status") == "OPEN":
                         margin = round(new_trade.get("position_size_usd", 0) / max(new_trade.get("leverage", 1), 1), 2)
                         new_trade["margin_reserved"] = margin
