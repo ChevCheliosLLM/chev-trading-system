@@ -2288,10 +2288,19 @@
   const ohlcInfo = document.getElementById('ohlcInfo');
   const chevBanner = document.getElementById('chevActiveIdeaBanner');
 
-  const STOCK_DOMAINS = { NVDA: 'nvidia.com', TSLA: 'tesla.com', AMZN: 'amazon.com', AMD: 'amd.com' };
+  const STOCK_DOMAINS = {
+    NVDA: 'nvidia.com', TSLA: 'tesla.com', AMZN: 'amazon.com', AMD: 'amd.com',
+    META: 'meta.com', MSFT: 'microsoft.com', AAPL: 'apple.com', GOOGL: 'google.com',
+    NFLX: 'netflix.com', BABA: 'alibaba.com', MRVL: 'marvell.com',
+    NOW: 'servicenow.com', HOOD: 'robinhood.com', MARA: 'marathondh.com',
+    MRNA: 'modernatx.com', BAC: 'bankofamerica.com', GME: 'gamestop.com',
+    AMC: 'amctheatres.com', SQQQ: 'proshares.com', QQQ: 'invesco.com',
+    ASTS: 'ast-science.com', FCEL: 'fuelcellenergy.com', POET: 'poet-technologies.com',
+    TE: 'te.com', NVTS: 'navitassemi.com',
+  };
   const FOREX_FLAGS = {
     'EUR/USD': '🇪🇺', 'GBP/USD': '🇬🇧', 'USD/JPY': '🇯🇵', 'AUD/USD': '🇦🇺',
-    'USD/CAD': '🇨🇦', 'USD/CHF': '🇨🇭', 'NZD/USD': '🇳🇿',
+    'USD/CAD': '🇨🇦', 'USD/CHF': '🇨🇭', 'NZD/USD': '🇳🇿', 'USD/CNH': '🇨🇳',
   };
   const TAG_NAMES = { SR: 'Support/Resistance', FB: 'Fibonacci', GP: 'Golden Pocket', RS: 'RSI Divergence', VW: 'VWAP', EM: 'EMA', VP: 'Volume Profile', CP: 'Candle Pattern', TR: 'Triangle' };
   const SHORT_TAG = {
@@ -2332,36 +2341,80 @@
 
   const DEFAULT_GROUPS = {
     crypto: [
-      { symbol: 'BTCUSDT', label: 'BTC', icon: 'btc', type: 'crypto' },
-      { symbol: 'ETHUSDT', label: 'ETH', icon: 'eth', type: 'crypto' },
-      { symbol: 'SOLUSDT', label: 'SOL', icon: 'sol', type: 'crypto' },
-      { symbol: 'XRPUSDT', label: 'XRP', icon: 'xrp', type: 'crypto' },
-      { symbol: 'ADAUSDT', label: 'ADA', icon: 'ada', type: 'crypto' },
-      { symbol: 'XLMUSDT', label: 'XLM', icon: 'xlm', type: 'crypto' },
+      { symbol: 'BTCUSDT',  label: 'BTC',  icon: 'btc',  type: 'crypto' },
+      { symbol: 'ETHUSDT',  label: 'ETH',  icon: 'eth',  type: 'crypto' },
+      { symbol: 'SOLUSDT',  label: 'SOL',  icon: 'sol',  type: 'crypto' },
+      { symbol: 'XRPUSDT',  label: 'XRP',  icon: 'xrp',  type: 'crypto' },
+      { symbol: 'ADAUSDT',  label: 'ADA',  icon: 'ada',  type: 'crypto' },
+      { symbol: 'XLMUSDT',  label: 'XLM',  icon: 'xlm',  type: 'crypto' },
+      { symbol: 'BNBUSDT',  label: 'BNB',  icon: 'bnb',  type: 'crypto' },
+      { symbol: 'TRXUSDT',  label: 'TRX',  icon: 'trx',  type: 'crypto' },
+      { symbol: 'DOGEUSDT', label: 'DOGE', icon: 'doge', type: 'crypto' },
+      { symbol: 'LINKUSDT', label: 'LINK', icon: 'link', type: 'crypto' },
+      { symbol: 'SUIUSDT',  label: 'SUI',  icon: 'sui',  type: 'crypto' },
+      { symbol: 'AVAXUSDT', label: 'AVAX', icon: 'avax', type: 'crypto' },
+      { symbol: 'NEARUSDT', label: 'NEAR', icon: 'near', type: 'crypto' },
+      { symbol: 'DOTUSDT',  label: 'DOT',  icon: 'dot',  type: 'crypto' },
+      { symbol: 'AAVEUSDT', label: 'AAVE', icon: 'aave', type: 'crypto' },
+      { symbol: 'PEPEUSDT', label: 'PEPE', icon: 'pepe', type: 'crypto' },
+      { symbol: 'ZECUSDT',  label: 'ZEC',  icon: 'zec',  type: 'crypto' },
+      { symbol: 'UNIUSDT',  label: 'UNI',  icon: 'uni',  type: 'crypto' },
+      { symbol: 'HYPEUSDT', label: 'HYPE', icon: 'hype', type: 'crypto' },
+      { symbol: 'RAINUSDT', label: 'RAIN', icon: 'rain', type: 'crypto' },
+      { symbol: 'LEOUSDT',  label: 'LEO',  icon: 'leo',  type: 'crypto' },
     ],
     forex: [
       { symbol: 'EUR/USD', label: 'EUR/USD', type: 'forex' },
       { symbol: 'GBP/USD', label: 'GBP/USD', type: 'forex' },
       { symbol: 'USD/JPY', label: 'USD/JPY', type: 'forex' },
       { symbol: 'AUD/USD', label: 'AUD/USD', type: 'forex' },
+      { symbol: 'USD/CAD', label: 'USD/CAD', type: 'forex' },
+      { symbol: 'USD/CHF', label: 'USD/CHF', type: 'forex' },
+      { symbol: 'NZD/USD', label: 'NZD/USD', type: 'forex' },
+      { symbol: 'USD/CNH', label: 'USD/CNH', type: 'forex' },
     ],
     stocks: [
-      { symbol: 'NVDA', label: 'NVDA', type: 'stock' },
-      { symbol: 'TSLA', label: 'TSLA', type: 'stock' },
-      { symbol: 'AMZN', label: 'AMZN', type: 'stock' },
-      { symbol: 'AMD', label: 'AMD', type: 'stock' },
+      { symbol: 'NVDA',  label: 'NVDA',  type: 'stock' },
+      { symbol: 'TSLA',  label: 'TSLA',  type: 'stock' },
+      { symbol: 'AMZN',  label: 'AMZN',  type: 'stock' },
+      { symbol: 'AMD',   label: 'AMD',   type: 'stock' },
+      { symbol: 'META',  label: 'META',  type: 'stock' },
+      { symbol: 'MSFT',  label: 'MSFT',  type: 'stock' },
+      { symbol: 'AAPL',  label: 'AAPL',  type: 'stock' },
+      { symbol: 'GOOGL', label: 'GOOGL', type: 'stock' },
+      { symbol: 'NFLX',  label: 'NFLX',  type: 'stock' },
+      { symbol: 'BABA',  label: 'BABA',  type: 'stock' },
+      { symbol: 'MRVL',  label: 'MRVL',  type: 'stock' },
+      { symbol: 'NOW',   label: 'NOW',   type: 'stock' },
+      { symbol: 'HOOD',  label: 'HOOD',  type: 'stock' },
+      { symbol: 'MARA',  label: 'MARA',  type: 'stock' },
+      { symbol: 'MRNA',  label: 'MRNA',  type: 'stock' },
+      { symbol: 'BAC',   label: 'BAC',   type: 'stock' },
+      { symbol: 'GME',   label: 'GME',   type: 'stock' },
+      { symbol: 'AMC',   label: 'AMC',   type: 'stock' },
+      { symbol: 'SQQQ',  label: 'SQQQ',  type: 'stock' },
+      { symbol: 'QQQ',   label: 'QQQ',   type: 'stock' },
+      { symbol: 'ASTS',  label: 'ASTS',  type: 'stock' },
+      { symbol: 'FCEL',  label: 'FCEL',  type: 'stock' },
+      { symbol: 'POET',  label: 'POET',  type: 'stock' },
+      { symbol: 'TE',    label: 'TE',    type: 'stock' },
+      { symbol: 'NVTS',  label: 'NVTS',  type: 'stock' },
+      { symbol: 'QUBY',  label: 'QUBY',  type: 'stock' },
     ],
   };
 
   const GROUPS_FB_URL = `${FIREBASE_BASE}/watchlist/groups.json`;
+  const GROUPS_VERSION = '2';  // bump when DEFAULT_GROUPS changes — forces reset on old clients
   function loadGroups() {
     const saved = localStorage.getItem('chevWatchlistGroups');
-    if (saved) { try { return JSON.parse(saved); } catch(e) {} }
+    const ver   = localStorage.getItem('chevWatchlistGroupsVer');
+    if (saved && ver === GROUPS_VERSION) { try { return JSON.parse(saved); } catch(e) {} }
     return JSON.parse(JSON.stringify(DEFAULT_GROUPS));
   }
   function saveGroups() {
     const payload = JSON.stringify(groups);
     localStorage.setItem('chevWatchlistGroups', payload);
+    localStorage.setItem('chevWatchlistGroupsVer', GROUPS_VERSION);
     fetch(GROUPS_FB_URL, { method:'PUT', body:payload, headers:{'Content-Type':'application/json'} }).catch(()=>{});
   }
   // On load: pull watchlist from Firebase (friend's additions show up automatically)

@@ -1185,20 +1185,64 @@ STOCK_SCAN_INTERVAL       = 10 * 60  # Twelve Data budget: 4 pairs × 2 tf × 14
 STOCK_TRADE_CHECK_INTERVAL = 60      # how often to check fills/SL/TP on open+pending stocks (market hours only)
 
 WATCHLIST = [
-    {"symbol": "BTCUSDT", "type": "crypto"},
-    {"symbol": "ETHUSDT", "type": "crypto"},
-    {"symbol": "XRPUSDT", "type": "crypto"},
-    {"symbol": "XLMUSDT", "type": "crypto"},
-    {"symbol": "ADAUSDT", "type": "crypto"},
-    {"symbol": "SOLUSDT", "type": "crypto"},
+    # ── Crypto (Binance USDT) ─────────────────────────────────────────
+    {"symbol": "BTCUSDT",  "type": "crypto"},
+    {"symbol": "ETHUSDT",  "type": "crypto"},
+    {"symbol": "XRPUSDT",  "type": "crypto"},
+    {"symbol": "XLMUSDT",  "type": "crypto"},
+    {"symbol": "ADAUSDT",  "type": "crypto"},
+    {"symbol": "SOLUSDT",  "type": "crypto"},
+    {"symbol": "BNBUSDT",  "type": "crypto"},
+    {"symbol": "TRXUSDT",  "type": "crypto"},
+    {"symbol": "DOGEUSDT", "type": "crypto"},
+    {"symbol": "LINKUSDT", "type": "crypto"},
+    {"symbol": "SUIUSDT",  "type": "crypto"},
+    {"symbol": "AVAXUSDT", "type": "crypto"},
+    {"symbol": "NEARUSDT", "type": "crypto"},
+    {"symbol": "DOTUSDT",  "type": "crypto"},
+    {"symbol": "AAVEUSDT", "type": "crypto"},
+    {"symbol": "PEPEUSDT", "type": "crypto"},
+    {"symbol": "ZECUSDT",  "type": "crypto"},
+    {"symbol": "UNIUSDT",  "type": "crypto"},
+    {"symbol": "HYPEUSDT", "type": "crypto"},  # Hyperliquid — verify on Binance
+    {"symbol": "RAINUSDT", "type": "crypto"},  # Rain — verify on Binance
+    {"symbol": "LEOUSDT",  "type": "crypto"},  # LEO (Bitfinex) — verify on Binance
+    # ── Forex (Twelve Data) ───────────────────────────────────────────
     {"symbol": "EUR/USD", "type": "forex"},
     {"symbol": "GBP/USD", "type": "forex"},
     {"symbol": "USD/JPY", "type": "forex"},
     {"symbol": "AUD/USD", "type": "forex"},
-    {"symbol": "NVDA", "type": "stock"},
-    {"symbol": "TSLA", "type": "stock"},
-    {"symbol": "AMZN", "type": "stock"},
-    {"symbol": "AMD", "type": "stock"},
+    {"symbol": "USD/CAD", "type": "forex"},
+    {"symbol": "USD/CHF", "type": "forex"},
+    {"symbol": "NZD/USD", "type": "forex"},
+    {"symbol": "USD/CNH", "type": "forex"},
+    # ── Stocks (Twelve Data / Finnhub) ────────────────────────────────
+    {"symbol": "NVDA",  "type": "stock"},
+    {"symbol": "TSLA",  "type": "stock"},
+    {"symbol": "AMZN",  "type": "stock"},
+    {"symbol": "AMD",   "type": "stock"},
+    {"symbol": "META",  "type": "stock"},
+    {"symbol": "MSFT",  "type": "stock"},
+    {"symbol": "AAPL",  "type": "stock"},
+    {"symbol": "GOOGL", "type": "stock"},
+    {"symbol": "NFLX",  "type": "stock"},
+    {"symbol": "BABA",  "type": "stock"},
+    {"symbol": "MRVL",  "type": "stock"},
+    {"symbol": "NOW",   "type": "stock"},
+    {"symbol": "HOOD",  "type": "stock"},
+    {"symbol": "MARA",  "type": "stock"},
+    {"symbol": "MRNA",  "type": "stock"},
+    {"symbol": "BAC",   "type": "stock"},
+    {"symbol": "GME",   "type": "stock"},
+    {"symbol": "AMC",   "type": "stock"},
+    {"symbol": "SQQQ",  "type": "stock"},
+    {"symbol": "QQQ",   "type": "stock"},
+    {"symbol": "ASTS",  "type": "stock"},
+    {"symbol": "FCEL",  "type": "stock"},
+    {"symbol": "POET",  "type": "stock"},
+    {"symbol": "TE",    "type": "stock"},
+    {"symbol": "NVTS",  "type": "stock"},
+    {"symbol": "QUBY",  "type": "stock"},  # verify ticker
 ]
 
 # Crypto gets the full 4-timeframe validated model (Binance is free).
@@ -1250,12 +1294,27 @@ _cached_balance = STARTING_BALANCE          # kept fresh by main loop, read by F
 _firebase_win_stats = {"wins": 0, "losses": 0}  # kept fresh by main loop
 
 COINGECKO_IDS = {
-    "BTCUSDT": "bitcoin",
-    "ETHUSDT": "ethereum",
-    "XRPUSDT": "ripple",
-    "XLMUSDT": "stellar",
-    "ADAUSDT": "cardano",
-    "SOLUSDT": "solana",
+    "BTCUSDT":  "bitcoin",
+    "ETHUSDT":  "ethereum",
+    "XRPUSDT":  "ripple",
+    "XLMUSDT":  "stellar",
+    "ADAUSDT":  "cardano",
+    "SOLUSDT":  "solana",
+    "BNBUSDT":  "binancecoin",
+    "TRXUSDT":  "tron",
+    "DOGEUSDT": "dogecoin",
+    "LINKUSDT": "chainlink",
+    "SUIUSDT":  "sui",
+    "AVAXUSDT": "avalanche-2",
+    "NEARUSDT": "near",
+    "DOTUSDT":  "polkadot",
+    "AAVEUSDT": "aave",
+    "PEPEUSDT": "pepe",
+    "ZECUSDT":  "zcash",
+    "UNIUSDT":  "uniswap",
+    "HYPEUSDT": "hyperliquid",
+    "RAINUSDT": "rain",
+    "LEOUSDT":  "bitfinex-leo",
 }
 
 
@@ -5510,7 +5569,11 @@ def _calc_confluence_score(tags_str):
     return score, tags
 
 
-_CRYPTO_CORR_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "XLMUSDT"}
+_CRYPTO_CORR_SYMBOLS = {
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "XLMUSDT",
+    "BNBUSDT", "DOGEUSDT", "LINKUSDT", "SUIUSDT", "AVAXUSDT", "NEARUSDT",
+    "DOTUSDT", "AAVEUSDT", "PEPEUSDT", "UNIUSDT", "TRXUSDT",
+}
 
 def _portfolio_heat_context(asset_type, symbol):
     """Return a heat warning string for the escalation prompt."""
