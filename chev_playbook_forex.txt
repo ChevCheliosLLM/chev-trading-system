@@ -1,0 +1,32 @@
+CHEV TRADING PLAYBOOK — FOREX
+Last updated: 2026-07-03 (seeded — will be rewritten by learning sessions)
+========================================
+
+### CONFLUENCE CONDITIONS
+- Forex requires a real structural anchor: a 4H SR level with 3+ touches OR a VP POC/VAH within 0.4%. EMA + fib alone is not enough — price mid-range fails almost every time.
+- The golden pocket (61.8% fib) paired with a 4H SR level is the highest-conviction forex entry; hidden divergence as a third confirmation puts it in A+ territory.
+- Session quality matters more in forex than crypto: London open and the NY/London overlap produce the most decisive moves — Asian session setups on major pairs frequently fail to reach TP.
+
+### MARKET STRUCTURE RULES
+- In TRENDING regimes, trade WITH the 4H trend from pullback zones (4H SR + fib). Counter-trend mean-reversion is allowed but needs 1.5× score AND confirmed divergence.
+- In RANGING regimes, fade the band extremes (upper SR + overbought, lower SR + oversold). The range boundary IS the structure — that's your anchor.
+- A 4H SR level that has been tested 4+ times is a wall. A 1H level tested once is a speed bump. Trade the wall, avoid the speed bump as primary TP.
+
+### ENTRY QUALITY STANDARDS
+- Forex SL minimum: 1.0× ATR scalp | 1.5× ATR day | 2.5× ATR swing. Inside these distances, a normal wick stops you before the setup plays.
+- A high-conviction forex entry has: 4H SR level + fib confluence + directional bias from 4H regime. Without all three, it is a B setup at best.
+- Wait for a body close confirming rejection at the level (e.g., pin bar or engulfing candle body through the zone midpoint) before entering — price touching a level and immediately reversing is a real signal; price wicking through and closing inside is not.
+
+### TRADE MANAGEMENT PATTERNS
+- Insufficient data — revisit next session.
+
+### REASONING QUALITY
+- Insufficient data — revisit next session.
+
+### ASSET NOTES
+- Forex pip values: EUR/USD, GBP/USD = $10 per pip per standard lot (100,000 units). A 30-pip move on 0.1 lots = $30.
+- Leverage norms: scalp up to 20×, day trade up to 10×, swing up to 5× (gap risk overnight).
+- Major pairs (EUR/USD, GBP/USD, USD/JPY) have tighter spreads and cleaner levels than crosses. Cross pairs (EUR/GBP) can whipsaw at SR zones.
+
+### JANE'S PATTERNS
+- Insufficient data — revisit next session.

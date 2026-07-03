@@ -137,28 +137,35 @@ def api_close_trade():
         # Write to journal so the closed-trades section of the monitor picks it up
         try:
             journal = _load_journal()
-            journal.append({
-                "ts":               datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "symbol":           target["symbol"],
-                "asset_type":       target.get("asset_type", "crypto"),
-                "direction":        target["direction"],
-                "entry":            target["entry"],
-                "sl":               target["sl"],
-                "tp":               target["tp"],
-                "exit_price":       price,
-                "pnl":              exit_pnl,
-                "outcome":          outcome,
-                "close_type":       "MANUAL",
-                "tags":             (target.get("tags", "") + " manual-close").strip(),
-                "duration":         "manual",
-                "reasoning":        target.get("reasoning", ""),
-                "analysis":         "Closed manually by user.",
-                "position_size_usd": target.get("position_size_usd", 0),
-                "leverage":         target.get("leverage", 1),
-                "chev_moves":       target.get("chev_moves", []),
-            })
-            with open(JOURNAL_PATH, "w", encoding="utf-8") as f:
-                json.dump(journal, f, indent=2)
+            _sym   = target["symbol"]
+            _entry = target["entry"]
+            _sl    = target["sl"]
+            _tp    = target["tp"]
+            if _is_duplicate_journal_entry(_sym, _entry, _sl, _tp, journal):
+                print(f"[Journal] Duplicate detected for {_sym} (entry={_entry} SL={_sl} TP={_tp}) — skipping write.")
+            else:
+                journal.append({
+                    "ts":               datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "symbol":           _sym,
+                    "asset_type":       target.get("asset_type", "crypto"),
+                    "direction":        target["direction"],
+                    "entry":            _entry,
+                    "sl":               _sl,
+                    "tp":               _tp,
+                    "exit_price":       price,
+                    "pnl":              exit_pnl,
+                    "outcome":          outcome,
+                    "close_type":       "MANUAL",
+                    "tags":             (target.get("tags", "") + " manual-close").strip(),
+                    "duration":         "manual",
+                    "reasoning":        target.get("reasoning", ""),
+                    "analysis":         "Closed manually by user.",
+                    "position_size_usd": target.get("position_size_usd", 0),
+                    "leverage":         target.get("leverage", 1),
+                    "chev_moves":       target.get("chev_moves", []),
+                })
+                with open(JOURNAL_PATH, "w", encoding="utf-8") as f:
+                    json.dump(journal, f, indent=2)
         except Exception as je:
             print(f"[force-close] Journal write failed: {je}")
 
@@ -248,6 +255,8 @@ def api_forex_candles():
 
 @flask_app.route("/api/pending")
 def api_pending():
+    if worksheet is None:
+        return jsonify([])
     rows = worksheet.get_all_values()[1:]
     pending = []
     for i, row in enumerate(rows, start=2):
@@ -794,7 +803,10 @@ def api_analysis_rsi_div():
             except Exception:
                 ts_arr = list(range(len(df)))
             n   = len(df)
-            lb  = 7  # bars each side — candle must be highest/lowest of 15-candle window
+            # Pivot lookback scales with TF so major structural swings are captured.
+            # A bar qualifies as a swing high/low only if it is the extreme across
+            # lb bars on each side — too small a window picks up micro-noise.
+            lb  = {'15m': 10, '30m': 12, '1h': 16, '4h': 24}.get(tf_str, 10)
 
             # Dual-pivot: candle must be a swing on BOTH price AND RSI at the same bar
             sw_h, sw_l = [], []
@@ -846,11 +858,18 @@ def api_analysis_rsi_div():
                 (lambda p1,p2: p2 < p1, lambda r1,r2: r2 > r1, "Hidden Bearish",  "bear", "price LH but RSI HH — downtrend continuation"),
             ])
 
-            # Return only the stronger of the two (most recent second pivot wins; tie → largest RSI gap)
+            # Return only the stronger confirmed div + any forming divs
             candidates = [d for d in [bull_div, bear_div] if d]
-            if not candidates:
-                return []
-            return [max(candidates, key=lambda d: (d["ts_t2"], abs(d["rsi_t2"] - d["rsi_t1"])))]
+            confirmed = ([max(candidates, key=lambda d: (d["ts_t2"], abs(d["rsi_t2"] - d["rsi_t1"])))]
+                         if candidates else [])
+            # Forming divergence: use same df with RSI column added
+            try:
+                df_rsi = df.copy()
+                df_rsi["RSI"] = _an_rsi_series(df)
+                forming = _detect_forming_divergence(df_rsi, lb=lb)
+            except Exception:
+                forming = []
+            return confirmed + forming
         except Exception:
             return []
 
@@ -1084,7 +1103,12 @@ OPENWEBUI_URL     = "http://localhost:3000/api/chat/completions"
 FIREBASE_URL  = "https://chev-monitor-default-rtdb.firebaseio.com"
 JOURNAL_PATH       = r"C:\ChevTools\chev_journal.json"
 JANE_JOURNAL_PATH  = r"C:\ChevTools\jane_journal.json"
-PLAYBOOK_PATH      = r"C:\ChevTools\chev_playbook.txt"
+PLAYBOOK_PATH      = r"C:\ChevTools\chev_playbook.txt"            # legacy / generic fallback
+PLAYBOOK_PATHS     = {
+    "forex":  r"C:\ChevTools\chev_playbook_forex.txt",
+    "crypto": r"C:\ChevTools\chev_playbook_crypto.txt",
+    "stocks": r"C:\ChevTools\chev_playbook_stocks.txt",
+}
 MODEL_ID = "chev-chelios"
 
 TRADE_TYPE_EXPIRY_HOURS = {"scalp": 2, "day": 6, "swing": 48}
@@ -1149,7 +1173,7 @@ CONFLUENCE_SCORES = {
     "ms_1d": 5, "ms_4h": 4, "ms_1h": 3, "ms_30m": 2, "ms_15m": 1, "ms": 3,
 }
 CONFLUENCE_THRESHOLD_CRYPTO = 10   # minimum score to open a trade on crypto
-CONFLUENCE_THRESHOLD_FOREX  = 7    # forex moves slower — fewer confluences expected
+CONFLUENCE_THRESHOLD_FOREX  = 8    # raised from 7 — SR reweighting means 7 was too lenient
 
 VALID_TAGS = list(CONFLUENCE_SCORES.keys())
 
@@ -1352,9 +1376,10 @@ def _push_to_firebase():
         print(f"[Firebase push error] {e}")
 
 
-def _load_playbook():
+def _load_playbook(asset_type=None):
+    path = PLAYBOOK_PATHS.get(asset_type, PLAYBOOK_PATH) if asset_type else PLAYBOOK_PATH
     try:
-        with open(PLAYBOOK_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return f.read().strip()
     except Exception:
         return ""
@@ -1365,6 +1390,28 @@ def _load_journal():
             return json.load(f)
     except Exception:
         return []
+
+
+def _is_duplicate_journal_entry(symbol, entry_price, sl, tp, journal, lookback=30, tol=0.0005):
+    """Return True if the last `lookback` journal entries already contain this exact trade.
+
+    Matches on symbol + entry + SL + TP within `tol` fractional tolerance (0.05%).
+    This catches the restart-logging bug where the same closed trade gets written twice,
+    without false-positiving on legitimately similar setups at different prices.
+    """
+    for rec in journal[-lookback:]:
+        if rec.get("symbol") != symbol:
+            continue
+        def _close(a, b):
+            if b == 0:
+                return a == 0
+            return abs(a - b) / abs(b) <= tol
+        if (_close(rec.get("entry", -1), entry_price) and
+                _close(rec.get("sl", -1),    sl) and
+                _close(rec.get("tp", -1),    tp)):
+            return True
+    return False
+
 
 _chev_lock             = threading.Lock()
 _chev_last_call        = 0.0
@@ -1576,9 +1623,16 @@ def _run_cross_analysis():
         print(f"[Cross-analysis] Failed: {e}")
 
 
-def _run_learning_session(journal, jane_journal=None):
-    """Every 10 closed trades, Chev reads both journals and rewrites his playbook."""
-    recent = journal[-20:]
+def _run_learning_session(journal, jane_journal=None, asset_type=None):
+    """Every 10 closed trades, Chev reads his journal for this asset class and rewrites the playbook.
+
+    When asset_type is given, only trades of that type are used and the asset-specific
+    playbook file is updated.  Generic (all-asset) mode still works when asset_type=None.
+    """
+    asset_journal = [e for e in journal if e.get("asset_type") == asset_type] if asset_type else journal
+    if asset_type and len(asset_journal) < 5:
+        return  # not enough data to write a meaningful asset-specific playbook yet
+    recent = asset_journal[-20:]
     jane_recent = (jane_journal or [])[-10:]
 
     def _fmt_entry(i, e):
@@ -1593,10 +1647,10 @@ def _run_learning_session(journal, jane_journal=None):
         )
     entries_text = "\n\n".join([_fmt_entry(i, e) for i, e in enumerate(recent)])
 
-    # Build confluence combo win-rate breakdown for the last 30 trades
+    # Build confluence combo win-rate breakdown for the last 30 trades (asset-filtered)
     from collections import defaultdict
     combo_stats = defaultdict(lambda: {"w": 0, "l": 0})
-    for e in journal[-30:]:
+    for e in asset_journal[-30:]:
         raw_tags = [t.strip().lower() for t in str(e.get("tags", "")).split(",") if t.strip()]
         # Filter to known scored tags only (exclude leaked close-type strings)
         valid = [t for t in raw_tags if t in CONFLUENCE_SCORES]
@@ -1612,8 +1666,8 @@ def _run_learning_session(journal, jane_journal=None):
         combo_lines.append(f"  {combo}: {st['w']}W/{st['l']}L ({wr}% WR)")
     combo_summary = "\n".join(combo_lines) if combo_lines else "  No data yet"
 
-    # Management pattern stats across last 30 trades
-    trades_30    = journal[-30:]
+    # Management pattern stats across last 30 trades (asset-filtered)
+    trades_30    = asset_journal[-30:]
     with_moves   = [(e, e.get("chev_moves", [])) for e in trades_30 if e.get("chev_moves")]
     mgmt_summary = "  No management moves recorded yet."
     if with_moves:
@@ -1676,8 +1730,9 @@ def _run_learning_session(journal, jane_journal=None):
             f"Note: Jane is a human trader. Look for patterns where her instincts outperform your models.\n"
         )
 
+    _asset_label = asset_type.upper() if asset_type else "ALL ASSETS"
     prompt = (
-        f"You are reviewing your last {len(recent)} trade post-mortems to update your trading playbook.\n\n"
+        f"You are reviewing your last {len(recent)} {_asset_label} trade post-mortems to update your {_asset_label} trading playbook.\n\n"
         f"{entries_text}\n"
         f"{jane_text}\n"
         f"CONFLUENCE COMBO WIN-RATE (last 30 trades — use this as statistical evidence):\n"
@@ -1718,16 +1773,17 @@ def _run_learning_session(journal, jane_journal=None):
         f"- If you have nothing meaningful to say in a section, write one bullet: 'Insufficient data — revisit next session.'"
     )
     try:
-        print(f"[Playbook] Running learning session on {len(recent)} journal entries (+ {len(jane_recent)} Jane's)...")
+        print(f"[Playbook] Learning session — {_asset_label}: {len(recent)} entries (+ {len(jane_recent)} Jane's)...")
         new_playbook = _call_chev([{"role": "user", "content": prompt}], timeout=120)
         if not new_playbook:
             raise Exception("No response from Chev")
-        header = (f"CHEV TRADING PLAYBOOK\n"
+        _pb_path = PLAYBOOK_PATHS.get(asset_type, PLAYBOOK_PATH) if asset_type else PLAYBOOK_PATH
+        header = (f"CHEV TRADING PLAYBOOK — {_asset_label}\n"
                   f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-                  f"| Based on {len(journal)} Chev + {len(jane_journal or [])} Jane closed trades\n{'='*40}\n\n")
-        with open(PLAYBOOK_PATH, "w", encoding="utf-8") as f:
+                  f"| Based on {len(asset_journal)} {_asset_label} trades\n{'='*40}\n\n")
+        with open(_pb_path, "w", encoding="utf-8") as f:
             f.write(header + new_playbook)
-        print(f"[Playbook] Rewritten after {len(journal)} Chev + {len(jane_journal or [])} Jane closed trades.")
+        print(f"[Playbook] {_asset_label} playbook rewritten → {_pb_path}")
     except Exception as e:
         print(f"[Playbook] Learning session failed: {e}")
 
@@ -1839,6 +1895,9 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
     }
     try:
         journal = _load_journal()
+        if _is_duplicate_journal_entry(trade["symbol"], trade["entry"], trade["sl"], trade["tp"], journal):
+            print(f"[Journal] Duplicate detected for {trade['symbol']} (entry={trade['entry']} SL={trade['sl']} TP={trade['tp']}) — skipping write.")
+            return
         journal.append(entry)
         with open(JOURNAL_PATH, "w", encoding="utf-8") as f:
             json.dump(journal, f, indent=2)
@@ -1851,7 +1910,8 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
         _maybe_run_cross_analysis()
         if len(journal) % 10 == 0:
             jane_j = _load_jane_journal()
-            threading.Thread(target=_run_learning_session, args=(journal, jane_j), daemon=True).start()
+            for _at in ("forex", "crypto", "stocks"):
+                threading.Thread(target=_run_learning_session, args=(journal, jane_j, _at), daemon=True).start()
     except Exception as e:
         print(f"[Journal] Save failed: {e}")
 
@@ -2343,8 +2403,54 @@ def _forming_div_score(rsi_gap):
     return 0.0
 
 
-def _detect_forming_divergence(df, lookback=150, mini=5):
-    """Detect forming divergences: confirmed first pivot (dual, 7-bar) + current mini-extreme has exceeded it + RSI diverging.
+def _div_strength_score(d, tf_str, confirmed=True):
+    """
+    Score a divergence 0–3.0 pts using depth, RSI delta, span, and price move.
+    Geometric mean of depth × delta ensures both must be decent — a huge span
+    with only 2 RSI points of divergence stays near zero.
+    confirmed=False applies a 0.75 forming-div discount.
+    """
+    import math
+    bias    = d.get('bias', 'bull')
+    rsi_t1  = float(d.get('rsi_t1', 50))
+    rsi_t2  = float(d.get('rsi_t2', 50))
+    p1      = float(d.get('price_t1') or d.get('pivot_price') or 0)
+    p2      = float(d.get('price_t2') or d.get('cur_price')   or 0)
+
+    # Depth: how extreme was RSI at the first pivot
+    if bias == 'bull':
+        D = max(0.0, min(1.0, (50 - rsi_t1) / 30))   # RSI 20 → 1.0 | RSI 50 → 0
+    else:
+        D = max(0.0, min(1.0, (rsi_t1 - 50) / 30))   # RSI 80 → 1.0 | RSI 50 → 0
+
+    # RSI delta: how far did RSI diverge from t1 to t2
+    R = min(1.0, abs(rsi_t2 - rsi_t1) / 20.0)        # 20pt gap → 1.0
+
+    # Span: bars between pivots, scaled per TF
+    max_bars = {'15m': 40, '30m': 40, '1h': 32, '4h': 40}.get(tf_str, 40)
+    age_bars = int(d.get('age_bars') or 0)
+    if age_bars == 0 and d.get('ts_t1') and d.get('ts_t2'):
+        tf_secs  = {'15m': 900, '30m': 1800, '1h': 3600, '4h': 14400}.get(tf_str, 3600)
+        age_bars = max(0, (int(d['ts_t2']) - int(d['ts_t1'])) // tf_secs)
+    S = min(1.0, age_bars / max_bars)
+
+    # Price move: how far did price travel in the "wrong" direction (5% → P=1.0)
+    P = 0.0
+    if p1 > 0 and p2 > 0:
+        P = min(1.0, abs(p2 - p1) / p1 * 20)
+
+    # Geometric mean of D and R (both must be decent) — span and price add bonus
+    base  = math.sqrt(D * R)
+    score = base * (0.60 + 0.25 * S + 0.15 * P)
+
+    if not confirmed:
+        score *= 0.75
+
+    return round(score * 3.0, 2)   # scale to 0–3.0 pts
+
+
+def _detect_forming_divergence(df, lookback=150, mini=5, lb=10):
+    """Detect forming divergences: confirmed first pivot (dual, lb-bar) + current mini-extreme has exceeded it + RSI diverging.
     Returns list of dicts sorted by score desc, up to one of each type."""
     if "RSI" not in df.columns:
         return []
@@ -2352,7 +2458,6 @@ def _detect_forming_divergence(df, lookback=150, mini=5):
     highs = df["high"].values
     lows  = df["low"].values
     n     = len(df)
-    lb    = 7
     if n < lookback + lb:
         return []
 
@@ -2383,6 +2488,12 @@ def _detect_forming_divergence(df, lookback=150, mini=5):
     cur_rhi    = float(rsi[cur_hi_idx]) if not np.isnan(rsi[cur_hi_idx]) else None
     cur_rlo    = float(rsi[cur_lo_idx]) if not np.isnan(rsi[cur_lo_idx]) else None
 
+    def _ts(i):
+        try:
+            return int(df.index[i].timestamp())
+        except Exception:
+            return i
+
     results = []
     seen    = set()
 
@@ -2393,11 +2504,13 @@ def _detect_forming_divergence(df, lookback=150, mini=5):
             if cur_hi > pp:
                 gap = pr - cur_rhi
                 if gap >= 5:
-                    results.append({"type": "Regular Bearish", "bias": "bear",
+                    results.append({"type": "Regular Bearish", "bias": "bear", "forming": True,
                                     "rsi_gap": round(gap, 1), "score": _forming_div_score(gap),
                                     "age_bars": n - 1 - pi,
                                     "pivot_price": round(pp, 5), "pivot_rsi": round(pr, 2),
-                                    "cur_price": round(cur_hi, 5), "cur_rsi": round(cur_rhi, 2)})
+                                    "cur_price": round(cur_hi, 5), "cur_rsi": round(cur_rhi, 2),
+                                    "ts_t1": _ts(pi),        "price_t1": round(pp, 5),    "rsi_t1": round(pr, 2),
+                                    "ts_t2": _ts(cur_hi_idx),"price_t2": round(cur_hi, 5),"rsi_t2": round(cur_rhi, 2)})
                     seen.add("rb")
 
     # Regular Bullish: price new low BUT RSI higher — selling exhaustion
@@ -2407,11 +2520,13 @@ def _detect_forming_divergence(df, lookback=150, mini=5):
             if cur_lo < pp:
                 gap = cur_rlo - pr
                 if gap >= 5:
-                    results.append({"type": "Regular Bullish", "bias": "bull",
+                    results.append({"type": "Regular Bullish", "bias": "bull", "forming": True,
                                     "rsi_gap": round(gap, 1), "score": _forming_div_score(gap),
                                     "age_bars": n - 1 - pi,
                                     "pivot_price": round(pp, 5), "pivot_rsi": round(pr, 2),
-                                    "cur_price": round(cur_lo, 5), "cur_rsi": round(cur_rlo, 2)})
+                                    "cur_price": round(cur_lo, 5), "cur_rsi": round(cur_rlo, 2),
+                                    "ts_t1": _ts(pi),        "price_t1": round(pp, 5),    "rsi_t1": round(pr, 2),
+                                    "ts_t2": _ts(cur_lo_idx),"price_t2": round(cur_lo, 5),"rsi_t2": round(cur_rlo, 2)})
                     seen.add("bull")
 
     # Hidden Bearish: price lower high BUT RSI higher high — downtrend continuation
@@ -2421,11 +2536,13 @@ def _detect_forming_divergence(df, lookback=150, mini=5):
             if cur_hi < pp:
                 gap = cur_rhi - pr
                 if gap >= 5:
-                    results.append({"type": "Hidden Bearish", "bias": "bear",
+                    results.append({"type": "Hidden Bearish", "bias": "bear", "forming": True,
                                     "rsi_gap": round(gap, 1), "score": _forming_div_score(gap),
                                     "age_bars": n - 1 - pi,
                                     "pivot_price": round(pp, 5), "pivot_rsi": round(pr, 2),
-                                    "cur_price": round(cur_hi, 5), "cur_rsi": round(cur_rhi, 2)})
+                                    "cur_price": round(cur_hi, 5), "cur_rsi": round(cur_rhi, 2),
+                                    "ts_t1": _ts(pi),        "price_t1": round(pp, 5),    "rsi_t1": round(pr, 2),
+                                    "ts_t2": _ts(cur_hi_idx),"price_t2": round(cur_hi, 5),"rsi_t2": round(cur_rhi, 2)})
                     seen.add("hbear")
 
     # Hidden Bullish: price higher low BUT RSI lower low — uptrend continuation
@@ -2435,11 +2552,13 @@ def _detect_forming_divergence(df, lookback=150, mini=5):
             if cur_lo > pp:
                 gap = pr - cur_rlo
                 if gap >= 5:
-                    results.append({"type": "Hidden Bullish", "bias": "bull",
+                    results.append({"type": "Hidden Bullish", "bias": "bull", "forming": True,
                                     "rsi_gap": round(gap, 1), "score": _forming_div_score(gap),
                                     "age_bars": n - 1 - pi,
                                     "pivot_price": round(pp, 5), "pivot_rsi": round(pr, 2),
-                                    "cur_price": round(cur_lo, 5), "cur_rsi": round(cur_rlo, 2)})
+                                    "cur_price": round(cur_lo, 5), "cur_rsi": round(cur_rlo, 2),
+                                    "ts_t1": _ts(pi),        "price_t1": round(pp, 5),    "rsi_t1": round(pr, 2),
+                                    "ts_t2": _ts(cur_lo_idx),"price_t2": round(cur_lo, 5),"rsi_t2": round(cur_rlo, 2)})
                     seen.add("hbull")
 
     return sorted(results, key=lambda x: -x["score"])
@@ -2470,6 +2589,12 @@ def detect_rsi_divergence(df):
     rsi = df["RSI"].values
     sw_h, sw_l = _find_dual_pivots(df["high"].values, df["low"].values, rsi)
 
+    def _ts(i):
+        try:
+            return int(df.index[i].timestamp())
+        except Exception:
+            return i
+
     def _strongest(pivots, checks):
         best = None; best_score = (-1, 0.0)
         for k in range(len(pivots) - 1):
@@ -2477,22 +2602,26 @@ def detect_rsi_divergence(df):
             r1, r2 = float(rsi[i1]), float(rsi[i2])
             if np.isnan(r1) or np.isnan(r2) or abs(r2 - r1) < 2.0:
                 continue
-            for pc, rc, typ, note in checks:
+            for pc, rc, typ, bias, note in checks:
                 if pc(p1, p2) and rc(r1, r2):
                     score = (i2, abs(r2 - r1))
                     if score > best_score:
                         best_score = score
-                        best = {"type": typ, "price": round(p2, 5), "note": note}
+                        best = {
+                            "type": typ, "bias": bias, "price": round(float(p2), 5), "note": note,
+                            "ts_t1": _ts(i1), "price_t1": round(float(p1), 5), "rsi_t1": round(r1, 2),
+                            "ts_t2": _ts(i2), "price_t2": round(float(p2), 5), "rsi_t2": round(r2, 2),
+                        }
         return best
 
     found = []
     bull = _strongest(sw_l, [
-        (lambda p1,p2: p2 < p1, lambda r1,r2: r2 > r1, "Regular Bullish Divergence", "price LL, RSI HL — selling momentum fading"),
-        (lambda p1,p2: p2 > p1, lambda r1,r2: r2 < r1, "Hidden Bullish Divergence",  "price HL, RSI LL — uptrend continuation"),
+        (lambda p1,p2: p2 < p1, lambda r1,r2: r2 > r1, "Regular Bullish Divergence", "bull", "price LL, RSI HL — selling momentum fading"),
+        (lambda p1,p2: p2 > p1, lambda r1,r2: r2 < r1, "Hidden Bullish Divergence",  "bull", "price HL, RSI LL — uptrend continuation"),
     ])
     bear = _strongest(sw_h, [
-        (lambda p1,p2: p2 > p1, lambda r1,r2: r2 < r1, "Regular Bearish Divergence", "price HH, RSI LH — momentum fading"),
-        (lambda p1,p2: p2 < p1, lambda r1,r2: r2 > r1, "Hidden Bearish Divergence",  "price LH, RSI HH — downtrend continuation"),
+        (lambda p1,p2: p2 > p1, lambda r1,r2: r2 < r1, "Regular Bearish Divergence", "bear", "price HH, RSI LH — momentum fading"),
+        (lambda p1,p2: p2 < p1, lambda r1,r2: r2 > r1, "Hidden Bearish Divergence",  "bear", "price LH, RSI HH — downtrend continuation"),
     ])
     if bull: found.append(bull)
     if bear: found.append(bear)
@@ -2876,6 +3005,12 @@ def _ca_detect_rsi_divergence(df):
     rsi = df["RSI"].values
     sw_h, sw_l = _find_dual_pivots(df["high"].values, df["low"].values, rsi)
 
+    def _ts(i):
+        try:
+            return int(df.index[i].timestamp())
+        except Exception:
+            return i
+
     def _strongest(pivots, checks):
         best = None; best_score = (-1, 0.0)
         for k in range(len(pivots) - 1):
@@ -2883,22 +3018,26 @@ def _ca_detect_rsi_divergence(df):
             r1, r2 = float(rsi[i1]), float(rsi[i2])
             if np.isnan(r1) or np.isnan(r2) or abs(r2 - r1) < 2.0:
                 continue
-            for pc, rc, typ, note in checks:
+            for pc, rc, typ, bias, note in checks:
                 if pc(p1, p2) and rc(r1, r2):
                     score = (i2, abs(r2 - r1))
                     if score > best_score:
                         best_score = score
-                        best = {"type": typ, "price": round(float(p2), 5), "note": note}
+                        best = {
+                            "type": typ, "bias": bias, "price": round(float(p2), 5), "note": note,
+                            "ts_t1": _ts(i1), "price_t1": round(float(p1), 5), "rsi_t1": round(r1, 2),
+                            "ts_t2": _ts(i2), "price_t2": round(float(p2), 5), "rsi_t2": round(r2, 2),
+                        }
         return best
 
     found = []
     bull = _strongest(sw_l, [
-        (lambda p1,p2: p2 < p1, lambda r1,r2: r2 > r1, "Regular Bullish Divergence", "price lower low, RSI higher low — selling momentum fading"),
-        (lambda p1,p2: p2 > p1, lambda r1,r2: r2 < r1, "Hidden Bullish Divergence",  "price higher low, RSI lower low — uptrend likely continuing"),
+        (lambda p1,p2: p2 < p1, lambda r1,r2: r2 > r1, "Regular Bullish Divergence", "bull", "price lower low, RSI higher low — selling momentum fading"),
+        (lambda p1,p2: p2 > p1, lambda r1,r2: r2 < r1, "Hidden Bullish Divergence",  "bull", "price higher low, RSI lower low — uptrend likely continuing"),
     ])
     bear = _strongest(sw_h, [
-        (lambda p1,p2: p2 > p1, lambda r1,r2: r2 < r1, "Regular Bearish Divergence", "price higher high, RSI lower high — upside momentum fading"),
-        (lambda p1,p2: p2 < p1, lambda r1,r2: r2 > r1, "Hidden Bearish Divergence",  "price lower high, RSI higher high — downtrend likely continuing"),
+        (lambda p1,p2: p2 > p1, lambda r1,r2: r2 < r1, "Regular Bearish Divergence", "bear", "price higher high, RSI lower high — upside momentum fading"),
+        (lambda p1,p2: p2 < p1, lambda r1,r2: r2 > r1, "Hidden Bearish Divergence",  "bear", "price lower high, RSI higher high — downtrend likely continuing"),
     ])
     if bull: found.append(bull)
     if bear: found.append(bear)
@@ -3793,6 +3932,14 @@ def _detect_hidden_divergence(df, lookback=50):
     rsi         = window["RSI"].values
     closes      = window["close"].values
 
+    win_idx = window.index
+
+    def _ts(pos):
+        try:
+            return int(win_idx[pos].timestamp())
+        except Exception:
+            return pos
+
     for i in range(5, len(window) - 1):
         # Find previous significant low / high in first half of window
         prev_half_low_idx  = prices_low[:i].argmin()
@@ -3801,18 +3948,26 @@ def _detect_hidden_divergence(df, lookback=50):
         # Hidden bullish: current low > prev low, but RSI now < prev RSI
         if prices_low[i] > prices_low[prev_half_low_idx] and rsi[i] < rsi[prev_half_low_idx]:
             results.append({
-                "type": "hidden_bullish_divergence",
+                "type": "hidden_bullish_divergence", "bias": "bull",
                 "price": float(closes[i]),
                 "note": f"Price HL at {closes[i]:.5f} but RSI lower — uptrend continuation signal",
+                "ts_t1": _ts(prev_half_low_idx), "price_t1": round(float(prices_low[prev_half_low_idx]), 5),
+                "rsi_t1": round(float(rsi[prev_half_low_idx]), 2),
+                "ts_t2": _ts(i), "price_t2": round(float(prices_low[i]), 5),
+                "rsi_t2": round(float(rsi[i]), 2),
             })
             break
 
         # Hidden bearish: current high < prev high, but RSI now > prev RSI
         if prices_high[i] < prices_high[prev_half_high_idx] and rsi[i] > rsi[prev_half_high_idx]:
             results.append({
-                "type": "hidden_bearish_divergence",
+                "type": "hidden_bearish_divergence", "bias": "bear",
                 "price": float(closes[i]),
                 "note": f"Price LH at {closes[i]:.5f} but RSI higher — downtrend continuation signal",
+                "ts_t1": _ts(prev_half_high_idx), "price_t1": round(float(prices_high[prev_half_high_idx]), 5),
+                "rsi_t1": round(float(rsi[prev_half_high_idx]), 2),
+                "ts_t2": _ts(i), "price_t2": round(float(prices_high[i]), 5),
+                "rsi_t2": round(float(rsi[i]), 2),
             })
             break
 
@@ -4697,7 +4852,7 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         for zone, label in [(top_r, "Resistance"), (top_s, "Support")]:
             if zone and abs(zone["price"] - current_price) / current_price * 100 <= 1.5:
                 instances = zone.get("instances", 1)
-                pts = 2 if instances >= 3 else 1
+                pts = 3 if instances >= 3 else 2
                 sr_score += pts
                 sr_reasons.append(f"{label}({instances}x,{pts}pt)")
 
@@ -4726,27 +4881,64 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
             fib_reasons = [r for r in fib_reasons if "Fib" in r]
             fib_reasons.insert(0, "★ GOLDEN POCKET")
 
+        # ── Golden Pocket approaching signal ──────────────────────────────────
+        # Fires when price is outside the GP zone but closing in on it.
+        # Weight: 0pt — this is a preparation signal only, never an entry trigger.
+        # Shown to Chev as [WATCH] so he can plan an entry before price arrives.
+        # Approach direction tells him which bias to expect (long vs short setup).
+        gp_approach_reasons = []
+        if not in_golden_pocket and fib50 and fib618:
+            _gp_lo = min(fib50, fib618)
+            _gp_hi = max(fib50, fib618)
+            if current_price > _gp_hi:
+                _gp_dist      = current_price - _gp_hi
+                _approach_dir = "approaching from above → expect long entry inside zone"
+            elif current_price < _gp_lo:
+                _gp_dist      = _gp_lo - current_price
+                _approach_dir = "approaching from below → expect short entry inside zone"
+            else:
+                _gp_dist = 0
+                _approach_dir = ""
+            if _gp_dist > 0:
+                try:
+                    _gp_atr = float(primary_df["ATR"].iloc[-1]) if "ATR" in primary_df.columns else None
+                    if _gp_atr and _gp_atr > 0:
+                        _gp_atr_dist = _gp_dist / _gp_atr
+                        _gp_pct      = _gp_dist / current_price * 100
+                        if _gp_atr_dist <= 1.5:
+                            gp_approach_reasons.append(
+                                f"GP zone [{_gp_lo:.5f}–{_gp_hi:.5f}] "
+                                f"{_gp_pct:.2f}% away ({_gp_atr_dist:.1f}× ATR) — {_approach_dir}"
+                            )
+                except Exception:
+                    pass
+
         # ── RSI divergence (regular + hidden) ────────────────────────────────
         reg_divs    = _ca_detect_rsi_divergence(primary_df) + _ca_detect_rsi_divergence_forming(primary_df)
         hidden_divs = _detect_hidden_divergence(primary_df)
         all_divs    = reg_divs + hidden_divs
+        for d in all_divs:
+            d["tf"] = primary_tf
         div_score   = 0
         div_reasons = []
         for d in all_divs[:2]:
-            if abs(d["price"] - current_price) / current_price * 100 <= 2.0:
-                pts = 1.5 if "hidden" in d["type"] else 1
-                div_score += pts
-                div_reasons.append(d["type"])
+            d_price = d.get("price", d.get("price_t2", current_price))
+            if abs(d_price - current_price) / current_price * 100 <= 2.0:
+                pts = _div_strength_score(d, primary_tf, confirmed=True)
+                if pts >= 0.3:
+                    div_score += pts
+                    div_reasons.append(f"{d['type']} (str={pts}pt)")
 
         # ── Forming divergence (live — price new extreme + RSI diverging) ──
-        forming_divs  = _detect_forming_divergence(primary_df)
+        _div_lb = {'15m': 10, '30m': 12, '1h': 16, '4h': 24}.get(primary_tf, 10)
+        forming_divs  = _detect_forming_divergence(primary_df, lb=_div_lb)
         form_score    = 0
         form_reasons  = []
         if forming_divs:
             best = forming_divs[0]
-            form_score = best["score"]
+            form_score = _div_strength_score(best, primary_tf, confirmed=False)
             form_reasons.append(
-                f"FORMING {best['type']} (RSI gap {best['rsi_gap']}pt, {best['age_bars']} bars)"
+                f"FORMING {best['type']} (RSI gap {best['rsi_gap']}pt, {best['age_bars']} bars, str={form_score}pt)"
             )
 
         # ── RSI overbought / oversold + 50-cross ─────────────────────────────
@@ -4761,16 +4953,16 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                 rsi_level_reasons.append(f"RSI OVERSOLD ({rsi_current:.1f}, 0.5pt)")
             cross = _rsi_50_cross(primary_df)
             if cross:
-                rsi_level_score += 0.5
+                # RSI 50-cross is context for Chev, not a scored confluence — too noisy alone
                 rsi_level_reasons.append(
-                    f"RSI crossed 50 {cross['direction']} {cross['bars_ago']} bar(s) ago (0.5pt)"
+                    f"RSI crossed 50 {cross['direction']} {cross['bars_ago']} bar(s) ago"
                 )
 
         # ── EMA 13/21/55 proximity and crossover ─────────────────────────────
         ema_score   = 0
         ema_reasons = []
         last = primary_df.iloc[-1]
-        for ema_col, ema_weight, ema_label in [("EMA55", 2.0, "EMA55"), ("EMA21", 1.5, "EMA21"), ("EMA13", 1.0, "EMA13")]:
+        for ema_col, ema_weight, ema_label in [("EMA55", 2.0, "EMA55"), ("EMA21", 1.0, "EMA21"), ("EMA13", 0.5, "EMA13")]:
             val = last.get(ema_col)
             if val is None or pd.isna(val):
                 continue
@@ -4785,13 +4977,18 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
             ema_score += 1
             ema_reasons.append(f"EMA crossover {crossover['type']} {crossover['candles_ago']}c ago")
 
+        # Cap total EMA contribution — prevents stacking all three EMAs + crossover from
+        # dominating the score when price simply happens to be near a cluster of MAs.
+        if ema_score > 3.0:
+            ema_score = 3.0
+
         # ── Liquidity sweep ───────────────────────────────────────────────────
         sweeps     = _detect_liquidity_sweep(primary_df)
         sweep_score   = 0
         sweep_reasons = []
         for s in sweeps[:1]:
-            sweep_score += 2
-            sweep_reasons.append(f"Sweep:{s['type']}")
+            sweep_score += 3
+            sweep_reasons.append(f"Sweep:{s['type']} (3pt)")
 
         # ── Chart pattern engine ──────────────────────────────────────────────
         # Geometry-based scoring: breakout + volume = highest conviction.
@@ -4854,13 +5051,11 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                 bb_score += _bb_base
                 bb_reasons.append(f"BB lower BURST (%B={_pct_b:.2f}, {_overshoot}% of band outside, {_bb_base}pt)")
             elif _pct_b >= 0.85:
-                _pts = round(_bb_base * 0.5, 1)
-                bb_score += _pts
-                bb_reasons.append(f"BB near upper (%B={_pct_b:.2f}, top 15% of band, {_pts}pt)")
+                bb_score += 0.5
+                bb_reasons.append(f"BB near upper (%B={_pct_b:.2f}, top 15% of band, 0.5pt)")
             elif _pct_b <= 0.15:
-                _pts = round(_bb_base * 0.5, 1)
-                bb_score += _pts
-                bb_reasons.append(f"BB near lower (%B={_pct_b:.2f}, bottom 15% of band, {_pts}pt)")
+                bb_score += 0.5
+                bb_reasons.append(f"BB near lower (%B={_pct_b:.2f}, bottom 15% of band, 0.5pt)")
 
             if 0.48 <= _pct_b <= 0.52:
                 bb_score += 1.0
@@ -4880,6 +5075,14 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         vp_score   = 0
         vp_reasons = []
         try:
+            # ATR-calibrated proximity — 25% of ATR as % of price so BTC/ADA/EUR/USD all
+            # trigger at a structurally meaningful distance rather than a fixed percentage.
+            # Floor 0.10% (tight forex pairs), ceiling 0.80% (highly volatile alts).
+            _vp_atr_raw = float(primary_df["ATR"].iloc[-1]) if "ATR" in primary_df.columns else None
+            _vp_prox = (
+                max(0.10, min(0.80, 0.25 * (_vp_atr_raw / current_price * 100)))
+                if _vp_atr_raw and current_price > 0 else 0.40
+            )
             for _vp_tf, _vp_base in [("4h", 3), ("1h", 2)]:
                 _dfv = tf_data.get(_vp_tf)
                 if _dfv is None or len(_dfv) < 30:
@@ -4894,9 +5097,9 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                                          ("VAH", _vp["vah"], _vp_base - 1),
                                          ("VAL", _vp["val"], _vp_base - 1)]:
                     _dist = abs(current_price - _px) / current_price * 100
-                    if _dist <= 0.25:
+                    if _dist <= _vp_prox:
                         vp_score += _pts
-                        vp_reasons.append(f"VP {_lbl} {_vp_tf} ({_dist:.2f}% away, {_pts}pt)")
+                        vp_reasons.append(f"VP {_lbl} {_vp_tf} ({_dist:.2f}% away ≤{_vp_prox:.2f}% prox, {_pts}pt)")
         except Exception:
             pass
 
@@ -4911,8 +5114,36 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         at_level = dist_from_level is not None and dist_from_level <= 0.3
 
         # ── Aggregate score ───────────────────────────────────────────────────
-        total_score = sr_score + fib_score + div_score + ema_score + sweep_score + pattern_score + form_score + rsi_level_score + bb_score + vp_score
-        all_reasons = sr_reasons + fib_reasons + div_reasons + ema_reasons + sweep_reasons + pattern_reasons + form_reasons + rsi_level_reasons + bb_reasons + vp_reasons
+        # Forming divergence is excluded from total_score intentionally.
+        # It is a preparation signal (RSI is diverging but the second price pivot has not
+        # closed yet).  Letting it count toward the entry threshold would cause Chev to
+        # fire on unconfirmed setups.  It remains visible in all_reasons so Chev knows
+        # it is developing — he just cannot use it as the primary entry trigger.
+        total_score = sr_score + fib_score + div_score + ema_score + sweep_score + pattern_score + rsi_level_score + bb_score + vp_score
+
+        # GP × SR deadly combo bonus — multiplicative, not additive.
+        # When price is at a confirmed multi-TF SR zone AND inside the golden pocket,
+        # the combination is structurally more powerful than the sum of its parts:
+        # big money defends a proven level AND the fib math says it should reverse here.
+        # The bonus grows with the rest of the setup quality rather than being a flat add.
+        _gp_sr_combo = in_golden_pocket and sr_score >= 3
+        if _gp_sr_combo:
+            total_score = round(total_score * 1.15, 2)
+
+        # TF quality multiplier — higher TF signals require fewer confluences because
+        # each one is structurally more significant.  Lower TF signals need more confluences
+        # to overcome the discount.  Same thresholds apply; the multiplier shifts effective difficulty.
+        _tf_mult = {"4h": 1.2, "1h": 1.0, "30m": 0.9, "15m": 0.8}.get(primary_tf, 1.0)
+        total_score = round(total_score * _tf_mult, 2)
+        # Prefix forming reasons so Chev can see them but knows their status
+        _form_reasons_labelled  = [f"[WATCH — not yet confirmed] {r}" for r in form_reasons]
+        _gp_approach_labelled   = [f"[WATCH — approaching GP] {r}" for r in gp_approach_reasons]
+        _combo_reasons          = ["★★ GP×SR DEADLY COMBO (×1.15 quality bonus applied)"] if _gp_sr_combo else []
+        all_reasons = (_combo_reasons
+                       + sr_reasons + fib_reasons + div_reasons + ema_reasons
+                       + sweep_reasons + pattern_reasons + rsi_level_reasons
+                       + bb_reasons + vp_reasons
+                       + _form_reasons_labelled + _gp_approach_labelled)
 
         sma50 = float(primary_df["close"].rolling(50).mean().iloc[-1]) if len(primary_df) >= 50 else None
         trend = "uptrend" if (sma50 and current_price > sma50) else ("downtrend" if sma50 else "unknown")
@@ -4979,6 +5210,13 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
             "regime_4h":       regime_4h,
             "regime_primary":  regime_primary,
             "survey":          _survey,
+            "atr":             float(primary_df["ATR"].iloc[-1]) if "ATR" in primary_df.columns else None,
+            "sr_score":        sr_score,
+            "vp_score":        vp_score,
+            "tf_mult":         _tf_mult,
+            "approaching_gp":  len(gp_approach_reasons) > 0,
+            "gp_zone":         (min(fib50, fib618), max(fib50, fib618)) if fib50 and fib618 else None,
+            "gp_sr_combo":     _gp_sr_combo,
         }
 
     except Exception as e:
@@ -5085,7 +5323,7 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
     session_label, session_quality = _session_grade(asset_type)
     grade, suggested_risk          = _setup_grade(result, asset_type)
     heat_context                   = _portfolio_heat_context(asset_type, symbol)
-    playbook_text = _load_playbook()
+    playbook_text = _load_playbook(asset_type)
     journal = _load_journal()
     same_type = [e for e in journal if e.get("asset_type") == asset_type][-3:]
     last_two  = [e for e in journal if e not in same_type][-2:]
@@ -5267,9 +5505,12 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"A small buffer beyond that level is fine. Being stopped out by a wick that breaches the level is correct behaviour — the level was broken, the trade is wrong. "
         f"What is NOT acceptable is placing the SL just a few ticks from entry before any real structural level — that is not a stop loss, it is a guaranteed loss. "
         f"For forex, minimum 20 pips. For stocks, minimum 0.5%. The distance should come from where the level actually is, not be invented.\n"
-        f"  5. Where is the FIRST meaningful structural level in the direction of the trade? "
-        f"This is your initial target — a guide, not a ceiling. You will manage the trade actively after entry. "
-        f"Do not force a fixed RR. Set the target where structure suggests the market may react next.\n\n"
+        f"  5. Where is the FIRST meaningful structural level in the direction of the trade?\n"
+        f"     Look at the touch count next to each SR level in the brief above — e.g. '1.0490(4x)' means 4 confirmed touches.\n"
+        f"     STRONG level: 4+ touches — price is very likely to react here. Use as TP.\n"
+        f"     WEAK level: 1–2 touches — price may blow straight through. If a stronger level exists just beyond it AND gives at least 2:1 R:R, target that instead.\n"
+        f"     If you choose a weak TP level because the stronger one is too far, say so in REASONING and explain what momentum signal would tell you to move TP up.\n"
+        f"     The goal is not the nearest level — it is the nearest WALL that price is likely to respect.\n\n"
         f"IMPORTANT — you have TWO ways to enter a trade, not one:\n\n"
         f"  A) Price is already AT or very close to the confluence zone (within ~0.3%):\n"
         f"     → Enter at market. Use trade_type=scalp/day/swing as appropriate.\n\n"
@@ -5401,7 +5642,7 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
             )})
             reply = _call_chev(messages, timeout=timeout)
 
-    return reply
+    return reply, messages
 
 def _clean_numeric(value):
     """Pulls the first real number out of a field, so '5x' or '162.35 (5x leverage)' still parses correctly."""
@@ -5709,7 +5950,7 @@ def ask_chev_manage_trade(trade, current_price):
             f"  CLOSE                                                  ← exit now at market (only if clear reversal)\n\n"
             f"SL constraint: must be {'below current price ' + str(round(current_price,5)) if is_long else 'above current price ' + str(round(current_price,5))}."
         )
-    playbook_text = _load_playbook()
+    playbook_text = _load_playbook(asset_type)
     content = (f"=== YOUR TRADING PLAYBOOK ===\n{playbook_text}\n\n" if playbook_text else "") + msg
     return _call_chev([{"role": "user", "content": content}], timeout=60)
 
@@ -6219,24 +6460,27 @@ def check_and_update_jane_trades():
 
             # Save to Jane's journal for shared learning
             jane_journal = _load_jane_journal()
-            jane_journal.append({
-                "ts":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "symbol":    trade["symbol"],
-                "direction": trade["direction"],
-                "entry":     trade["entry"],
-                "sl":        trade["sl"],
-                "tp":        trade["tp"],
-                "exit_price": exit_price,
-                "pnl":       exit_pnl,
-                "outcome":   outcome,
-                "tags":      trade.get("tags", ""),
-                "chev_verdict": chev_v,
-            })
-            try:
-                with open(JANE_JOURNAL_PATH, "w", encoding="utf-8") as f:
-                    json.dump(jane_journal, f, indent=2)
-            except Exception as ex:
-                print(f"[Jane journal] Save failed: {ex}")
+            if _is_duplicate_journal_entry(trade["symbol"], trade["entry"], trade["sl"], trade["tp"], jane_journal):
+                print(f"[Jane journal] Duplicate detected for {trade['symbol']} — skipping write.")
+            else:
+                jane_journal.append({
+                    "ts":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "symbol":    trade["symbol"],
+                    "direction": trade["direction"],
+                    "entry":     trade["entry"],
+                    "sl":        trade["sl"],
+                    "tp":        trade["tp"],
+                    "exit_price": exit_price,
+                    "pnl":       exit_pnl,
+                    "outcome":   outcome,
+                    "tags":      trade.get("tags", ""),
+                    "chev_verdict": chev_v,
+                })
+                try:
+                    with open(JANE_JOURNAL_PATH, "w", encoding="utf-8") as f:
+                        json.dump(jane_journal, f, indent=2)
+                except Exception as ex:
+                    print(f"[Jane journal] Save failed: {ex}")
 
             global _combined_closed_count
             _combined_closed_count += 1
@@ -6554,17 +6798,101 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
 
 print("Dexter is watching the markets...")
 
-worksheet, dashboard_ws, jane_worksheet = connect_to_sheet()
+# Start web server and price feed immediately — website should never wait on Google Sheets
 threading.Thread(target=run_web_server, daemon=True).start()
 threading.Thread(target=_fast_price_update, daemon=True).start()
 threading.Thread(target=_push_ngrok_url, daemon=True).start()
 print(f"[{datetime.now()}] Web terminal running at http://localhost:8080")
-open_trades     = load_state_from_sheet(worksheet)
-_cached_balance = get_balance(dashboard_ws)
+
+# Connect to Google Sheets with retry — timeout added to client so it fails fast
+worksheet = dashboard_ws = jane_worksheet = None
+for _attempt in range(3):
+    try:
+        worksheet, dashboard_ws, jane_worksheet = connect_to_sheet()
+        print(f"[{datetime.now()}] Google Sheets connected.")
+        break
+    except Exception as _e:
+        print(f"[{datetime.now()}] Google Sheets connect failed (attempt {_attempt+1}/3): {_e}")
+        if _attempt < 2:
+            import time as _time; _time.sleep(5)
+if worksheet is None:
+    print(f"[{datetime.now()}] WARNING: Running without Google Sheets — trade logging disabled.")
+
+open_trades     = load_state_from_sheet(worksheet) if worksheet else []
+_cached_balance = get_balance(dashboard_ws) if dashboard_ws else _cached_balance
 print(f"[{datetime.now()}] Loaded {len(open_trades)} open trade(s) from sheet. Balance: ${_cached_balance:.2f}")
 _load_jane_balance()
-jane_trades = load_jane_trades_from_sheet()
+jane_trades = load_jane_trades_from_sheet() if jane_worksheet else []
 print(f"[{datetime.now()}] Jane: {len(jane_trades)} open trade(s). Balance: ${jane_balance:.2f}")
+
+# ── Startup SL audit ─────────────────────────────────────────────────────────
+# When Dexter restarts after being down, price may have already blown through a
+# trade's SL while we were offline.  The normal loop wouldn't catch it until the
+# next price tick, which could be minutes away.  Close those trades immediately.
+def _startup_sl_audit():
+    global open_trades, _cached_balance
+    survived = []
+    for trade in list(open_trades):
+        if trade.get("status") != "OPEN":
+            survived.append(trade)
+            continue
+        try:
+            price = get_current_price(trade["symbol"], trade["asset_type"])
+        except Exception:
+            price = None
+        if price is None:
+            survived.append(trade)
+            continue
+
+        is_long  = trade["direction"] == "long"
+        hit_sl   = (price <= trade["sl"]) if is_long else (price >= trade["sl"])
+        if not hit_sl:
+            survived.append(trade)
+            continue
+
+        # SL was breached while offline — close at current price
+        exit_price = price
+        exit_move  = ((exit_price - trade["entry"]) / trade["entry"]) if is_long \
+                     else ((trade["entry"] - exit_price) / trade["entry"])
+        exit_pnl   = round(trade["position_size_usd"] * exit_move, 2)
+        outcome    = "WIN" if exit_pnl >= 0 else "LOSS"
+
+        balance          = get_balance(dashboard_ws)
+        margin_to_return = trade.get("margin_reserved", 0)
+        new_balance      = round(balance + margin_to_return + exit_pnl, 2)
+        set_balance(dashboard_ws, new_balance)
+        _cached_balance  = new_balance
+
+        try:
+            worksheet.update(
+                values=[[exit_price, exit_pnl, outcome, exit_pnl]],
+                range_name=f"K{trade['row']}:N{trade['row']}"
+            )
+        except Exception as e:
+            print(f"[Startup SL audit] Sheet update failed for {trade['symbol']}: {e}")
+
+        print(f"[Startup SL audit] {trade['symbol']} SL already breached (price={price} vs SL={trade['sl']}) "
+              f"— closing at {exit_price} | PnL ${exit_pnl:+.2f} | Balance ${balance:.2f} -> ${new_balance:.2f}")
+        send_telegram_alert(
+            f"⚠️ STARTUP AUDIT: {trade['symbol']} SL breached while offline — closed at {exit_price} | PnL ${exit_pnl:+.2f}"
+        )
+
+        trade_copy             = dict(trade)
+        trade_copy["close_type"] = "SL_HIT"
+        threading.Thread(
+            target=_do_postmortem,
+            args=(trade_copy, outcome, exit_pnl, exit_price),
+            daemon=True
+        ).start()
+        # Don't add to survived — trade is done
+
+    n_closed    = len(open_trades) - len(survived)
+    open_trades = survived
+    if n_closed:
+        print(f"[Startup SL audit] Closed {n_closed} trade(s) that breached SL while Dexter was offline.")
+
+_startup_sl_audit()
+# ─────────────────────────────────────────────────────────────────────────────
 
 last_forex_scan        = 0
 last_stock_scan        = 0
@@ -6707,7 +7035,7 @@ while True:
             gp_str   = " | ★ GOLDEN POCKET" if result.get("in_golden_pocket") else ""
             print(f"[{datetime.now()}] {result['symbol']}/{primary_tf}: score={result['count']:.1f} {result['reasons']}{dist_str}{gp_str} — escalating to Chev")
             balance = get_balance(dashboard_ws)
-            chev_response = ask_chev_to_judge(result, balance, dashboard_ws, timeout=360)
+            chev_response, _chev_messages = ask_chev_to_judge(result, balance, dashboard_ws, timeout=360)
 
             parsed = parse_chev_reply(chev_response)
 
@@ -6726,6 +7054,149 @@ while True:
                         "GATE_REJECT", _gate_reason, (result.get("regime_4h") or {}).get("regime")
                     )
                     parsed["trade"] = None
+
+            # Structural prerequisite — must have at least one confirmed structural anchor
+            # (SR zone or VP level) before any trade is allowed through.
+            # Prevents trades that accumulate score purely from EMAs, BB, and RSI
+            # without price being at a real supply/demand level where big money sits.
+            if parsed and parsed.get("trade"):
+                _sr_pts = result.get("sr_score", 0)
+                _vp_pts = result.get("vp_score", 0)
+                if _sr_pts < 2 and _vp_pts < 2:
+                    _struct_msg = (f"No structural anchor — sr_score={_sr_pts:.1f}, vp_score={_vp_pts:.1f}. "
+                                   f"Need sr≥2 (confirmed multi-TF SR level) OR vp≥2 (VP POC/VAH/VAL within 0.4%). "
+                                   f"Price is mid-range, not at a real level.")
+                    print(f"[{datetime.now()}] STRUCT GATE — {result['symbol']} rejected: {_struct_msg}")
+                    _log_chev_decision(
+                        result["symbol"], primary_tf, _dexter_score, result["reasons"],
+                        "STRUCT_REJECT", _struct_msg, (result.get("regime_4h") or {}).get("regime")
+                    )
+                    parsed["trade"] = None
+
+            # MTF Confidence Tax — counter-trend trades must clear a higher bar.
+            # Counter-trend = Chev wants long but 4H is TRENDING_DOWN, or short vs TRENDING_UP.
+            # They must score ≥ 1.5× the normal threshold AND have at least one confirmed
+            # divergence (not just a forming div).  In a RANGING regime no tax is applied —
+            # both directions are equally valid.
+            if parsed and parsed.get("trade"):
+                _proposed_dir = (parsed["trade"].get("direction") or "").lower()
+                _regime_str   = (_r4h.get("regime") or "UNKNOWN")
+                _is_counter   = (
+                    (_regime_str == "TRENDING_UP"   and _proposed_dir == "short") or
+                    (_regime_str == "TRENDING_DOWN" and _proposed_dir == "long")
+                )
+                if _is_counter:
+                    _ct_threshold = _threshold * 1.5
+                    _has_conf_div = len(result.get("divergences", [])) > 0
+                    _ct_fails     = []
+                    if _dexter_score < _ct_threshold:
+                        _ct_fails.append(f"score {_dexter_score:.1f} < counter-trend bar {_ct_threshold:.1f}")
+                    if not _has_conf_div:
+                        _ct_fails.append("no confirmed divergence (forming div is not enough counter-trend)")
+                    if _ct_fails:
+                        _ct_msg = (f"Counter-trend {_proposed_dir} vs 4H {_regime_str}: "
+                                   + " | ".join(_ct_fails))
+                        print(f"[{datetime.now()}] MTF TAX — {result['symbol']} rejected: {_ct_msg}")
+                        _log_chev_decision(
+                            result["symbol"], primary_tf, _dexter_score, result["reasons"],
+                            "MTF_TAX_REJECT", _ct_msg, _regime_str
+                        )
+                        parsed["trade"] = None
+                    else:
+                        print(f"[{datetime.now()}] MTF TAX — {result['symbol']} counter-trend "
+                              f"{_proposed_dir} vs 4H {_regime_str}: APPROVED "
+                              f"(score={_dexter_score:.1f} ≥ {_ct_threshold:.1f}, confirmed div present)")
+
+            # ── Trade geometry validation: ATR SL · R:R minimum · position size cap ──
+            # Runs after the score gate and MTF tax — only if a trade survived both.
+            # Issues are batched into a single retry message using the full conversation
+            # context (_chev_messages) so Chev can correct without losing his reasoning.
+            if parsed and parsed.get("trade"):
+                _asset_type      = item["type"]
+                _grade, _max_risk_pct = _setup_grade(result, _asset_type)
+                _td              = parsed["trade"]
+                _atr             = result.get("atr") or 0
+                _entry           = float(_td.get("entry")            or 0)
+                _sl              = float(_td.get("sl")               or 0)
+                _tp              = float(_td.get("tp")               or 0)
+                _pos_size        = float(_td.get("position_size_usd") or 0)
+                _lev             = float(_td.get("leverage")         or 1) or 1
+                _direction       = (_td.get("direction")             or "").lower()
+                _is_long         = _direction == "long"
+                _ttype           = (_td.get("trade_type") or result.get("trade_type") or "day").lower()
+                _sl_dist         = abs(_entry - _sl) if _entry and _sl else 0
+                _geo_issues      = []
+
+                # ATR SL check — minimum SL: 1.0×ATR scalp | 1.5×ATR day | 2.5×ATR swing
+                if _atr > 0 and _sl_dist > 0 and _entry > 0:
+                    _atr_mult = {"scalp": 1.0, "day": 1.5, "swing": 2.5}.get(_ttype, 1.5)
+                    _atr_min  = _atr * _atr_mult
+                    _sl_ratio = _sl_dist / _atr_min
+                    if _sl_ratio < 0.5:   # red zone — hard reject + retry
+                        _geo_issues.append(
+                            f"SL GEOMETRY REJECT — Your SL ({_sl}) is only {_sl_ratio:.0%} of the minimum "
+                            f"for a {_ttype} trade ({_atr_mult}× ATR = {_atr_min:.5f}). "
+                            f"A single wick will stop you out before the setup plays. "
+                            f"Widen SL to at least {_atr_min:.5f} from entry, change trade_type, or SKIP."
+                        )
+                    elif _sl_ratio < 1.0:  # yellow zone — warn only
+                        print(f"[{datetime.now()}] SL WARN — {result['symbol']}: "
+                              f"SL dist {_sl_dist:.5f} is {_sl_ratio:.0%} of ATR minimum "
+                              f"({_atr_mult}× ATR = {_atr_min:.5f}) for {_ttype}. May get wicked out.")
+
+                # R:R minimum check — 2.0 for all grades (grade affects position size, not the R:R bar)
+                _min_rr = 2.0
+                if _sl_dist > 0 and _tp != 0 and _entry > 0:
+                    _rr = abs(_tp - _entry) / _sl_dist
+                    if _rr < _min_rr:
+                        _needed_tp_dist = _sl_dist * _min_rr
+                        _suggested_tp   = (_entry + _needed_tp_dist) if _is_long else (_entry - _needed_tp_dist)
+                        _geo_issues.append(
+                            f"R:R TOO LOW — Your TP gives {_rr:.2f}:1 but minimum for a {_grade}-grade "
+                            f"setup is {_min_rr:.1f}:1. At {_min_rr:.1f}:1 your TP needs to reach "
+                            f"at least {_suggested_tp:.5f}. "
+                            f"Check the SR levels in the brief — is there a structural level near "
+                            f"{_suggested_tp:.5f} or beyond? If yes, use it. "
+                            f"If no structural level gives {_min_rr:.1f}:1, this setup is not worth taking — SKIP."
+                        )
+
+                # Position size cap — max margin = balance × grade_max_risk_pct
+                if _pos_size > 0:
+                    _implied_margin = _pos_size / _lev
+                    _max_margin     = balance * (_max_risk_pct / 100)
+                    if _implied_margin > _max_margin * 1.25:   # 25% tolerance
+                        _safe_size = round(_max_margin * _lev, 2)
+                        _geo_issues.append(
+                            f"POSITION SIZE TOO LARGE — position_size_usd={_pos_size} implies "
+                            f"${_implied_margin:.2f} margin at {_lev:.0f}x leverage, "
+                            f"but the cap for a {_grade}-grade setup is ${_max_margin:.2f} "
+                            f"({_max_risk_pct}% of ${balance:.2f} balance). "
+                            f"Revise position_size_usd to {_safe_size} or lower."
+                        )
+
+                if _geo_issues:
+                    _correction = (
+                        "\n\n".join(_geo_issues)
+                        + "\n\nPlease correct the issue(s) above and re-state the full TRADE: line "
+                          "(keeping POST: format), or reply SKIP: <reason> if the setup no longer qualifies."
+                    )
+                    print(f"[{datetime.now()}] GEOMETRY REVIEW — {result['symbol']}: "
+                          f"{len(_geo_issues)} issue(s). Sending revision request to Chev.")
+                    _chev_messages.append({"role": "assistant", "content": chev_response})
+                    _chev_messages.append({"role": "user",      "content": _correction})
+                    _revised_reply = _call_chev(_chev_messages, timeout=180)
+                    if _revised_reply:
+                        _revised_parsed = parse_chev_reply(_revised_reply)
+                        if _revised_parsed and _revised_parsed.get("post") is not None:
+                            chev_response = _revised_reply
+                            parsed        = _revised_parsed
+                            print(f"[{datetime.now()}] GEOMETRY REVIEW — {result['symbol']}: revision accepted.")
+                        else:
+                            print(f"[{datetime.now()}] GEOMETRY REVIEW — {result['symbol']}: "
+                                  "revision unparseable — keeping original response.")
+                    else:
+                        print(f"[{datetime.now()}] GEOMETRY REVIEW — {result['symbol']}: "
+                              "no reply to revision request — keeping original response.")
 
             if parsed is None:
                 _last_escalated[esc_key] = time.time() + skip_cool

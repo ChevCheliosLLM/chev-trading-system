@@ -7,6 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/twemoji@14.0.2/dist/twemoji.min.js" crossorigin="anonymous"></script>
+<link rel="manifest" href="/manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Chev">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
   :root {
     --bg:     #131722;
@@ -1342,10 +1346,14 @@ function updatePnlNumbers() {
 }
 
 // ─── Boot ──────────────────────────────────────────────────────
-fbTick();                           // immediate first load
-setInterval(fbTick,     5000);      // Firebase every 5s
-setInterval(cryptoTick,  500);      // Binance every 500ms
-setInterval(forexTick,  2000);      // FreeForexAPI every 2s
+fbTick();
+setInterval(fbTick,     5000);
+setInterval(cryptoTick,  500);
+setInterval(forexTick,  2000);
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
 </script>
 </body>
 </html>

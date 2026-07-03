@@ -1,6 +1,6 @@
 ================================================================================
 CHEV CHELIOS PROJECT — AI HANDOFF DOCUMENT
-Generated: 2026-06-30
+Generated: 2026-07-02  (updated from 2026-06-30)
 ================================================================================
 
 ## WHAT THIS PROJECT IS
@@ -11,30 +11,45 @@ A fully local, private AI trading terminal built for one user (Kev). Three parts
    Model: qwen3-vl:30b via Ollama. Personality: witty Londoner, Chelsea fan, Seinfeld
    references. Has chart analysis tools. Makes trade recommendations, NEVER executes.
 
-2. DEXTER — Python trading bot at C:\ChevTools\dexter.py (4700+ lines, runs 24/7)
+2. DEXTER — Python trading bot at C:\ChevTools\dexter.py (5000+ lines, runs 24/7)
    Scans watchlist for technical confluences, escalates to Chev via Open WebUI API,
    logs trades to Google Sheets, monitors/closes positions. Also hosts the web terminal
    as a Flask server on port 8080.
 
 3. WEB TERMINAL — C:\ChevTools\webapp\index.html
    Dark TradingView-style chart terminal. Live candles, watchlist, trade logs, Chev's
-   Corner (pending ideas), multi-conversation Chev chat panel, drawing tools.
+   Corner (On Radar ideas), multi-conversation Chev chat panel, drawing tools.
+
+4. MOBILE APP — C:\ChevMonitorApp\ (React Native / Expo SDK 57)
+   Android-first native app. Firebase real-time data. Tabs: Home, Trades, Jane, History.
+   NOT yet installed on device — EAS Build path chosen (Expo Go incompatible with SDK 57).
+   Alejandro (new collaborator) will help build this out.
 
 ================================================================================
 ## FILE LOCATIONS
 ================================================================================
 
 C:\ChevTools\dexter.py              — Main bot + Flask server (port 8080)
-C:\ChevTools\webapp\index.html      — Web terminal (single HTML file, ~3500 lines)
-C:\ChevTools\google_credentials.json — Google service account (must stay here)
+C:\ChevTools\engines.py             — Price mathematics (SR, Fib, RSI, pivots)
+C:\ChevTools\chart_drawer.py        — Open WebUI tool (copy-paste into tool editor)
+C:\ChevTools\telegram_listener.py   — Jane's Telegram signal listener
+C:\ChevTools\webapp\index.html      — Web terminal (single HTML file, ~7000+ lines)
+C:\ChevTools\webapp\monitor.html    — Live trade monitor (simpler, mobile-friendly)
+C:\ChevTools\webapp\chevlogo.png    — Main Chev logo (used as favicon + watermark)
+C:\ChevTools\webapp\manifest.json   — PWA manifest (Add to Home Screen)
+C:\ChevTools\webapp\sw.js           — PWA service worker
+C:\ChevTools\google_credentials.json — Google service account (NEVER commit to GitHub)
 C:\ChevTools\chev_journal.json      — Chev's trade history
 C:\ChevTools\chev_playbook.txt      — Auto-updated playbook from learning sessions
-C:\ChevTools\chart_drawer.py        — Open WebUI tool (2458 lines, copy-pasted into
-                                       Open WebUI's tool editor)
-C:\open-webui-dev\ChevTools\webapp\Confluence_Analyzer — Open WebUI tool (SR analysis)
+C:\ChevTools\jane_journal.json      — Jane's trade log
+C:\ChevTools\handoff.txt            — This file
+C:\ChevTools\ALEJANDRO_GUIDE.html   — Visual onboarding guide for Alejandro
+C:\ChevMonitorApp\                  — React Native mobile app (no node_modules in backup)
+C:\ChevBackUp\Backup_2026-07-02_16-30\ — Full backup of all source files
 
 Open WebUI runs at: http://localhost:3000
 Dexter/Flask runs at: http://localhost:8080
+Public tunnel: https://skiing-pouncing-uncivil.ngrok-free.dev → localhost:8080
 Model ID in Open WebUI: "chev-chelios"
 Open WebUI API key: sk-91bd167cca0142c983379ebe27b4e621
 
@@ -99,7 +114,7 @@ Tags and their scores:
 If Chev tags sr or sr_Xtf  → adds sr_level=<price> to TRADE: line
 If Chev tags fib or fib_Xtf → adds fib_high=<price>, fib_low=<price>
 If Chev tags vp             → adds vp_start=<YYYY-MM-DD>
-If Chev tags rsi or rsi_Xtf → adds rsi_div_t1=<date>, rsi_div_t2=<date>
+If Chev tags rsi or rsi_Xtf → pill click now triggers live Dexter scan (see below)
 If Chev tags ms or ms_Xtf  → no anchor needed, chart auto-overlays higher TF candles
 
 ================================================================================
@@ -130,10 +145,17 @@ Analysis buttons (all call Dexter's /api/analysis/* endpoints):
   VP   — Volume Profile: POC (orange hline), VAH + VAL (gold hlines)
   ATR  — shows floating toast: ATR value, avg, state, suggested SL distances
   Fib  — multi-TF golden pockets (15m=blue, 1h=gold, 4h=orange), overlap=white
-  RSI÷ — RSI divergence: type, bias, note shown in toast overlay
+  RSI÷ — RSI divergence: dropdown by TF (15m/30m/1h/4h), click TF to draw lines
+
+RSI DIV pill on trade card (On Radar): clicking the pill now calls showRSIDiv()
+which hits /api/analysis/rsi_div?tf=all and shows the TF dropdown, then draws
+divergence trendlines when a TF is selected. Previously it was wired to a dead path
+(conf.RSI_DIV_T1 fields that are never populated — don't try to use those).
 
 Other buttons: Bollinger Bands toggle, VWAP toggle, EMA toggle, S/R auto-draw,
                Magnet, Object Tree, Clear All
+
+Favicon: /chevlogo.png set as browser tab icon.
 
 ================================================================================
 ## DEXTER FLASK API ENDPOINTS
@@ -148,9 +170,63 @@ Other buttons: Bollinger Bands toggle, VWAP toggle, EMA toggle, S/R auto-draw,
 /api/analysis/vp             — Volume Profile (POC, VAH, VAL)
 /api/analysis/atr            — ATR + stop suggestion
 /api/analysis/fib_stack      — multi-TF Fibonacci golden pockets + overlaps
-/api/analysis/rsi_div        — RSI divergence detection
+/api/analysis/rsi_div        — RSI divergence detection (all TFs or single TF)
+/api/analysis/rsi_div?tf=all — returns {by_tf: {15m:[...], 30m:[...], 1h:[...], 4h:[...]}}
+                               each div has: ts_t1, price_t1, rsi_t1, ts_t2, price_t2,
+                               rsi_t2, type, bias, note
 
 Analysis endpoint parameters: ?symbol=SOLUSDT&tf=1h
+
+================================================================================
+## RSI DIVERGENCE — FULL ARCHITECTURE (important — many bugs fixed here)
+================================================================================
+
+TWO types of divergence Dexter detects:
+
+1. CONFIRMED DIVERGENCE — past, already happened
+   Functions: _ca_detect_rsi_divergence(df), detect_rsi_divergence(df),
+              _detect_hidden_divergence(df)
+   These find TWO confirmed swing pivots where price and RSI disagreed.
+   Output now includes: ts_t1, price_t1, rsi_t1, ts_t2, price_t2, rsi_t2, bias, tf
+   The website draws solid green/red trendlines connecting the two pivots.
+
+2. FORMING DIVERGENCE — live, predictive (IMPLEMENTED 2026-07-02)
+   Functions: _detect_forming_divergence(df)
+   Finds one CONFIRMED pivot + CURRENT mini-extreme as second point.
+   Output now includes: forming=True, ts_t1, price_t1, rsi_t1, ts_t2, price_t2, rsi_t2, bias
+   Displayed as dashed amber trendlines. Projection extends 4 bars ahead at same slope.
+   _calc_for_tf() returns confirmed + forming combined — website separates by forming flag.
+
+BUGS FIXED in this session (2026-07-02):
+  - _ca_detect_rsi_divergence: was returning {type, price, note} only — no anchor points.
+    Fixed to return ts_t1, price_t1, rsi_t1, ts_t2, price_t2, rsi_t2, bias.
+  - detect_rsi_divergence (older version): same fix applied.
+  - _detect_hidden_divergence: same fix applied.
+  - scan_pair_tf: now tags every div with d["tf"] = primary_tf.
+  - _drawRsiDivVisual (index.html): validation guard was killing the PRICE trendline
+    when chart RSI disagreed with Dexter RSI. Fixed: price trendline always draws,
+    RSI panel line draws only if chart RSI agrees.
+  - _applyIdeaPill (index.html): RSI pill click was calling _drawRsiDivergence(conf)
+    which immediately returns when conf.RSI_DIV_T1 is missing (always is).
+    Fixed: now calls showRSIDiv() which hits the API and shows TF dropdown.
+
+PREVIOUS DEAD APPROACHES (don't retry these):
+  - conf.RSI_DIV_T1 / conf.RSI_DIV_T2: fields in the TRADE: line that Chev was
+    supposed to fill with dates. Never worked — Chev fills dates not Unix timestamps,
+    and the matching logic failed. The whole RSI_DIV_T1/T2 path in _drawRsiDivergence()
+    is a dead end. The live scan via showRSIDiv() is the correct path.
+  - Trying to use the RSI validation guard to confirm direction: it's too aggressive,
+    fires on timing mismatches, kills drawings silently. Guard now only affects RSI
+    panel line, never the price trendline.
+
+NEXT: Forming divergence drawing
+  - Add ts_t1 (df.index[pi].timestamp()) and ts_t2 to _detect_forming_divergence output
+  - Draw as DASHED ORANGE/AMBER line (not solid) to distinguish from confirmed
+  - Extend 3-5 bars to the right as a projection
+  - Label "FORMING Bear 1H" vs "Bear 1H" for confirmed
+  - Auto-refresh on each Dexter poll (5 min)
+  - forming_divs already flows through scan_pair_tf output — just needs timestamp and
+    a drawing path in the website
 
 ================================================================================
 ## CHEV'S OPEN WEBUI TOOLS (chart_drawer.py)
@@ -207,9 +283,55 @@ Jane is a second paper trading account tracking Kev's human trades from the Jane
 of Google Sheets. Chev evaluates each Jane trade (APPROVED/CAUTION/REJECTED) and
 Dexter tracks advisory accuracy. Used for cross-analysis and learning sessions.
 
+Alejandro (new collaborator) manages Jane. Jane signals come via Telegram.
+telegram_listener.py listens for Jane's signals and logs them.
+
 _ask_chev_about_jane_trade() — Chev gets Jane's entry/SL/TP/tags and gives verdict.
-  Also told to call get_support_resistance() and get_atr_stop_suggestion() to verify
-  Jane's tags before deciding.
+
+================================================================================
+## MOBILE APP (ChevMonitorApp)
+================================================================================
+
+Location: C:\ChevMonitorApp\
+Tech: React Native + Expo SDK 57, React Navigation bottom tabs
+Data: Firebase Realtime DB (same as monitor.html)
+
+Tabs:
+  Home — Chev + Jane balance cards, quick stats, live watchlist strip
+  Trades — Open positions (TradeCard) + On Radar (PendingCard)
+  Jane — Jane's open and closed trades (gold theme)
+  History — All closed trades with SIP Hit badges, summary bar
+
+Key files:
+  App.js — root, fonts (Inter + ShareTechMono), NavigationContainer
+  src/theme.js — full design system (colors, fonts, spacing, radius)
+  src/services/firebase.js — Firebase + Binance polling, isSip(), calcPnl()
+  src/components/TradeCard.js — TradeCard, PendingCard, ClosedCard
+  src/components/TradeSheet.js — bottom sheet modal with force-close button
+  src/components/TugOfWar.js — price progress bar SL→TP
+  src/components/Skeleton.js — loading state
+
+Design tokens: bg=#0d0f1b, surface=#13152a, accent=#6c8cff, green=#089981,
+               red=#f23645, gold=#d4af37, text=#d1d4dc, muted=#787b86
+
+SIP badge: gold color, always shown when trade.sl > trade.entry (long) or
+           trade.sl < trade.entry (short). NEVER skip this.
+
+Status: Built but NOT on device yet.
+Problem: Expo Go on Play Store (latest) is incompatible with SDK 57.
+Solution: EAS Build to generate real APK.
+  - nvm use 20 (Node 20 required — Expo breaks on Node 24)
+  - eas login (user has expo.dev account — Google OAuth, set password to use CLI)
+  - eas build --platform android --profile preview → produces downloadable APK
+  - User had logged in successfully as of 2026-07-02
+  - Build was submitted but status unknown (terminal was lost)
+  - Check: expo.dev → chevcheliosllm's team → Builds tab
+
+Node version issue:
+  - Node 24 breaks Expo config plugins (SyntaxError: Unexpected token ':')
+  - Use nvm-windows to manage: nvm use 20
+  - expo-haptics was in app.json plugins array — caused PluginError. Removed it.
+  - expo-haptics JS import still works (only the native plugin config was removed)
 
 ================================================================================
 ## CRITICAL RULES (never violate)
@@ -225,52 +347,264 @@ _ask_chev_about_jane_trade() — Chev gets Jane's entry/SL/TP/tags and gives ver
 - Dexter is the execution layer. Chev recommends only. Never give Chev order-placement
   tools (no Alpaca/Binance trade execution tools in Open WebUI).
 - Always use localhost:8080 (Dexter's Flask). Never 5500 (VS Code Live Server).
-- google_credentials.json must stay at C:\ChevTools\ (not in subfolders).
+- google_credentials.json must stay at C:\ChevTools\ (not in subfolders, never GitHub).
+- Do NOT commit google_credentials.json to GitHub under any circumstances.
+  Share only via WhatsApp/email directly.
 
 ================================================================================
-## WHAT WAS JUST BUILT (2026-06-30 session)
+## WHAT WAS BUILT — SESSION 2026-06-30
 ================================================================================
 
 1. 5 new Flask endpoints in dexter.py (analysis suite):
-   - /api/analysis/sr  — multi-TF SR with Tier A validation
-   - /api/analysis/vp  — real volume profile
-   - /api/analysis/atr — ATR + volatility state + SL suggestions
-   - /api/analysis/fib_stack — golden pockets across 15m/1h/4h + overlap detection
-   - /api/analysis/rsi_div — regular/hidden bull/bear RSI divergence
+   - /api/analysis/sr, /api/analysis/vp, /api/analysis/atr,
+     /api/analysis/fib_stack, /api/analysis/rsi_div
 
 2. Webapp toolbar additions (index.html):
    - VP, ATR, Fib, RSI÷ buttons wired to above endpoints
    - S/R button upgraded to use /api/analysis/sr (JS fallback if offline)
-   - #analysisToast div for non-drawing results (ATR, RSI div)
-   - _pushZonesToDrawings(tag, zones, tfSec) shared helper
 
 3. Dexter prompt updates:
-   - ask_chev_to_judge(): added TOOLS AVAILABLE block with exact function names
+   - ask_chev_to_judge(): added TOOLS AVAILABLE block
    - _ask_chev_about_jane_trade(): lighter tools block for Jane advisory
 
 ================================================================================
-## WHAT TO WORK ON NEXT
+## WHAT WAS BUILT — SESSION 2026-07-02
 ================================================================================
 
-Priority order:
-1. Test analysis endpoints — restart Dexter, click VP/ATR/Fib/SR buttons in webapp,
-   verify drawings appear on chart for a live symbol (e.g. SOLUSDT on 1h).
-2. Analysis overlay test — click a trade in Trade Logs that has Fib/SR anchors,
-   verify the overlay draws correctly on the chart.
-3. Monitor vs main page trade sync — verify Firebase push thread fires correctly
-   so both the main page and monitor page show the same open trades.
-4. Performance Review prompt — Chev reads Google Sheet win-rate stats by confluence
-   combo and writes updated playbook.
+1. ALEJANDRO_GUIDE.html (C:\ChevTools\ALEJANDRO_GUIDE.html)
+   Full visual HTML onboarding guide for Alejandro — system flow diagram, module
+   cards, confluence scoring with weight bars, annotated Dexter report, rules of
+   engagement, Alejandro's task list. Dark theme, self-contained.
+   NotebookLM prompt also provided so Alejandro can query the codebase by voice/chat.
+
+2. RSI Divergence drawing — full root cause diagnosis and fix (see RSI section above)
+   Four changes in dexter.py, two changes in index.html. Confirmed working path:
+   pill click → showRSIDiv() → /api/analysis/rsi_div?tf=all → TF dropdown → draw.
+
+3. FORMING DIVERGENCE — fully implemented (dexter.py + index.html)
+   Dexter now returns both confirmed + forming divs from /api/analysis/rsi_div.
+   _detect_forming_divergence() updated to output ts_t1/price_t1/rsi_t1/ts_t2/
+   price_t2/rsi_t2 + forming:True flag for all 4 result types.
+   _calc_for_tf() returns confirmed + forming combined list.
+   Website: _drawRsiDivVisual() now handles forming flag:
+     - Confirmed = solid green/red line
+     - Forming = dashed amber line + faint 4-bar projection at same slope
+   _buildRsiDropdown(): 🟢/🔴 for confirmed, 🟡/🟠 for forming in TF dropdown.
+   REQUIRES Dexter restart to take effect.
+
+4. PWA additions (monitor.html + webapp/)
+   manifest.json and sw.js added. monitor.html gets "Add to Home Screen" on Android.
+   This is NOT a real app — just a homescreen shortcut. Different from ChevMonitorApp.
+
+5. ChevMonitorApp — full React Native app built (see Mobile App section above)
+
+6. Favicon added to index.html (<link rel="icon" href="/chevlogo.png">)
+
+7. Backup created: C:\ChevBackUp\Backup_2026-07-02_16-30\ (54 files, 3.66 MB)
+   Organized into 7 emoji-labeled folders. No git connections.
+
+================================================================================
+## BUGS FIXED — SESSION 2026-07-02 (continued, same date)
+================================================================================
+
+RSI÷ button had two post-launch bugs reported after first test. Both fixed in index.html:
+
+BUG 1 — RSI÷ pill glitch (had to toggle twice to see dropdown)
+  Root cause: rsiCard.active is set to true when a TF is selected (_rsiTfSelected).
+  When switching to a new trade card, selectIdea() called _setRsiActive(false) but
+  never stripped rsiCard.active. Next call to showRSIDiv() saw active=true and
+  immediately toggled OFF (treating it as a close), returning before fetching.
+  On the SECOND click, active was now false, so it worked.
+  Fix: _clearRsiDivOverlay() now also removes rsiCard.active and closes the dropdown.
+  selectIdea() now calls _clearRsiDivOverlay() before loading the new trade.
+  _applyIdeaPill() RSI off-branch now calls _clearRsiDivOverlay() (was filtering wrong
+  flag: !d._rsiDiv camelCase vs actual flag _rsi_div snake_case).
+
+BUG 2 — RSI trendlines floating, not connected to price/RSI curve after refresh
+  Root cause A: saveDrawings() was saving _rsi_div trendlines to localStorage + Firebase.
+  On refresh those stale lines reloaded (from a different chart zoom/state) and
+  appeared as floating ghosts that don't align with the current chart.
+  Fix: saveDrawings() now filters out _rsi_div drawings before saving. RSI div lines
+  are ephemeral — regenerated each scan, never persisted.
+  Root cause B: After TF switch in _rsiTfSelected(), overlay was drawn after only
+  2 animation frames (~33ms), before the RSI chart had time to repopulate with
+  new candle data, causing misaligned Y positions on the RSI panel.
+  Fix: Replaced 2-frame RAF wait with setTimeout(250ms) to let RSI chart settle.
+
+ALSO FIXED: Page-load restore path
+  On refresh with RSI pill saved as ON, the restore code called _drawRsiDivergence()
+  (dead path — conf.RSI_DIV_T1 always empty). Changed to call showRSIDiv() instead,
+  triggering a fresh Dexter scan on load.
+
+  _applyIdeaPill() RSI branch simplified: removed the conf.RSI_DIV_T1 fallback check
+  entirely. Always calls showRSIDiv() on turn-on. The dead fallback path is gone.
+
+================================================================================
+## BUGS FIXED — SESSION 2026-07-02 (late evening continuation)
+================================================================================
+
+** THIS SECTION DOCUMENTS WHAT WAS TRIED AND FAILED — READ BEFORE TOUCHING THESE AREAS **
+
+--- DEXTER STARTUP HANG ---
+
+BUG: Dexter froze at "Dexter is watching the markets..." on startup.
+  Root cause: connect_to_sheet() called synchronously before Flask starts. Google Sheets
+  API was hanging indefinitely (no timeout in gspread). Website unreachable until Sheets
+  connected or failed.
+  Fix: Moved Flask thread start BEFORE the Google Sheets connection block. Sheets now
+  connects with a 3-attempt retry loop (5s sleep between attempts). If all 3 fail,
+  Dexter logs a WARNING and continues without Sheets — trade logging disabled but
+  website fully accessible.
+
+WHAT DIDN'T WORK — client.session.timeout:
+  Tried adding `client.session.timeout = 20` inside connect_to_sheet() to enforce a
+  20-second timeout on the gspread HTTP session. This caused:
+    AttributeError: 'Client' object has no attribute 'session'
+  The gspread version in this project does NOT have a .session attribute on the Client
+  object. NEVER add that line. Remove it if you ever see it there.
+  Solution was the retry loop + Flask-first approach, not a timeout.
+
+--- api_pending CRASH ---
+
+BUG: "Dexter unreachable" on the website after Dexter started without Sheets.
+  Root cause: /api/pending called worksheet.get_all_values() without checking if
+  worksheet was None (happens when Sheets connection fails). Caused an AttributeError
+  that crashed the Flask request.
+  Fix: Added guard at top of api_pending:
+    if worksheet is None: return jsonify([])
+  Applied same guard to any other endpoint that uses worksheet directly.
+
+--- FIREBASE SSE RACE CONDITION (most complex bug of the session) ---
+
+BUG: RSI div trendlines not appearing when clicking a TF in the RSI÷ dropdown.
+  Also: dropdown disappeared after clicking a TF.
+
+  ROOT CAUSE (critical — understand this before touching RSI div code):
+  Every call to saveDrawings() does a Firebase PUT. This triggers the SSE stream
+  (_subscribeDrawings listener). The SSE listener replaced drawings[] with whatever
+  Firebase returned — a version filtered to exclude _rsi_div. So:
+
+    Click TF → _clearRsiDivOverlay() → saveDrawings() → Firebase PUT → SSE fires →
+    drawings[] replaced (no _rsi_div) → _drawRsiDivVisual() runs → pushes _rsi_div
+    lines to drawings[] → ANOTHER SSE fires (or first one arrives late) → drawings[]
+    replaced again → _rsi_div lines wiped → chart redraws with no lines.
+
+  The window between "lines pushed" and "SSE overwrites them" was so short the lines
+  never appeared visually.
+
+FIXES APPLIED (all in index.html):
+
+  Fix 1 — Remove saveDrawings() from _clearRsiDivOverlay():
+    The old code called saveDrawings() at the end of _clearRsiDivOverlay(). Since
+    _rsi_div drawings are never persisted anyway, there's nothing new to save.
+    Calling saveDrawings() here was the trigger that fired the SSE race.
+    RULE: _clearRsiDivOverlay() must NEVER call saveDrawings().
+
+  Fix 2 — Remove saveDrawings() from _drawRsiDivVisual():
+    Old version called saveDrawings() after pushing _rsi_div lines. Same problem.
+    RULE: _drawRsiDivVisual() must NEVER call saveDrawings().
+
+  Fix 3 — SSE listener preserves live _rsi_div drawings on Firebase update:
+    In _subscribeDrawings, when an SSE message arrives, the listener now does:
+      const live_rsi = drawings.filter(d => d._rsi_div);
+      drawings = Array.isArray(msg.data) ? msg.data : [];
+      if (live_rsi.length) drawings.push(...live_rsi);
+    This means even if an SSE fires while RSI div lines are on screen, they survive.
+
+  Fix 4 — _syncDrawings (one-time Firebase pull on symbol switch) same treatment:
+    Same preserve logic added: pull Firebase data → keep any live _rsi_div from current
+    drawings[] → merge. Without this, switching symbols wiped live RSI div lines too.
+
+  Fix 5 — Dropdown stays open after TF click:
+    _clearRsiDivOverlay() closes the dropdown (classList.remove('open')).
+    _rsiTfSelected() re-opens it after drawing (classList.add('open')).
+    Also adds CSS .rsi-tf-row.selected { background: #1a2035; border-left: 2px solid #f0a500; }
+    to highlight which TF is currently active.
+
+--- DRAWING TOOLS INVISIBLE WHEN RSI PANEL OPEN ---
+
+BUG: Drawing tools (trendlines, hlines, etc.) appeared invisible after placing them
+  while the RSI panel was open. Drawings saved fine but weren't visible until refresh.
+  Root cause: Two LightweightCharts instances (main chart + RSI chart) both attach
+  document-level mousemove handlers. RSI chart's handlers stole the mousemove events,
+  preventing chartWrap.mousemove → markDirty() from firing after a drawing was committed.
+  Without markDirty(), the canvas never repainted with the new drawing.
+  Fix: Added explicit markDirty() call to every drawing commit path in the
+  chartWrap click handler (hline, channel, triangle, and the generic trendline/fib
+  commit path). Now repaint happens regardless of whether mousemove fires.
+
+--- WHAT STILL NEEDS TESTING ---
+
+After all the above fixes:
+- Hard-refresh browser (Ctrl+Shift+R) to pick up latest index.html
+- Click On Radar trade → RSI÷ pill → dropdown appears
+- Click a TF (e.g. 1h) → dropdown stays open with amber highlight on selected TF
+  → trendlines appear on price chart + RSI panel
+- Place a drawing (e.g. trendline) while RSI panel is open → should be visible immediately
+- Switch to different trade card → RSI overlay clears cleanly, pill resets
+If trendlines still don't appear: open F12 → Console and look for errors from
+_drawRsiDivVisual, timeToX returning null, or uncaught exceptions.
+
+--- EAS BUILD (Android APK) ---
+
+BUG: EAS Build failed with 3 errors:
+  1. "splash" key in wrong location (was at expo.splash, must be inside expo-splash-screen plugin array)
+  2. react-native-worklets peer dep missing
+  3. @expo/vector-icons missing
+
+Fix: Updated app.json to move splash config into the expo-splash-screen plugin.
+  Ran: npx expo install expo-splash-screen react-native-worklets @expo/vector-icons
+  Then resubmitted: eas build --platform android --profile preview
+
+Node version issue (ALWAYS check this first for Expo errors):
+  Node 24 breaks Expo config plugins with SyntaxError: Unexpected token ':'
+  ALWAYS run `nvm use 20` before any expo or eas command.
+  expo-haptics in app.json plugins array caused PluginError — removed from plugins
+  (JS import still works, only the native config entry was removed).
+
+================================================================================
+## WHAT TO WORK ON NEXT (priority order as of 2026-07-02)
+================================================================================
+
+1. TEST FORMING DIVERGENCE (coded, awaiting test)
+   Restart Dexter (C:\ChevTools\ → python dexter.py), hard-refresh browser.
+   Click On Radar trade → click RSI÷ pill → dropdown should appear first click.
+   TF rows show 🟡/🟠 for forming, 🟢/🔴 for confirmed.
+   Clicking a TF should draw: dashed amber line (forming) + solid green/red (confirmed)
+   + faint projection 4 bars ahead.
+   If RSI panel lines are still floating after 250ms wait, try increasing the timeout
+   in _rsiTfSelected: setTimeout(r, 400).
+
+2. MOBILE APP APK
+   Check expo.dev build status. If failed, rerun: cd C:\ChevMonitorApp && nvm use 20
+   && eas build --platform android --profile preview
+   Once APK downloads, install on phone and test.
+
+3. MTF direction gate in Dexter
+   Already has timeframe-weighted scoring. Missing: hard direction agreement gate.
+   ~20-30 lines to add. Dexter should reject trades where 4H trend opposes entry.
+
+4. Jane signals on dashboard (index.html)
+   Show Jane's open positions alongside Chev's in the main web terminal.
+
+5. Chev/Jane disagreement flag
+   When Chev says LONG but Jane is SHORT on same pair, flag it visually.
+
+6. RSI Divergence trendlines on chart for Chev-drawn lines
+   When Chev identifies a divergence via chart_drawer.py detect_rsi_divergence(),
+   the resulting pivot coordinates should auto-draw on the web terminal chart.
 
 ================================================================================
 ## INFRASTRUCTURE
 ================================================================================
 
-OS: Windows 10
-Python venv: C:\ChevTools (requests, pandas, numpy, gspread, google-auth, flask)
+OS: Windows 10 Home
+Python venv: C:\ChevTools\.venv
 GPU: RTX 3090 (Ollama uses it for qwen3-vl:30b)
-Ollama: OLLAMA_KEEP_ALIVE=0 (unloads when idle, GPU sits at 0%)
-VS Code workspace root: C:\open-webui-dev\ChevTools\webapp
+Ollama: OLLAMA_KEEP_ALIVE=0 (unloads when idle)
+VS Code workspace: C:\open-webui-dev\ChevTools\webapp
+Node: managed via nvm-windows. Use Node 20 for Expo work (v20.20.2).
+  nvm use 20 before any expo/eas commands.
 
 ================================================================================
 END OF HANDOFF

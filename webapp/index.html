@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <title>Chev Terminal</title>
+<link rel="icon" type="image/png" href="/chevlogo.png" />
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/twemoji@14.0.2/dist/twemoji.min.js" crossorigin="anonymous"></script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap">
@@ -424,6 +425,7 @@
   }
   .rsi-tf-row:hover:not(.disabled) { background: #1c2030; }
   .rsi-tf-row.disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+  .rsi-tf-row.selected { background: #1a2035; border-left: 2px solid #f0a500; }
   .rsi-tf-label { font-weight: 700; color: #d4af37; min-width: 28px; }
   .rsi-tf-type { color: #9598a1; }
   .rsi-tf-na { color: #4a4e68; font-style: italic; }
@@ -2448,6 +2450,10 @@
       try { _rsiCrossX = chart.timeScale().timeToCoordinate(param.time); } catch(e) { _rsiCrossX = null; }
       markDirty();
     });
+    // Ensure overlay canvas repaints when RSI chart pans (it syncs from main chart,
+    // so this fires on every main-chart pan even if RSI chart's event handlers
+    // compete with the main chart's handlers).
+    rsiChart.timeScale().subscribeVisibleLogicalRangeChange(markDirty);
   }
 
   /* Force both charts to have identical right-axis widths so x-coordinates align pixel-perfect */
@@ -3626,9 +3632,11 @@
       else _refreshTradeOverlayLines();
     } else if (base === 'rsi' || base === 'rs' || base === 'dv') {
       _setRsiActive(isOn);
-      const _divConf = _activeTrade ? (_activeTrade.conf || {}) : {};
-      if (isOn) _drawRsiDivergence(_divConf);
-      else { rsiOverlayLines = []; overlayDrawings = overlayDrawings.filter(d => !d._rsiDiv); markDirty(); }
+      if (isOn) {
+        showRSIDiv();
+      } else {
+        _clearRsiDivOverlay();
+      }
     } else if (base === 'ema' || base === 'em') {
       _setEmasActive(isOn);
     } else if (base === 'bb') {
@@ -3645,7 +3653,8 @@
   async function selectIdea(idea) {
     activeIdeaRow = idea.row;
     document.querySelectorAll('.ideaCard').forEach(c => c.classList.toggle('activeIdea', c.dataset.row === String(idea.row)));
-    // Naked chart — clear all active indicators before loading
+    // Naked chart — clear all active indicators and any RSI div overlay before loading
+    _clearRsiDivOverlay();
     if (_indicatorState.rsi)  _setRsiActive(false);
     if (_indicatorState.bb)   _setBBActive(false);
     if (_indicatorState.vwap) _setVwapActive(false);
@@ -3708,7 +3717,7 @@
       const b = tag.split('_')[0].toLowerCase();
       return on && (b === 'rsi' || b === 'rs' || b === 'dv');
     });
-    if (_rsiDivOn && _activeTrade) _drawRsiDivergence(_activeTrade.conf || {});
+    if (_rsiDivOn) showRSIDiv();
     const _vpOn = Object.entries(_savedPills).some(([tag, on]) => {
       const b = tag.split('_')[0].toLowerCase();
       return on && (b === 'vp' || b === 'volprofile' || tag.toLowerCase() === 'volume profile');
@@ -4092,12 +4101,24 @@
   const RSI_TOOLS = ['trendline', 'hline', 'ray'];
 
   function rsiTimeToX(t) {
-    if (!rsiChart) return null;
-    return rsiChart.timeScale().timeToCoordinate(t);
+    if (t == null || !rsiChart) return null;
+    const x = rsiChart.timeScale().timeToCoordinate(t);
+    if (x != null) return x;
+    return timeToX(t); // fallback: use main chart extrapolation when RSI time scale can't resolve
   }
   function rsiValToY(v) {
     if (!rsiLine) return null;
-    return rsiLine.priceToCoordinate(v);
+    const y = rsiLine.priceToCoordinate(v);
+    if (y != null) return y;
+    // RSI value is outside the auto-scaled visible range.
+    // Extrapolate linearly: read the RSI value at top (y=0) and bottom (y=_rdh)
+    // of the canvas, then map v proportionally.
+    try {
+      const topRsi = rsiLine.coordinateToPrice(0);
+      const botRsi = rsiLine.coordinateToPrice(_rdh);
+      if (topRsi == null || botRsi == null || topRsi === botRsi) return null;
+      return _rdh * (v - topRsi) / (botRsi - topRsi);
+    } catch(e) { return null; }
   }
   function rsiYToVal(y) {
     if (!rsiLine) return null;
@@ -4114,6 +4135,29 @@
     let best = null, bestD = Infinity;
     for (const d of rsiData) { const dd = Math.abs(d.time - t); if (dd < bestD) { bestD = dd; best = d.value; } }
     return best;
+  }
+  // Find the RSI extreme (min for bull, max for bear) within ±halfWindow bars of timestamp t.
+  // This ensures RSI panel anchors land on actual RSI lows (bull) or RSI highs (bear),
+  // matching the side of the price chart being compared.
+  function _getRsiExtremeNear(t, bias, halfWindow = 7) {
+    if (!currentCandles.length) return { ts: t, val: null };
+    const rsiData = calcRSI(currentCandles);
+    if (!rsiData.length) return { ts: t, val: null };
+    let centerIdx = -1, minDist = Infinity;
+    for (let i = 0; i < rsiData.length; i++) {
+      const d = Math.abs(rsiData[i].time - t);
+      if (d < minDist) { minDist = d; centerIdx = i; }
+    }
+    if (centerIdx < 0) return { ts: t, val: null };
+    const lo = Math.max(0, centerIdx - halfWindow);
+    const hi = Math.min(rsiData.length - 1, centerIdx + halfWindow);
+    let bestIdx = centerIdx, bestVal = rsiData[centerIdx].value;
+    for (let i = lo; i <= hi; i++) {
+      const v = rsiData[i].value;
+      if (bias === 'bull' && v < bestVal) { bestVal = v; bestIdx = i; }
+      if (bias === 'bear' && v > bestVal) { bestVal = v; bestIdx = i; }
+    }
+    return { ts: rsiData[bestIdx].time, val: bestVal };
   }
   function _getPriceAt(t, dir) {
     let bestC = null, bestD = Infinity;
@@ -4178,8 +4222,9 @@
       rdctx.save();
       rdctx.strokeStyle = d.color || '#f0e027';
       rdctx.lineWidth = d.lineWidth || 1.5;
-      rdctx.setLineDash([]);
+      rdctx.setLineDash(d.dashed ? [6, 4] : []);
       rdctx.beginPath(); rdctx.moveTo(sx, sy); rdctx.lineTo(ex, ey); rdctx.stroke();
+      rdctx.setLineDash([]);
       if (dots) {
         rdctx.fillStyle = d.color || '#f0e027';
         for (const [px, py] of dots) {
@@ -4265,7 +4310,11 @@
     localStorage.setItem('chevRsiDrawings_' + sym, JSON.stringify(rsiDrawings));
   }
   function loadRsiDrawings(sym) {
-    try { return JSON.parse(localStorage.getItem('chevRsiDrawings_' + (sym || currentSymbol)) || '[]'); } catch(e) { return []; }
+    try {
+      const raw = JSON.parse(localStorage.getItem('chevRsiDrawings_' + (sym || currentSymbol)) || '[]');
+      // Drop any drawings with null timestamps — they crash timeToCoordinate
+      return raw.filter(d => d.type === 'hline' || (d.time1 != null && d.time2 != null));
+    } catch(e) { return []; }
   }
 
   /* RSI panel — tool drawing via shared activeTool */
@@ -4274,7 +4323,7 @@
     const r = document.getElementById('rsiPanelWrap').getBoundingClientRect();
     const x = e.clientX - r.left, y = e.clientY - r.top;
     const t = rsiXToTime(x), v = rsiYToVal(y);
-    if (v == null) return;
+    if (t == null || v == null) return;
     const col = TOOL_COLORS[activeTool] || '#9598a1';
     if (activeTool === 'hline') {
       rsiDrawings.push({ type: 'hline', value: v, color: col, lineWidth: 1.5, visible: true });
@@ -4904,7 +4953,12 @@
   async function _clearRsiDivOverlay() {
     for (let i = drawings.length-1; i >= 0; i--) { if (drawings[i]._rsi_div) drawings.splice(i,1); }
     rsiOverlayLines = rsiOverlayLines.filter(l => !l._rsi_div);
-    saveDrawings(); redrawAll(); rsiRedrawAll(); updateObjTree();
+    document.getElementById('rsiCard').classList.remove('active');
+    document.getElementById('rsiTfDropdown').classList.remove('open');
+    // Do NOT call saveDrawings() — _rsi_div entries are never stored, so there's
+    // nothing new to save. A saveDrawings() here would fire the Firebase SSE stream
+    // which then replaces drawings[] and wipes any _rsi_div lines we draw next.
+    redrawAll(); rsiRedrawAll(); updateObjTree();
   }
 
   function _divLabel(type) {
@@ -4919,63 +4973,101 @@
 
   function _drawRsiDivVisual(dv, tf) {
     if (!dv.ts_t1 || !dv.ts_t2) return;
-    const col = dv.bias === 'bull' ? '#089981' : '#f23645';
-    const r1 = _getRsiValAt(dv.ts_t1);
-    const r2 = _getRsiValAt(dv.ts_t2);
-    // Validate RSI direction against the chart's own RSI — skip if they contradict
-    if (r1 !== null && r2 !== null) {
-      const t = (dv.type || '').toLowerCase();
-      const hiddenBear = t.includes('hidden') && t.includes('bear');
-      const regBear    = t.includes('bear') && !t.includes('hidden');
-      const hiddenBull = t.includes('hidden') && t.includes('bull');
-      const regBull    = t.includes('bull') && !t.includes('hidden');
-      if ((hiddenBear && r2 <= r1) ||
-          (regBear    && r2 >= r1) ||
-          (hiddenBull && r2 >= r1) ||
-          (regBull    && r2 <= r1)) return;
-    }
+    const isForming = !!dv.forming;
+    const col = isForming ? '#f0a500' : (dv.bias === 'bull' ? '#089981' : '#f23645');
+    const label = `${isForming ? '~ ' : ''}${_divLabel(dv.type)} ${tf}`;
+
+    // Price trendline — always draws, dashed + amber for forming
     drawings.push({type:'trendline', _rsi_div:true,
       time1:dv.ts_t1, price1:dv.price_t1,
       time2:dv.ts_t2, price2:dv.price_t2,
-      color:col, lineWidth:1.5, style:'solid', visible:true,
-      text:`${_divLabel(dv.type)} ${tf}`, fontSize:9, labelPos:'top-left'});
-    if (r1 !== null && r2 !== null) {
-      rsiOverlayLines.push({_rsi_div:true,
-        time1:dv.ts_t1, value1:r1,
-        time2:dv.ts_t2, value2:r2,
+      color:col, lineWidth:isForming ? 1.2 : 1.5, dashed:isForming, visible:true,
+      text:label, fontSize:9, labelPos:'top-left'});
+
+    // Forming only: faint projection extending 4 bars forward on the same slope
+    if (isForming && dv.ts_t2 > dv.ts_t1) {
+      const TF_SECS = {'5m':300,'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400};
+      const barSecs = TF_SECS[tf] || 3600;
+      const slope   = (dv.price_t2 - dv.price_t1) / (dv.ts_t2 - dv.ts_t1);
+      const ts_proj = dv.ts_t2 + barSecs * 4;
+      drawings.push({type:'trendline', _rsi_div:true,
+        time1:dv.ts_t2, price1:dv.price_t2,
+        time2:ts_proj,  price2:dv.price_t2 + slope * barSecs * 4,
+        color:col + '55', lineWidth:0.8, dashed:true, visible:true});
+    }
+
+    // RSI panel — snap to nearest RSI extreme in the correct direction (±7 bars).
+    // Bull div compares price LOWS → RSI anchors must also land on RSI LOWS.
+    // Bear div compares price HIGHS → RSI anchors must also land on RSI HIGHS.
+    const e1 = _getRsiExtremeNear(dv.ts_t1, dv.bias);
+    const e2 = _getRsiExtremeNear(dv.ts_t2, dv.bias);
+    if (e1.val !== null && e2.val !== null) {
+      rsiOverlayLines.push({_rsi_div:true, dashed:isForming,
+        time1:e1.ts, value1:e1.val,
+        time2:e2.ts, value2:e2.val,
         color:col});
     }
-    saveDrawings(); redrawAll(); rsiRedrawAll(); updateObjTree();
   }
 
   async function _rsiTfSelected(tf, divs) {
-    await _clearRsiDivOverlay();
-    // Ensure RSI panel is visible
-    if (!_indicatorState.rsi) document.getElementById('indRsiBtn').click();
-    // Switch chart to selected TF
-    currentTf = tf;
-    document.querySelectorAll('[data-tf]').forEach(b => b.classList.toggle('active', b.dataset.tf === tf));
-    await loadChart(currentSymbol, currentTf, currentType);
-    // Wait two frames: first for loadChart's RAF time-scale sync, second for rsiChart to settle
-    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-    divs.forEach(dv => _drawRsiDivVisual(dv, tf));
-    document.getElementById('rsiDivBtn').textContent = `RSI÷ ${tf}`;
-    document.getElementById('rsiCard').classList.add('active');
-    document.getElementById('rsiTfDropdown').classList.remove('open');
+    const dropdown = document.getElementById('rsiTfDropdown');
+    // Clear the old _rsi_div lines WITHOUT closing the dropdown
+    for (let i = drawings.length-1; i >= 0; i--) { if (drawings[i]._rsi_div) drawings.splice(i,1); }
+    rsiOverlayLines = rsiOverlayLines.filter(l => !l._rsi_div);
+    // Highlight the selected row immediately so user gets feedback
+    dropdown.querySelectorAll('.rsi-tf-row').forEach(r => r.classList.toggle('selected', r.dataset.rsiTf === tf));
+    try {
+      if (!_indicatorState.rsi) document.getElementById('indRsiBtn').click();
+      currentTf = tf;
+      document.querySelectorAll('[data-tf]').forEach(b => b.classList.toggle('active', b.dataset.tf === tf));
+      await loadChart(currentSymbol, currentTf, currentType);
+      // 500ms: let the RSI chart finish populating + fitContent animation settle
+      await new Promise(r => setTimeout(r, 500));
+      // Ensure RSI canvas dimensions are current before drawing
+      syncRsiCanvasSize(); _syncRsiAxisWidth();
+      // If a forming div shares ts_t1 with a confirmed div, trim it to start from
+      // the confirmed div's ts_t2 so they chain rather than overlap.
+      const confirmedT2 = {};
+      divs.filter(d => !d.forming).forEach(d => { confirmedT2[d.ts_t1] = d; });
+      const divsToRender = divs.map(dv => {
+        if (!dv.forming) return dv;
+        const conf = confirmedT2[dv.ts_t1];
+        if (!conf) return dv;
+        // Trim: start forming at the confirmed div's t2 anchor
+        return { ...dv, ts_t1: conf.ts_t2, price_t1: conf.price_t2 };
+      });
+      divsToRender.forEach(dv => _drawRsiDivVisual(dv, tf));
+      // Single redraw after all lines are pushed
+      redrawAll(); rsiRedrawAll(); updateObjTree();
+      // Schedule another redraw one frame later in case chart time scale was still settling
+      markDirty();
+      document.getElementById('rsiDivBtn').textContent = `RSI÷ ${tf}`;
+      document.getElementById('rsiCard').classList.add('active');
+    } catch(e) {
+      console.error('[RSI÷]', e);
+    } finally {
+      // Guarantee the dropdown stays open regardless of success or failure
+      dropdown.classList.add('open');
+    }
   }
 
   function _buildRsiDropdown(byTf) {
     _rsiDivData = byTf;
     const el = document.getElementById('rsiTfDropdown');
     const TFS = ['15m','30m','1h','4h'];
-    const BIAS_LABEL = {bull:'🟢', bear:'🔴'};
+    const CONFIRMED_ICON = {bull:'🟢', bear:'🔴'};
+    const FORMING_ICON   = {bull:'🟡', bear:'🟠'};
     let html = '';
     TFS.forEach(tf => {
-      const divs = byTf[tf] || [];
+      const divs      = byTf[tf] || [];
+      const confirmed = divs.filter(d => !d.forming);
+      const forming   = divs.filter(d =>  d.forming);
       if (!divs.length) {
         html += `<div class="rsi-tf-row disabled"><span class="rsi-tf-label">${tf}</span><span class="rsi-tf-na">N/A</span></div>`;
       } else {
-        const summary = divs.map(d => `${BIAS_LABEL[d.bias]||''} ${_divLabel(d.type)}`).join(', ');
+        const cStr = confirmed.map(d => `${CONFIRMED_ICON[d.bias]||''} ${_divLabel(d.type)}`).join(', ');
+        const fStr = forming.map(d => `${FORMING_ICON[d.bias]||'🟡'} ~${_divLabel(d.type)}`).join(', ');
+        const summary = [cStr, fStr].filter(Boolean).join(' · ');
         html += `<div class="rsi-tf-row" data-rsi-tf="${tf}"><span class="rsi-tf-label">${tf}</span><span class="rsi-tf-type">${summary}</span></div>`;
       }
     });
@@ -5076,7 +5168,11 @@
   document.addEventListener('click', e => {
     if (!e.target.closest('#fibCard') && !e.target.closest('#fibTfDropdown'))
       document.getElementById('fibTfDropdown').classList.remove('open');
-    if (!e.target.closest('#rsiCard') && !e.target.closest('#rsiTfDropdown'))
+    // Only auto-close the RSI÷ dropdown when RSI overlay is NOT active.
+    // When active (trade idea open, lines on chart), the user dismisses it
+    // by clicking the RSI÷ button again — chart clicks should not close it.
+    const rsiActive = document.getElementById('rsiCard').classList.contains('active');
+    if (!rsiActive && !e.target.closest('#rsiCard') && !e.target.closest('#rsiTfDropdown'))
       document.getElementById('rsiTfDropdown').classList.remove('open');
   });
 
@@ -5299,7 +5395,7 @@
   }
   function saveDrawings(sym) {
     sym = sym || currentSymbol;
-    const payload = JSON.stringify(drawings);
+    const payload = JSON.stringify(drawings.filter(d => !d._rsi_div));
     localStorage.setItem('chevDrawings_' + sym, payload);
     fetch(_drawFbUrl(sym), { method:'PUT', body:payload, headers:{'Content-Type':'application/json'} }).catch(()=>{});
   }
@@ -5310,9 +5406,11 @@
       if (!r.ok) return;
       const d = await r.json();
       if (!Array.isArray(d)) return;
+      const live_rsi = drawings.filter(x => x._rsi_div);
       drawings = d;
+      if (live_rsi.length) drawings.push(...live_rsi);
       localStorage.setItem('chevDrawings_' + sym, JSON.stringify(d));
-      updateObjTree();
+      updateObjTree(); markDirty();
     } catch(e) {}
   }
   // Real-time SSE listener — friend's drawings appear on your canvas instantly
@@ -5325,9 +5423,11 @@
         try {
           const msg = JSON.parse(ev.data);
           if (msg.path === '/' && msg.data !== undefined) {
+            const live_rsi = drawings.filter(d => d._rsi_div);
             drawings = Array.isArray(msg.data) ? msg.data : [];
-            localStorage.setItem('chevDrawings_' + sym, JSON.stringify(drawings));
-            updateObjTree();
+            if (live_rsi.length) drawings.push(...live_rsi);
+            localStorage.setItem('chevDrawings_' + sym, JSON.stringify(drawings.filter(d => !d._rsi_div)));
+            updateObjTree(); markDirty();
           }
         } catch(e) {}
       });
@@ -5826,8 +5926,9 @@
     else if (d.type==='trendline') {
       const x1=timeToX(d.time1),y1=priceToY(d.price1),x2=timeToX(d.time2),y2=priceToY(d.price2);
       if (x1==null||y1==null||x2==null||y2==null){ctx.restore();return;}
-      ctx.strokeStyle=col; ctx.lineWidth=lw; ctx.setLineDash([]);
+      ctx.strokeStyle=col; ctx.lineWidth=lw; ctx.setLineDash(d.dashed ? [6,4] : []);
       ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      ctx.setLineDash([]);
       [[x1,y1,1],[x2,y2,2]].forEach(([ax,ay,ep])=>{
         const r=highlight?(hoverEP===ep?6:4):3;
         ctx.fillStyle=highlight&&hoverEP===ep?'#fff':col;
@@ -6047,9 +6148,14 @@
   let _rafDirty = true;
   function markDirty() { _rafDirty = true; }
   chart.timeScale().subscribeVisibleTimeRangeChange(markDirty);
+  chart.timeScale().subscribeVisibleLogicalRangeChange(markDirty);
   chart.subscribeCrosshairMove(markDirty);
   (function raf(){
-    if (_rafDirty) { redrawAll(); rsiRedrawAll(); _rafDirty = false; }
+    if (_rafDirty) {
+      try { redrawAll(); } catch(e) { console.error('[redrawAll]', e); }
+      try { rsiRedrawAll(); } catch(e) { console.error('[rsiRedrawAll]', e); }
+      _rafDirty = false;
+    }
     requestAnimationFrame(raf);
   })();
 
@@ -6346,12 +6452,12 @@
     const mk=(t,extra)=>({type:t,...extra,color:TOOL_COLORS[t]||TOOL_COLORS.hline,lineWidth:1.5,visible:true});
     if (activeTool==='hline') {
       pushUndo();drawings.push(mk('hline',{price:anc.price}));
-      saveDrawings();previewShape=null;updateObjTree();return;
+      saveDrawings();previewShape=null;updateObjTree();markDirty();return;
     }
     if (activeTool==='channel'&&channelStep===1) {
       const off=anc.price-basePriceAt(channelBase,anc.time);
       drawings.push(mk('channel',{...channelBase,priceOffset:off}));
-      saveDrawings();previewShape=null;channelBase=null;channelStep=0;clickCount=0;firstClickPos=null;updateObjTree();return;
+      saveDrawings();previewShape=null;channelBase=null;channelStep=0;clickCount=0;firstClickPos=null;updateObjTree();markDirty();return;
     }
     if (clickCount===0){firstClickPos=anc;clickCount=1;return;}
     if (activeTool==='triangle') {
@@ -6359,7 +6465,7 @@
       // clickCount===2 → commit triangle
       pushUndo();
       drawings.push({type:'triangle',time1:firstClickPos.time,price1:firstClickPos.price,time2:triangleP2.time,price2:triangleP2.price,time3:anc.time,price3:anc.price,color:TOOL_COLORS.triangle,lineWidth:1.5,visible:true});
-      saveDrawings();previewShape=null;clickCount=0;firstClickPos=null;triangleP2=null;updateObjTree();return;
+      saveDrawings();previewShape=null;clickCount=0;firstClickPos=null;triangleP2=null;updateObjTree();markDirty();return;
     }
     if (activeTool==='channel') {
       channelBase={time1:firstClickPos.time,price1:firstClickPos.price,time2:anc.time,price2:anc.price};
@@ -6369,7 +6475,7 @@
     if (activeTool==='vp'&&currentCandles.length) t2=Math.min(t2,currentCandles[currentCandles.length-1].time);
     const base={time1:firstClickPos.time,price1:firstClickPos.price,time2:t2,price2:p2};
     pushUndo();drawings.push({type:activeTool,...base,color:TOOL_COLORS[activeTool],lineWidth:1.5,visible:true});
-    saveDrawings();previewShape=null;clickCount=0;firstClickPos=null;updateObjTree();
+    saveDrawings();previewShape=null;clickCount=0;firstClickPos=null;updateObjTree();markDirty();
   });
 
   /* ---- Drag / move ---- */

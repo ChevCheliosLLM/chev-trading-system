@@ -1,0 +1,19 @@
+{
+  "name": "Chev Monitor",
+  "short_name": "Chev",
+  "description": "Live trade monitor — Chev & Jane positions, PnL, and radar setups",
+  "start_url": "/monitor.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#131722",
+  "theme_color": "#131722",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/chevlogo.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+CHEV TRADING PLAYBOOK — STOCKS
+Last updated: 2026-07-03 (seeded — will be rewritten by learning sessions)
+========================================
+
+### CONFLUENCE CONDITIONS
+- Stocks require daily/weekly SR levels as the primary anchor — intraday levels alone are too noisy. A weekly resistance level tested 3+ times is a wall; an intraday 15m level is context only.
+- Chart patterns (head and shoulders, wedge, ascending channel) are more reliable in stocks than in forex or crypto because institutional algos respond to classic patterns. Breakout + volume confirmation is the highest conviction signal.
+- Earnings and macro news override all technical setups. Never hold through earnings unless the setup is specifically an earnings play with defined risk. Check the economic calendar before entering.
+
+### MARKET STRUCTURE RULES
+- Stocks gap at open. A gap fill setup (price opens above/below previous close and reverts) is a reliable intraday pattern — the gap is a vacuum with no traded price, so price often fills it.
+- Pre-market and after-hours moves define the opening range. The first 15-30 minutes after open establish direction. Wait for the opening range to define before entering a trend trade.
+- Volume at key levels is the differentiator in stocks. A breakout above resistance on double average volume is real. The same breakout on low volume is likely a false break.
+
+### ENTRY QUALITY STANDARDS
+- Stocks SL minimum: 1.0× ATR scalp | 1.5× ATR day | 2.5× ATR swing. Stocks gap more than forex but less than crypto — use daily ATR for day trades, not intraday ATR.
+- The best stock entries align intraday structure (15m / 1H) with daily chart direction. Against the daily trend, even technically perfect intraday setups underperform.
+- Stocks have lower leverage than forex/crypto. Typical leverage: 2–4× for intraday, 1–2× for swing. Scale position size up vs forex to compensate for lower leverage and smaller % moves.
+
+### TRADE MANAGEMENT PATTERNS
+- Insufficient data — revisit next session.
+
+### REASONING QUALITY
+- Insufficient data — revisit next session.
+
+### ASSET NOTES
+- US stock market hours: 09:30–16:00 EST. Pre-market 04:00–09:30, after-hours 16:00–20:00. Liquidity is highest in the first and last hour of the main session.
+- AMZN, NVDA, and mega-caps tend to respect daily/weekly levels cleanly. Small caps are more volatile with thinner orderbooks — levels break more easily.
+- Dividends and stock splits affect historical price levels on charts. If a level looks unusual, check for a corporate action before trusting it.
+
+### JANE'S PATTERNS
+- Insufficient data — revisit next session.

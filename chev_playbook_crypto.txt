@@ -1,0 +1,32 @@
+CHEV TRADING PLAYBOOK — CRYPTO
+Last updated: 2026-07-03 (seeded — will be rewritten by learning sessions)
+========================================
+
+### CONFLUENCE CONDITIONS
+- Crypto requires a structural anchor: SR level with 3+ touches OR VP POC/VAH/VAL within 0.4%. EMA confluence without a real level is noise — the journal shows this fails consistently.
+- The strongest crypto entries combine: 4H SR zone + liquidity sweep (stop hunt before reversal) + confirmed RSI divergence. A sweep before your entry means institutional buying/selling absorbed the retail stops.
+- Hidden divergence (price makes a higher low with RSI making a lower low, or vice versa) is more reliable in crypto than regular divergence — it signals trend continuation from a pullback, not a reversal attempt against a strong trend.
+
+### MARKET STRUCTURE RULES
+- Crypto moves 5–15% per day on altcoins, 2–5% on BTC/ETH. A 1% move that would be enormous in forex is noise in crypto — adjust SL and TP distance expectations accordingly.
+- Volume Profile POC is where the most volume traded in the current auction. Price gravitates to it during consolidation and bounces off it during trending moves. It carries more weight than a fib level with no volume behind it.
+- BB squeeze followed by a burst outside the bands with volume is one of the most reliable crypto setups. The squeeze builds energy; the burst IS the trade. Wait for the burst, not the squeeze.
+
+### ENTRY QUALITY STANDARDS
+- Crypto SL minimum: 1.0× ATR scalp | 1.5× ATR day | 2.5× ATR swing. Crypto wicks are larger than forex — SLs inside ATR get hunted before the move begins.
+- Position sizing: crypto volatility means 1% margin risk can produce 10%+ moves. Size down relative to forex — let the leverage do the work, not the position size.
+- After a liquidity sweep (engineered wick below a known support / above a known resistance), the next candle body close back inside the range is your entry trigger. The sweep itself is not the entry.
+
+### TRADE MANAGEMENT PATTERNS
+- Insufficient data — revisit next session.
+
+### REASONING QUALITY
+- Insufficient data — revisit next session.
+
+### ASSET NOTES
+- BTC, ETH, SOL are correlated: if BTC dumps, everything dumps. Do not hold longs on multiple alts simultaneously — you are exposed to the same macro move multiple times.
+- Funding rates in perpetual contracts: when funding is highly positive, longs are paying shorts — price tends to correct. When funding is negative, longs get paid — bias is bullish. This is context, not a signal alone.
+- Crypto trades 24/7 with no meaningful session filter. However, Asian liquidity is thinner — setups formed in the Asian session should be confirmed at the London/NY open before sizing up.
+
+### JANE'S PATTERNS
+- Insufficient data — revisit next session.

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="32" fill="#131722"/>
+  <rect width="192" height="192" rx="32" fill="url(#g)" opacity="0.4"/>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2a3560"/>
+      <stop offset="100%" stop-color="#0d0f1b"/>
+    </linearGradient>
+  </defs>
+  <!-- Lightning bolt -->
+  <polygon points="108,24 72,104 96,104 84,168 128,80 102,80" fill="#d4af37"/>
+  <!-- Subtle glow -->
+  <polygon points="108,24 72,104 96,104 84,168 128,80 102,80" fill="#f5c842" opacity="0.25" transform="scale(1.04) translate(-4,-4)"/>
+</svg>
