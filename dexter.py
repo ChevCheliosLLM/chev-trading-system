@@ -3557,6 +3557,24 @@ def _get_session_context():
     return {"lines": sessions, "utc": now.strftime("%H:%M UTC")}
 
 
+def _get_adr(symbol, asset_type, lookback=14):
+    """Average Daily Range over the past N days. Returns a dict with adr_abs and adr_pct, or None."""
+    try:
+        df = fetch_candles(symbol, asset_type, "1d", limit=lookback + 5)
+        if len(df) < 5:
+            return None
+        recent = df.tail(lookback)
+        daily_ranges = recent["high"] - recent["low"]
+        adr_abs = float(daily_ranges.mean())
+        mid     = float(df["close"].iloc[-1])
+        adr_pct = round(adr_abs / mid * 100, 2) if mid > 0 else 0
+        today_range = float(df["high"].iloc[-1]) - float(df["low"].iloc[-1])
+        used_pct = round(today_range / adr_abs * 100, 0) if adr_abs > 0 else 0
+        return {"adr_abs": adr_abs, "adr_pct": adr_pct, "today_range": today_range, "used_pct": used_pct}
+    except Exception:
+        return None
+
+
 def _build_rich_market_brief(symbol, asset_type, primary_tf="1h"):
     """
     Market brief optimised for one primary TF.
@@ -3618,11 +3636,11 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h"):
         top_res = _ca_pick_nearest_level(current_price, res_zones, tier_b_res)
         top_sup = _ca_pick_nearest_level(current_price, sup_zones, tier_b_sup)
 
-        # ── 1H primary stats ──────────────────────────────────────────────
+        # ── Primary TF stats ──────────────────────────────────────────────
         vwap      = primary_df["VWAP"].iloc[-1]
         ema20     = primary_df["EMA20"].iloc[-1]
         rsi_1h    = primary_df["RSI"].iloc[-1]
-        atr_1h    = primary_df["ATR"].iloc[-1]
+        atr_1h    = primary_df["ATR"].iloc[-1]   # always 1H for VWAP/BB reference
         bb_upper  = primary_df["BB_upper"].iloc[-1]
         bb_mid    = primary_df["BB_mid"].iloc[-1]
         bb_lower  = primary_df["BB_lower"].iloc[-1]
@@ -3632,7 +3650,9 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h"):
         _bb_pct_to_mid   = round(abs(current_price - bb_mid) / current_price * 100, 2)
         vol_trend = _ca_volume_trend(primary_df)
         fib_levels, fib_direction = _ca_fib_from_real_impulse(primary_df)
-        divergences = _ca_detect_rsi_divergence(primary_df) + _ca_detect_rsi_divergence_forming(primary_df)
+        divergences = (_ca_detect_rsi_divergence(primary_df)
+                       + _ca_detect_rsi_divergence_forming(primary_df)
+                       + _detect_hidden_divergence(primary_df))
 
         df_4h  = tf_data.get("4h")
         rsi_4h = df_4h["RSI"].iloc[-1] if df_4h is not None else None
@@ -3685,6 +3705,7 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h"):
 
         session = _get_session_context()
         pdhl    = _get_previous_day_hl(symbol, asset_type)
+        adr     = _get_adr(symbol, asset_type) if asset_type in ("forex", "stocks") else None
 
         # ── Assemble brief ────────────────────────────────────────────────
         lines = [f"=== MARKET BRIEF: {symbol} ({asset_type.upper()}) ===\n"]
@@ -3695,15 +3716,34 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h"):
                 "\n--- Previous Day ---",
                 f"  PDH: {pdhl['pdh']:.5f}  |  PDL: {pdhl['pdl']:.5f}  |  PDC: {pdhl['pdc']:.5f}",
             ]
+        if adr:
+            _adr_warn = ""
+            if adr["used_pct"] >= 80:
+                _adr_warn = f"  ⚠ TODAY'S RANGE IS {adr['used_pct']:.0f}% OF ADR — limited room left. TP targets beyond this distance are unlikely to hit today."
+            elif adr["used_pct"] >= 60:
+                _adr_warn = f"  Note: {adr['used_pct']:.0f}% of ADR already used today."
+            lines += [
+                "\n--- Average Daily Range (14-day) ---",
+                f"  ADR     : {adr['adr_abs']:.5f}  ({adr['adr_pct']:.2f}% of price) — typical daily range",
+                f"  Today   : {adr['today_range']:.5f}  ({adr['used_pct']:.0f}% of ADR used)",
+            ]
+            if _adr_warn:
+                lines.append(_adr_warn)
+
+        _atr_primary     = float(primary_df["ATR"].iloc[-1]) if "ATR" in primary_df.columns else atr_1h
+        _atr_primary_str = (f"  ATR {primary_tf.upper()}: {_atr_primary:.5f}  ← USE THIS for SL sizing on {primary_tf.upper()} entries\n"
+                            f"  ATR 1H : {atr_1h:.5f}  (reference only — use primary TF ATR for SL)")
+        if primary_tf == "1h":
+            _atr_primary_str = f"  ATR 1H: {atr_1h:.5f}  (avg candle range — SL needs at least 1 ATR breathing room beyond structure)"
 
         lines += [
-            "\n--- Price Snapshot (1H reference) ---",
+            "\n--- Price Snapshot ---",
             f"  Price : {current_price:.5f}",
             f"  VWAP  : {vwap:.5f}",
             f"  EMA20 : {ema20:.5f}",
-            f"  RSI 1h: {rsi_1h:.1f}" + (f"  |  RSI 4h: {rsi_4h:.1f}" if rsi_4h else ""),
-            f"  ATR 1h: {atr_1h:.5f}  (avg candle range — SL needs at least 1 ATR breathing room beyond structure)",
-            f"  Volume: {vol_trend} (last 10 candles on 1H)",
+            f"  RSI {primary_tf.upper()}: {rsi_1h:.1f}" + (f"  |  RSI 4H: {rsi_4h:.1f}" if rsi_4h else ""),
+            _atr_primary_str,
+            f"  Volume: {vol_trend} (last 10 candles on {primary_tf.upper()})",
             f"  BB (20,2) 1H: upper={bb_upper:.5f}  mid={bb_mid:.5f}  lower={bb_lower:.5f}  width={bb_width}%",
             f"  BB position : {bb_pos}",
             f"  BB squeeze  : {bb_squeeze}",
@@ -3879,16 +3919,33 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h"):
                     lines += patterns
                 eq_highs, eq_lows = _detect_equal_highs_lows(df_out)
                 if eq_highs:
-                    lines.append("Equal Highs (liquidity above):")
+                    lines.append("Equal Highs (liquidity above — do NOT place SL just above these; they will be swept before a real downward move):")
                     for price, count in eq_highs[:5]:
                         lines.append(f"  {price:.5f}  ({count} touches)")
                 if eq_lows:
-                    lines.append("Equal Lows (liquidity below):")
+                    lines.append("Equal Lows (liquidity below — do NOT place SL just below these; they will be swept before a real upward move):")
                     for price, count in eq_lows[:5]:
                         lines.append(f"  {price:.5f}  ({count} touches)")
                 sweeps = _detect_liquidity_sweep(df_out)
                 for s in sweeps[:2]:
                     lines.append(f"SWEEP: {s['note']}")
+
+                # MACD summary on primary TF
+                if has_mh:
+                    _mh_tail = df_out["MACD_hist"].dropna().tail(5)
+                    if len(_mh_tail) >= 2:
+                        _mh_now  = float(_mh_tail.iloc[-1])
+                        _mh_prev = float(_mh_tail.iloc[-2])
+                        _mh_dir  = "rising" if _mh_now > _mh_prev else "falling"
+                        _mh_bias = "bullish" if _mh_now > 0 else "bearish"
+                        _cross_note = ""
+                        if _mh_prev < 0 < _mh_now:
+                            _cross_note = " — BULLISH ZERO-LINE CROSS (momentum flipped positive)"
+                        elif _mh_prev > 0 > _mh_now:
+                            _cross_note = " — BEARISH ZERO-LINE CROSS (momentum flipped negative)"
+                        lines.append(
+                            f"MACD summary: histogram={_mh_now:+.5g} ({_mh_bias}, {_mh_dir}){_cross_note}"
+                        )
 
         return "\n".join(lines)
 
@@ -5290,7 +5347,7 @@ def _session_grade(asset_type):
 
 def _setup_grade(result, asset_type):
     """Return (grade, suggested_risk_pct) based on confluence score, regime, session."""
-    min_score = 10 if asset_type == "crypto" else 7
+    min_score = 10 if asset_type == "crypto" else (8 if asset_type == "forex" else 7)
     score     = result.get("count", 0)
     regime    = (result.get("regime_4h") or {}).get("regime", "UNKNOWN")
     _, session_quality = _session_grade(asset_type)
@@ -5340,6 +5397,37 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         ])
         context_prefix += f"=== RELEVANT RECENT TRADES (context only) ===\n{journal_lines}\n\n"
 
+    # Show open/pending positions so Chev can self-assess correlation before taking new trade
+    _open_now   = [t for t in open_trades if t.get("status") == "OPEN"]
+    _pending_now = [t for t in open_trades if t.get("status") == "PENDING"]
+    if _open_now or _pending_now:
+        context_prefix += "=== YOUR CURRENT OPEN POSITIONS ===\n"
+        for _t in _open_now:
+            _rr = ""
+            try:
+                _entry = float(_t.get("entry", 0))
+                _sl    = float(_t.get("sl", 0))
+                _tp    = float(_t.get("tp", 0))
+                if _entry and _sl and _tp and abs(_entry - _sl) > 0:
+                    _rr = f"  R:R={abs(_tp - _entry)/abs(_entry - _sl):.1f}"
+            except Exception:
+                pass
+            context_prefix += (
+                f"  OPEN  {_t.get('symbol','?')} {_t.get('direction','?').upper()} "
+                f"entry={_t.get('entry','?')} SL={_t.get('sl','?')} TP={_t.get('tp','?')}{_rr}\n"
+            )
+        for _t in _pending_now:
+            context_prefix += (
+                f"  PENDING {_t.get('symbol','?')} {_t.get('direction','?').upper()} "
+                f"limit={_t.get('entry','?')} SL={_t.get('sl','?')} TP={_t.get('tp','?')}\n"
+            )
+        context_prefix += (
+            "Before posting a new trade, consider: does this add correlated exposure to an existing position?\n"
+            "If you already have a LONG on EUR/USD, adding a LONG on GBP/USD doubles your USD-short risk.\n\n"
+        )
+    else:
+        context_prefix += "=== YOUR CURRENT OPEN POSITIONS: none ===\n\n"
+
     # Full market data brief — primary TF gets full candles, others get rich summaries
     primary_tf = result.get("primary_tf", "1h")
     trade_type = result.get("trade_type", TF_TRADE_TYPE.get(primary_tf, "day"))
@@ -5367,10 +5455,24 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         context_prefix += "Consider the event risk carefully before posting a trade.\n"
 
     direction_hint = ""
-    if result.get("support") and abs(confluence_zone - result["support"]["price"]) / confluence_zone * 100 <= 1.5:
-        direction_hint = "Dexter notes: confluence is AT or NEAR the support zone — bias LONG."
-    elif result.get("resistance") and abs(confluence_zone - result["resistance"]["price"]) / confluence_zone * 100 <= 1.5:
-        direction_hint = "Dexter notes: confluence is AT or NEAR the resistance zone — bias SHORT."
+    _near_sup = result.get("support") and abs(confluence_zone - result["support"]["price"]) / confluence_zone * 100 <= 1.5
+    _near_res = result.get("resistance") and abs(confluence_zone - result["resistance"]["price"]) / confluence_zone * 100 <= 1.5
+    if _near_sup:
+        _sup_p = result["support"]["price"]
+        direction_hint = (
+            f"Dexter: confluence zone ({confluence_zone:.5f}) is at or within 1.5% of a SUPPORT level ({_sup_p:.5f}). "
+            f"This is a potential LONG area — but confirm with RSI, divergence, and trend context. "
+            f"It could also be a short setup if price is rejecting downward from a resistance-turned-support flip. "
+            f"Your job: read the full structure and decide — do NOT assume direction from the level alone."
+        )
+    elif _near_res:
+        _res_p = result["resistance"]["price"]
+        direction_hint = (
+            f"Dexter: confluence zone ({confluence_zone:.5f}) is at or within 1.5% of a RESISTANCE level ({_res_p:.5f}). "
+            f"This is a potential SHORT area — but confirm with RSI, divergence, and trend context. "
+            f"It could also be a long setup if this is a breakout above resistance with momentum. "
+            f"Your job: read the full structure and decide — do NOT assume direction from the level alone."
+        )
 
     r4h  = result.get("regime_4h")  or {}
     r_pr = result.get("regime_primary") or {}
@@ -5389,12 +5491,12 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         }.get(r4_label, "")
         regime_context = f"MARKET REGIME:\n  {r4_str}\n{r_pr_str}  {trend_note}\n\n"
 
-    # Counter-trend warning — fires when Dexter's directional bias opposes the 4H regime
+    # Counter-trend warning — fires when S/R proximity suggests a direction that opposes the 4H regime
     counter_trend_warning = ""
     _r4_regime = r4h.get("regime", "")
-    if direction_hint and _r4_regime in ("TRENDING_UP", "TRENDING_DOWN"):
-        _bias_long  = "LONG"  in direction_hint
-        _bias_short = "SHORT" in direction_hint
+    if _r4_regime in ("TRENDING_UP", "TRENDING_DOWN"):
+        _bias_long  = _near_sup   # near support → potential long
+        _bias_short = _near_res   # near resistance → potential short
         _is_counter = (_bias_long and _r4_regime == "TRENDING_DOWN") or \
                       (_bias_short and _r4_regime == "TRENDING_UP")
         if _is_counter:
@@ -6025,20 +6127,38 @@ def _parse_ff_date(date_str):
     except Exception:
         return None
 
+_MACRO_KEYWORDS = {"fomc", "fed", "interest rate", "cpi", "inflation", "nfp", "non-farm", "gdp", "pce"}
+
 def _upcoming_high_impact(symbol, asset_type, window_hours=2):
-    """Return warning strings for high-impact events within window_hours for this symbol's currencies."""
-    if asset_type != "forex":
-        return []
-    clean = symbol.upper().replace("/", "")
-    currencies = {clean[:3], clean[3:6]} if len(clean) >= 6 else set()
-    events = _fetch_economic_calendar()
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    """Return warning strings for high-impact events within window_hours.
+    Forex: filters by pair currencies. Crypto/stocks: filters for macro events (FOMC, CPI, NFP, etc.)
+    that affect all markets."""
+    events   = _fetch_economic_calendar()
+    now_utc  = datetime.now(timezone.utc).replace(tzinfo=None)
     warnings = []
+
+    if asset_type == "forex":
+        clean      = symbol.upper().replace("/", "")
+        currencies = {clean[:3], clean[3:6]} if len(clean) >= 6 else set()
+    else:
+        currencies = None  # all events — filtered by macro keywords below
+
     for ev in events:
         if ev.get("impact") != "High":
             continue
-        if ev.get("country", "").upper() not in currencies:
-            continue
+        country = ev.get("country", "").upper()
+        title   = ev.get("title", "").lower()
+
+        if currencies is not None:
+            if country not in currencies:
+                continue
+        else:
+            # Crypto/stocks: only warn on USD-denominated macro events with known market-wide impact
+            is_usd = country in ("USD", "US")
+            is_macro = any(kw in title for kw in _MACRO_KEYWORDS)
+            if not (is_usd and is_macro):
+                continue
+
         ev_time = _parse_ff_date(ev.get("date", ""))
         if ev_time is None:
             continue
@@ -6046,9 +6166,9 @@ def _upcoming_high_impact(symbol, asset_type, window_hours=2):
         if -0.5 <= diff_h <= window_hours:
             label = f"{ev.get('country','?')} {ev.get('title','event')}"
             if diff_h < 0:
-                warnings.append(f"⚠ {label} just released ({abs(diff_h)*60:.0f}min ago)")
+                warnings.append(f"⚠ {label} just released ({abs(diff_h)*60:.0f}min ago) — expect volatility spike")
             else:
-                warnings.append(f"⚠ {label} in {diff_h:.1f}h")
+                warnings.append(f"⚠ {label} in {diff_h:.1f}h — high market-wide volatility risk")
     return warnings
 
 

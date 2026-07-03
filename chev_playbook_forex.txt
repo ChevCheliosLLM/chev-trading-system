@@ -1,32 +1,34 @@
 CHEV TRADING PLAYBOOK — FOREX
-Last updated: 2026-07-03 (seeded — will be rewritten by learning sessions)
+Last updated: 2026-07-03 18:21:44 | Based on 19 FOREX trades
 ========================================
 
-### CONFLUENCE CONDITIONS
-- Forex requires a real structural anchor: a 4H SR level with 3+ touches OR a VP POC/VAH within 0.4%. EMA + fib alone is not enough — price mid-range fails almost every time.
-- The golden pocket (61.8% fib) paired with a 4H SR level is the highest-conviction forex entry; hidden divergence as a third confirmation puts it in A+ territory.
-- Session quality matters more in forex than crypto: London open and the NY/London overlap produce the most decisive moves — Asian session setups on major pairs frequently fail to reach TP.
+**CONFLUENCE CONDITIONS**
+- **fib+rsi+sr**: Shows mixed results with 50% win rate; need confirmation from additional indicators like EMA or GP.
+- SR at 4H tends to perform better than 1H, especially in volatile conditions due to its robustness over longer structures.
+- RSI divergence is most effective when aligned with a strong S/R level and confirmed by volume profile.
 
-### MARKET STRUCTURE RULES
-- In TRENDING regimes, trade WITH the 4H trend from pullback zones (4H SR + fib). Counter-trend mean-reversion is allowed but needs 1.5× score AND confirmed divergence.
-- In RANGING regimes, fade the band extremes (upper SR + overbought, lower SR + oversold). The range boundary IS the structure — that's your anchor.
-- A 4H SR level that has been tested 4+ times is a wall. A 1H level tested once is a speed bump. Trade the wall, avoid the speed bump as primary TP.
+**MARKET STRUCTURE RULES**
+- High-quality setups are validated when trend aligns with multiple confluences; downtrends favor shorts, uptrends favor longs.
+- Market structure signals like Bollinger Bands squeeze should be watched for potential breakouts but entered with caution due to increased volatility risk.
+- Price is more likely to reach TP in strong trends where structural levels hold and momentum indicators confirm direction.
 
-### ENTRY QUALITY STANDARDS
-- Forex SL minimum: 1.0× ATR scalp | 1.5× ATR day | 2.5× ATR swing. Inside these distances, a normal wick stops you before the setup plays.
-- A high-conviction forex entry has: 4H SR level + fib confluence + directional bias from 4H regime. Without all three, it is a B setup at best.
-- Wait for a body close confirming rejection at the level (e.g., pin bar or engulfing candle body through the zone midpoint) before entering — price touching a level and immediately reversing is a real signal; price wicking through and closing inside is not.
+**ENTRY QUALITY STANDARDS**
+- High-conviction entries have clear S/R support, confluence from multiple timeframes, and positive technical signals like RSI divergence.
+- Winners typically had a golden pocket (GP) alignment along with Fibonacci retracement and strong EMA confirmation.
+- Marginal setups lacked robust structural levels or were overextended; these often failed despite multiple indicators.
 
-### TRADE MANAGEMENT PATTERNS
+**TRADE MANAGEMENT PATTERNS**
 - Insufficient data — revisit next session.
 
-### REASONING QUALITY
-- Insufficient data — revisit next session.
+**REASONING QUALITY**
+- 50% of reasoning is validated by price action; A+ setups show higher validation rates than B setups.
+- Invalidated reasoning was due to misreading market structure and overreliance on forming RSI divergence without structural confirmation.
+- Validated setups had a strong alignment with clear S/R levels, Fibonacci retracements, and positive momentum.
 
-### ASSET NOTES
-- Forex pip values: EUR/USD, GBP/USD = $10 per pip per standard lot (100,000 units). A 30-pip move on 0.1 lots = $30.
-- Leverage norms: scalp up to 20×, day trade up to 10×, swing up to 5× (gap risk overnight).
-- Major pairs (EUR/USD, GBP/USD, USD/JPY) have tighter spreads and cleaner levels than crosses. Cross pairs (EUR/GBP) can whipsaw at SR zones.
+**ASSET NOTES**
+- Forex pairs like EUR/USD and GBP/USD perform better in stable trends, whereas AUD/USD is more prone to volatile price action requiring tighter stop-losses.
+- Cryptos such as BTCUSDT and ETHUSDT require careful risk management due to their high volatility and potential for sharp reversals.
 
-### JANE'S PATTERNS
-- Insufficient data — revisit next session.
+**JANE'S PATTERNS**
+- Jane's instincts are profitable on setups with strong market structure support (S/R levels) but diverge from models in overextended conditions where technical signals alone do not guarantee success.
+- Her successful trades typically involve a clear trend direction and confluence of S/R, Fibonacci, and EMA; she avoids entering when the market is overbought or oversold.

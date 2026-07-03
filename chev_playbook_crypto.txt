@@ -1,32 +1,36 @@
 CHEV TRADING PLAYBOOK — CRYPTO
-Last updated: 2026-07-03 (seeded — will be rewritten by learning sessions)
+Last updated: 2026-07-03 18:23:17 | Based on 48 CRYPTO trades
 ========================================
 
 ### CONFLUENCE CONDITIONS
-- Crypto requires a structural anchor: SR level with 3+ touches OR VP POC/VAH/VAL within 0.4%. EMA confluence without a real level is noise — the journal shows this fails consistently.
-- The strongest crypto entries combine: 4H SR zone + liquidity sweep (stop hunt before reversal) + confirmed RSI divergence. A sweep before your entry means institutional buying/selling absorbed the retail stops.
-- Hidden divergence (price makes a higher low with RSI making a lower low, or vice versa) is more reliable in crypto than regular divergence — it signals trend continuation from a pullback, not a reversal attempt against a strong trend.
+- The combination of Fibonacci confluence (fib_1h), EMA crossover (ema_15m), divergence (dv), and Bollinger Bands squeeze (bbsq) has a 100% win rate, indicating strong signal reliability.
+- RSI divergence (rsi_form_1h) often fails as a standalone indicator in setups without additional confluence points like S/R levels or EMA crosses, showing high noise to signal ratio.
+- Golden pocket (gp), Fibonacci retracement (fib_1h), and 4-hour support/resistance (sr_4h) together have mixed results; gp alone adds marginal value unless paired with RSI divergence and clear market structure.
 
 ### MARKET STRUCTURE RULES
-- Crypto moves 5–15% per day on altcoins, 2–5% on BTC/ETH. A 1% move that would be enormous in forex is noise in crypto — adjust SL and TP distance expectations accordingly.
-- Volume Profile POC is where the most volume traded in the current auction. Price gravitates to it during consolidation and bounces off it during trending moves. It carries more weight than a fib level with no volume behind it.
-- BB squeeze followed by a burst outside the bands with volume is one of the most reliable crypto setups. The squeeze builds energy; the burst IS the trade. Wait for the burst, not the squeeze.
+- High-quality setups occur in trending markets where confluence includes hidden bullish/bearish divergences and strong structural levels, suggesting a directional bias.
+- Price typically reaches TP in uptrend conditions when multiple EMAs (ema_13/21/55) align with Fibonacci extensions and RSI above 50 on the 1-hour chart.
+- Trend confirmation through EMA crossovers and RSI divergence improves setup quality, making it more likely for price to reach TP rather than reversing early.
 
 ### ENTRY QUALITY STANDARDS
-- Crypto SL minimum: 1.0× ATR scalp | 1.5× ATR day | 2.5× ATR swing. Crypto wicks are larger than forex — SLs inside ATR get hunted before the move begins.
-- Position sizing: crypto volatility means 1% margin risk can produce 10%+ moves. Size down relative to forex — let the leverage do the work, not the position size.
-- After a liquidity sweep (engineered wick below a known support / above a known resistance), the next candle body close back inside the range is your entry trigger. The sweep itself is not the entry.
+- High-conviction entries are characterized by strong confluence at structural levels like Fibonacci golden pockets (gp) and clear support/resistance on the 4-hour chart.
+- Winners often have additional confirmatory signals like EMA crossovers, Bollinger Bands squeeze, or RSI divergence, while losers lack these confirming factors despite initial good indicators.
+- Marginal entries typically rely heavily on short-term confluences without long-term structural support, leading to premature stop-outs due to market noise.
 
 ### TRADE MANAGEMENT PATTERNS
-- Insufficient data — revisit next session.
+- When TP was raised correctly based on momentum and price confirmation (e.g., hitting upper Bollinger Band), price hit the new target more often than reverting to floor.
+- Moving SL early only protected profit when done during strong trending moves; otherwise, it led to premature stop-outs, highlighting the need for cautious management in ranging markets.
+- Leaving trades alone with no management typically results in hitting TP, suggesting overmanagement can negatively impact performance.
 
 ### REASONING QUALITY
-- Insufficient data — revisit next session.
+- 8 out of 21 setups were validated by price action, indicating a 38% validation rate. Partial reasoning (62%) often lacks additional confirmatory signals or misreads market structure.
+- Invalidated reasoning typically fails due to wrong trend bias or overreliance on short-term indicators without broader structural support.
+- A+ setups show better validation rates than B setups, with higher confluence quality and clearer trend context.
 
 ### ASSET NOTES
-- BTC, ETH, SOL are correlated: if BTC dumps, everything dumps. Do not hold longs on multiple alts simultaneously — you are exposed to the same macro move multiple times.
-- Funding rates in perpetual contracts: when funding is highly positive, longs are paying shorts — price tends to correct. When funding is negative, longs get paid — bias is bullish. This is context, not a signal alone.
-- Crypto trades 24/7 with no meaningful session filter. However, Asian liquidity is thinner — setups formed in the Asian session should be confirmed at the London/NY open before sizing up.
+- Cryptos (BTCUSDT, ETHUSDT) perform well in uptrends when multiple EMAs align with Fibonacci retracement levels and RSI divergence confirms directional bias.
+- Assets like ADAUSDT and XRPUSDT show better performance in ranging markets with additional confluences such as Bollinger Bands squeeze and EMA crossovers.
 
 ### JANE'S PATTERNS
-- Insufficient data — revisit next session.
+- Jane is consistently profitable on BTCUSDT long positions during strong uptrends confirmed by multiple EMAs, Fibonacci levels, and RSI above 50.
+- Her instincts diverge from models when she enters based on hidden bullish divergence with clear support/resistance levels, often leading to early TP hits while model entries get stopped out prematurely.
