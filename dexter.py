@@ -1647,23 +1647,28 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
         )
     entries_text = "\n\n".join([_fmt_entry(i, e) for i, e in enumerate(recent)])
 
-    # Build confluence combo win-rate breakdown for the last 30 trades (asset-filtered)
+    # Build confluence combo win-rate + R-multiple breakdown for the last 30 trades (asset-filtered)
     from collections import defaultdict
-    combo_stats = defaultdict(lambda: {"w": 0, "l": 0})
+    combo_stats = defaultdict(lambda: {"w": 0, "l": 0, "r_sum": 0.0, "r_count": 0})
     for e in asset_journal[-30:]:
         raw_tags = [t.strip().lower() for t in str(e.get("tags", "")).split(",") if t.strip()]
-        # Filter to known scored tags only (exclude leaked close-type strings)
         valid = [t for t in raw_tags if t in CONFLUENCE_SCORES]
         combo = "+".join(sorted(valid)) if valid else "no-tags"
         if e.get("outcome") == "WIN":
             combo_stats[combo]["w"] += 1
-        else:
+        elif e.get("outcome") == "LOSS":
             combo_stats[combo]["l"] += 1
+        _rm = e.get("r_multiple")
+        if _rm is not None:
+            combo_stats[combo]["r_sum"]   += float(_rm)
+            combo_stats[combo]["r_count"] += 1
     combo_lines = []
     for combo, st in sorted(combo_stats.items(), key=lambda x: -(x[1]["w"] + x[1]["l"])):
         total = st["w"] + st["l"]
-        wr = round(st["w"] / total * 100)
-        combo_lines.append(f"  {combo}: {st['w']}W/{st['l']}L ({wr}% WR)")
+        wr    = round(st["w"] / total * 100) if total else 0
+        avg_r = round(st["r_sum"] / st["r_count"], 2) if st["r_count"] > 0 else None
+        r_str = f" | avg {avg_r:+.2f}R" if avg_r is not None else ""
+        combo_lines.append(f"  {combo}: {st['w']}W/{st['l']}L ({wr}% WR{r_str})")
     combo_summary = "\n".join(combo_lines) if combo_lines else "  No data yet"
 
     # Management pattern stats across last 30 trades (asset-filtered)
@@ -1784,6 +1789,77 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
         with open(_pb_path, "w", encoding="utf-8") as f:
             f.write(header + new_playbook)
         print(f"[Playbook] {_asset_label} playbook rewritten → {_pb_path}")
+
+        # ── Step 2: Loss pattern analysis — what setups need more confirmation ──
+        loss_trades = [e for e in asset_journal if e.get("outcome") == "LOSS"][-15:]
+        if len(loss_trades) >= 3:
+            def _fmt_loss(i, e):
+                _rm  = e.get("r_multiple")
+                _r   = f" ({_rm:+.2f}R)" if _rm is not None else ""
+                _inv = e.get("invalidation", "")
+                _inv_line = f"\n  Pre-entry invalidation stated: {_inv}" if _inv else ""
+                return (
+                    f"Trade {i+1}: {e['symbol']} {e.get('direction','').upper()} | {e['ts'][:10]} | "
+                    f"Tags: {e.get('tags','none')} | Held: {e.get('duration','?')}{_r}"
+                    f"{_inv_line}\n"
+                    f"Post-mortem: {(e.get('analysis') or 'none')[:300]}"
+                )
+            loss_text = "\n\n".join([_fmt_loss(i, e) for i, e in enumerate(loss_trades)])
+            loss_prompt = (
+                f"Market conditions review — {_asset_label} trades where price did not move as expected.\n\n"
+                f"Study these {len(loss_trades)} trades:\n\n"
+                f"{loss_text}\n\n"
+                f"Your task: identify setup patterns or market conditions that appear across these outcomes. "
+                f"This is a data analysis exercise, not a self-criticism exercise. Markets are uncertain — "
+                f"not every loss means the setup was wrong. But patterns across these outcomes can reveal "
+                f"conditions where additional confirmation would help.\n\n"
+                f"Write exactly 3 bullet points under the heading 'SETUPS NEEDING EXTRA CONFIRMATION:'. "
+                f"Each bullet describes a MARKET CONDITION or SETUP PATTERN (not a personal failing) "
+                f"that these outcomes have in common, and what additional confirmation would have helped.\n\n"
+                f"Format: '- [Pattern/Condition]: [What extra confirmation would have helped]'\n\n"
+                f"Example: '- First-visit to a level with no prior rejection data: wait for one rejection candle close before entering'\n"
+                f"NOT: '- I made a mistake entering here'\n\n"
+                f"Write only the 3 bullet points. No intro, no conclusion, no additional text."
+            )
+            loss_analysis = _call_chev([{"role": "user", "content": loss_prompt}], timeout=90)
+            if loss_analysis:
+                # ── Step 3: Win/Loss comparison — what did winners have that losers didn't ──
+                win_trades = [e for e in asset_journal if e.get("outcome") == "WIN"][-10:]
+                if len(win_trades) >= 2:
+                    def _fmt_win(i, e):
+                        _rm  = e.get("r_multiple")
+                        _r   = f" ({_rm:+.2f}R)" if _rm is not None else ""
+                        return (
+                            f"Trade {i+1}: {e['symbol']} {e.get('direction','').upper()} | "
+                            f"Tags: {e.get('tags','none')} | {e['ts'][:10]}{_r}\n"
+                            f"Post-mortem: {(e.get('analysis') or 'none')[:200]}"
+                        )
+                    win_text  = "\n\n".join([_fmt_win(i, e) for i, e in enumerate(win_trades[-4:])])
+                    loss_text2 = "\n\n".join([_fmt_loss(i, e) for i, e in enumerate(loss_trades[-4:])])
+                    compare_prompt = (
+                        f"Pattern comparison — {_asset_label} market study.\n\n"
+                        f"RECENT WINS (trades where price moved as expected):\n{win_text}\n\n"
+                        f"RECENT LOSSES (trades where price moved differently):\n{loss_text2}\n\n"
+                        f"What did the winning trades have that the losing trades did not? "
+                        f"Look at: the tags (confluence pattern), the market conditions in the post-mortem, "
+                        f"the structural quality described. Be specific — 'the wins had a 4H SR level confirmed' "
+                        f"is useful. 'The wins were better setups' is not.\n\n"
+                        f"Write exactly 2 bullet points under 'WIN/LOSS INSIGHT:'. "
+                        f"Each bullet is one specific, concrete differentiator. "
+                        f"No intro, no conclusion — just the 2 bullets."
+                    )
+                    compare_analysis = _call_chev([{"role": "user", "content": compare_prompt}], timeout=90)
+                else:
+                    compare_analysis = None
+
+                # Append both analyses to the playbook as supplemental sections
+                supplement = f"\n\n### SETUPS NEEDING EXTRA CONFIRMATION\n{loss_analysis}"
+                if compare_analysis:
+                    supplement += f"\n\n### WIN/LOSS INSIGHT\n{compare_analysis}"
+                with open(_pb_path, "a", encoding="utf-8") as f:
+                    f.write(supplement)
+                print(f"[Playbook] Loss pattern + win/loss insight appended to {_pb_path}")
+
     except Exception as e:
         print(f"[Playbook] Learning session failed: {e}")
 
@@ -1828,12 +1904,28 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
         f"One sentence on what you'd do the same, one on what you'd change.\n\n"
     ) if moves else ""
 
+    _risk_usd  = trade.get("risk_amount_usd", 0)
+    _r_mult    = round(pnl / _risk_usd, 2) if _risk_usd > 0 else None
+    _r_str     = f" | R-MULTIPLE: {_r_mult:+.2f}R" if _r_mult is not None else ""
+    _str_4h    = trade.get("structure_4h", "")
+    _str_inv   = trade.get("invalidation", "")
+    _str_conf  = trade.get("confirmation", "")
+    _pre_trade_block = ""
+    if _str_4h or _str_inv or _str_conf:
+        _pre_trade_block = (
+            f"YOUR PRE-TRADE ANALYSIS:\n"
+            f"  4H Structure : {_str_4h or 'not recorded'}\n"
+            f"  Invalidation : {_str_inv or 'not recorded'}\n"
+            f"  Confirmation : {_str_conf or 'not recorded'}\n\n"
+        )
+
     prompt = (
         f"Trade closed. Analyze it as a technical trader.\n\n"
-        f"PAIR: {trade['symbol']} | DIRECTION: {trade['direction'].upper()} | RESULT: {outcome} [{close_type}] (${pnl:+.2f})\n"
+        f"PAIR: {trade['symbol']} | DIRECTION: {trade['direction'].upper()} | RESULT: {outcome} [{close_type}] (${pnl:+.2f}{_r_str})\n"
         f"ENTRY: {trade['entry']} | {sl_label}: {trade['sl']} | TP: {trade['tp']} | EXIT PRICE: {exit_price} | TIME HELD: {duration}{sip_note}\n"
         f"CONFLUENCES: {trade.get('tags', 'none recorded')}\n"
         f"YOUR ORIGINAL REASONING: {trade.get('reasoning', 'none recorded')}\n\n"
+        f"{_pre_trade_block}"
         f"{moves_text}"
         f"Write your post-mortem in exactly {n_points} points — 2 sentences max each:\n\n"
         f"1. SETUP QUALITY — Was this a high-quality entry location? Was price at a well-defined structural level or a marginal entry mid-range?\n"
@@ -1878,11 +1970,16 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
         "tp":               trade["tp"],
         "exit_price":       exit_price,
         "pnl":              round(pnl, 2),
+        "r_multiple":       _r_mult,
+        "risk_amount_usd":  _risk_usd,
         "outcome":          outcome,
         "close_type":       trade.get("close_type", "UNKNOWN"),
         "tags":             trade.get("tags", ""),
         "duration":         duration,
         "reasoning":        trade.get("reasoning", ""),
+        "structure_4h":     trade.get("structure_4h", ""),
+        "invalidation":     trade.get("invalidation", ""),
+        "confirmation":     trade.get("confirmation", ""),
         "analysis":         analysis,
         "reasoning_quality": reasoning_quality,
         "setup_grade":      trade.get("setup_grade", ""),
@@ -3575,7 +3672,105 @@ def _get_adr(symbol, asset_type, lookback=14):
         return None
 
 
-def _build_rich_market_brief(symbol, asset_type, primary_tf="1h"):
+def _zone_dwell_analysis(df, zone_price, atr, lookback=30):
+    """Count how many recent candles rejected at a confluence zone + classify current candle quality."""
+    if df is None or len(df) < 5 or zone_price is None:
+        return None
+    try:
+        margin    = max(0.0005, atr * 0.5) if atr else abs(zone_price) * 0.002
+        zone_low  = zone_price - margin
+        zone_high = zone_price + margin
+        recent    = df.tail(lookback)
+        test_count = 0
+        for _, row in recent.iterrows():
+            if not (row["low"] <= zone_high and row["high"] >= zone_low):
+                continue
+            body_low  = min(row["open"], row["close"])
+            body_high = max(row["open"], row["close"])
+            if not (body_low <= zone_high and body_high >= zone_low):
+                test_count += 1  # wick touched zone, body closed outside = rejection
+        last    = df.iloc[-1]
+        body    = abs(last["close"] - last["open"])
+        up_wick = last["high"] - max(last["open"], last["close"])
+        dn_wick = min(last["open"], last["close"]) - last["low"]
+        at_zone = last["low"] <= zone_high and last["high"] >= zone_low
+        if not at_zone:
+            candle_note = "price not yet touching zone — approaching"
+        elif body > 0 and dn_wick >= body * 2.0 and up_wick <= body * 0.5:
+            candle_note = "HAMMER — long lower wick, strong bullish rejection at zone"
+        elif body > 0 and up_wick >= body * 2.0 and dn_wick <= body * 0.5:
+            candle_note = "SHOOTING STAR — long upper wick, strong bearish rejection at zone"
+        elif body > 0 and (up_wick + dn_wick) <= body * 0.3:
+            dirn = "BULLISH" if last["close"] > last["open"] else "BEARISH"
+            candle_note = f"STRONG {dirn} BODY — decisive close, clear directional commitment"
+        elif body == 0 or body < (up_wick + dn_wick) * 0.15:
+            candle_note = "DOJI — equal buying and selling pressure, no directional commitment yet"
+        else:
+            candle_note = "standard candle at zone — moderate, watch next close for confirmation"
+        if test_count == 0:
+            quality = "FIRST VISIT — no prior rejection data at this level (unproven)"
+        elif test_count <= 2:
+            quality = f"{test_count} prior rejection(s) — DEVELOPING, level beginning to show influence"
+        else:
+            quality = f"{test_count} prior rejections — ESTABLISHED, market repeatedly respects this level"
+        return {"test_count": test_count, "quality": quality, "candle_note": candle_note}
+    except Exception:
+        return None
+
+
+def _bos_choch_label(df, window=3):
+    """Detect most recent Break of Structure (BOS) or Change of Character (CHoCH) from swing sequence."""
+    if df is None or len(df) < 25:
+        return None
+    try:
+        highs = df["high"].values
+        lows  = df["low"].values
+        n     = len(highs)
+        sh, sl = [], []
+        for i in range(window, n - window):
+            if all(highs[i] >= highs[i - j] for j in range(1, window + 1)) and \
+               all(highs[i] >= highs[i + j] for j in range(1, window + 1)):
+                sh.append(float(highs[i]))
+            if all(lows[i] <= lows[i - j] for j in range(1, window + 1)) and \
+               all(lows[i] <= lows[i + j] for j in range(1, window + 1)):
+                sl.append(float(lows[i]))
+        if len(sh) < 2 or len(sl) < 2:
+            return None
+        last_sh, prev_sh = sh[-1], sh[-2]
+        last_sl, prev_sl = sl[-1], sl[-2]
+        hh = last_sh > prev_sh
+        lh = last_sh < prev_sh
+        hl = last_sl > prev_sl
+        ll = last_sl < prev_sl
+        if hh and hl:
+            return {"event": "BOS BULLISH",
+                    "detail": f"swing high {prev_sh:.5g} → {last_sh:.5g} (HH) + HL at {last_sl:.5g} — uptrend intact",
+                    "hold":   f"above HL {last_sl:.5g}",
+                    "warning": f"CHoCH bearish if price closes below last HL ({last_sl:.5g})"}
+        if ll and lh:
+            return {"event": "BOS BEARISH",
+                    "detail": f"swing low {prev_sl:.5g} → {last_sl:.5g} (LL) + LH at {last_sh:.5g} — downtrend intact",
+                    "hold":   f"below LH {last_sh:.5g}",
+                    "warning": f"CHoCH bullish if price closes above last LH ({last_sh:.5g})"}
+        if lh and hl:
+            return {"event": "CHoCH BEARISH WARNING",
+                    "detail": f"first LH printed ({last_sh:.5g}) after uptrend — momentum fading",
+                    "hold":   f"above last HL {last_sl:.5g}",
+                    "warning": f"confirmed BOS bearish if price closes below HL ({last_sl:.5g})"}
+        if hh and ll:
+            return {"event": "CHoCH BULLISH WARNING",
+                    "detail": f"first HL printed ({last_sl:.5g}) after downtrend — momentum fading",
+                    "hold":   f"below last LH {last_sh:.5g}",
+                    "warning": f"confirmed BOS bullish if price closes above LH ({last_sh:.5g})"}
+        return {"event": "STRUCTURE UNCLEAR",
+                "detail": "mixed swing sequence — no dominant HH/HL or LH/LL direction",
+                "hold":   None,
+                "warning": "wait for a clear BOS before committing to a directional bias"}
+    except Exception:
+        return None
+
+
+def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zone=None):
     """
     Market brief optimised for one primary TF.
     primary_tf gets full 500-candle raw dump. All other TFs get rich text summaries (no raw rows).
@@ -3946,6 +4141,29 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h"):
                         lines.append(
                             f"MACD summary: histogram={_mh_now:+.5g} ({_mh_bias}, {_mh_dir}){_cross_note}"
                         )
+
+        # ── BOS / CHoCH structural label (primary TF) ─────────────────────
+        _bos = _bos_choch_label(primary_df)
+        if _bos:
+            lines.append(f"\nMARKET STRUCTURE ({primary_tf.upper()}) — most recent structural event:")
+            lines.append(f"  Event   : {_bos['event']} — {_bos['detail']}")
+            if _bos.get("hold"):
+                lines.append(f"  Holds   : structure valid while price stays {_bos['hold']}")
+            lines.append(f"  Warning : {_bos['warning']}")
+
+        # ── Zone dwell analysis (tells Chev how established the level is) ──
+        if confluence_zone is not None:
+            _atr_dwell = float(primary_df["ATR"].iloc[-1]) if "ATR" in primary_df.columns else None
+            _dwell = _zone_dwell_analysis(primary_df, confluence_zone, _atr_dwell)
+            if _dwell:
+                lines.append(f"\nZONE ANALYSIS (confluence at {confluence_zone:.5g}):")
+                lines.append(f"  Prior tests  : {_dwell['quality']}")
+                lines.append(f"  Current candle: {_dwell['candle_note']}")
+                lines.append(
+                    "  Context note : these are data points, not hard gates. A DOJI at an established level is "
+                    "still a valid setup — it calls for patience, not a skip. A first-visit level with a hammer "
+                    "can still be taken — it just has less prior confirmation. Weight accordingly."
+                )
 
         return "\n".join(lines)
 
@@ -5431,7 +5649,7 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
     # Full market data brief — primary TF gets full candles, others get rich summaries
     primary_tf = result.get("primary_tf", "1h")
     trade_type = result.get("trade_type", TF_TRADE_TYPE.get(primary_tf, "day"))
-    market_brief = _build_rich_market_brief(symbol, asset_type, primary_tf)
+    market_brief = _build_rich_market_brief(symbol, asset_type, primary_tf, confluence_zone=confluence_zone)
     context_prefix += market_brief + "\n\n"
     # Session + calendar context
     sessions     = _active_sessions()
@@ -5571,15 +5789,23 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
 
     msg = (
         f"⚡ OUTPUT FORMAT — READ FIRST:\n"
-        f"Your reply MUST follow this EXACT structure — nothing before POST:/SKIP:, nothing after REASONING::\n\n"
+        f"Your reply MUST follow this EXACT structure. POST: or SKIP: is the first word you write — no preamble.\n\n"
+        f"If TAKING the trade:\n"
         f"  POST: <your read in 15 words max>\n"
-        f"  REASONING: <full analysis — why this setup, what structure shows, what invalidates it. No word limit.>\n\n"
-        f"  OR:\n\n"
+        f"  4H STRUCTURE: <one sentence — trending/ranging, last BOS or CHoCH, last key level>\n"
+        f"  INVALIDATION: <exact price and candle condition that proves this trade wrong>\n"
+        f"  CONFIRMATION: <what the current candle at the entry level looks like right now>\n"
+        f"  TRADE: direction=..., entry=..., sl=..., tp=..., risk_pct=..., leverage=..., position_size_usd=..., tags=..., trade_type=...\n"
+        f"  REASONING: <full narrative — why this level, what structure supports it, what you're watching>\n\n"
+        f"If PASSING the trade:\n"
         f"  SKIP: <one sentence reason>\n"
-        f"  REASONING: <what you saw that made you pass — be specific about what was missing or wrong>\n\n"
-        f"REASONING is MANDATORY on every response — both POST and SKIP. Dexter will not log the trade without it.\n"
-        f"POST: summary stays 15 words. REASONING: is where you think out loud with no limit.\n"
-        f"No preamble. No intro. No headers. POST: or SKIP: is literally the first word you write.\n\n"
+        f"  WHAT WAS MISSING: <which criterion failed — 4H STRUCTURE context / INVALIDATION level / CONFIRMATION candle / confluence / other>\n"
+        f"  REASONING: <what you saw that made you pass — be specific, no generalities>\n\n"
+        f"MANDATORY RULES:\n"
+        f"  4H STRUCTURE, INVALIDATION, CONFIRMATION — all three required on every POST.\n"
+        f"  WHAT WAS MISSING — required on every SKIP.\n"
+        f"  REASONING — required on both POST and SKIP.\n"
+        f"  Dexter will not log the trade without all required fields.\n\n"
         f"Hey Chev, Dexter here with REAL computed numbers. I've given you the full market data above — candles, volume, all levels. Study it yourself and make your own read.\n\n"
         f"I've detected a confluence zone at {confluence_zone:.5f} with {result['count']} factor(s) aligning: {', '.join(result['reasons'])}.\n"
         f"{direction_hint}\n\n"
@@ -5706,10 +5932,13 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"    Use ms_4h when the 4H candle structure is a confluence, ms_1d for daily structure, ms_1h for 1H structure.\n"
         f"If anchors are missing for a tagged tool, it will not be drawn on the chart.\n"
         f"Example: TRADE: direction=long, entry=1.2340, sl=1.2280, tp=1.2500, ..., tags=sr_4h,fib_1h,rsi_1h, trade_type=day, sr_level=1.2300, fib_high=1.2650, fib_low=1.2100, rsi_div_t1=2024-06-01, rsi_div_t2=2024-06-15\n\n"
-        f"REASONING is REQUIRED — write it on the line immediately after TRADE: (or after SKIP:):\n"
-        f"  REASONING: <full analysis — why this setup, what the structure shows, what invalidates it, what you're watching. No word limit.>\n"
-        f"Dexter stores REASONING for every trade and uses it in post-mortems and learning sessions. Missing = blind spot.\n\n"
-        f"If not convinced: SKIP: <one sentence>, then REASONING: <what was wrong or missing>\n\n"
+        f"REMINDER — required fields after TRADE: line:\n"
+        f"  4H STRUCTURE: <4H trend context — one sentence>\n"
+        f"  INVALIDATION: <the specific price and candle that proves you wrong>\n"
+        f"  CONFIRMATION: <what the candle at the entry zone looks like right now>\n"
+        f"  REASONING: <full analysis — why this setup, what structure supports it, what you're watching. No word limit.>\n"
+        f"All four are required. Dexter stores them for post-mortems and learning sessions. Missing = blind spot.\n\n"
+        f"If not convinced: SKIP: <one sentence>, WHAT WAS MISSING: <which criterion failed>, REASONING: <be specific>\n\n"
         f"ACCOUNT & RISK STATUS:\n"
         f"  Balance: ${balance:.2f} (updates only when trades CLOSE at TP or SL)\n"
         f"  {heat_context}\n\n"
@@ -5824,7 +6053,7 @@ def parse_chev_reply(text):
             except (KeyError, ValueError):
                 result["trade"] = None
 
-        # Parse REASONING: line (may appear on any line after POST:/TRADE:)
+        # Parse REASONING: and structured fields (may appear on any line after POST:/TRADE:)
         reasoning = None
         for line in lines:
             s = line.strip()
@@ -5834,19 +6063,37 @@ def parse_chev_reply(text):
         if result["trade"] is not None and reasoning:
             result["trade"]["reasoning"] = reasoning
 
-            # Hard validation: SL/TP must be on the correct side of entry
-            if result["trade"]:
-                t = result["trade"]
-                _is_long = t["direction"] == "long"
-                _e, _sl, _tp = t["entry"], t["sl"], t["tp"]
-                _reject = None
-                if _is_long  and _sl >= _e:  _reject = f"LONG SL {_sl} must be BELOW entry {_e}"
-                if _is_long  and _tp <= _e:  _reject = f"LONG TP {_tp} must be ABOVE entry {_e}"
-                if not _is_long and _sl <= _e: _reject = f"SHORT SL {_sl} must be ABOVE entry {_e}"
-                if not _is_long and _tp >= _e: _reject = f"SHORT TP {_tp} must be BELOW entry {_e}"
-                if _reject:
-                    print(f"[{datetime.now()}] TRADE REJECTED — bad SL/TP: {_reject}")
-                    result["trade"] = None
+        # Parse the three mandatory structured analysis fields
+        for _field, _key in [("4H STRUCTURE:", "structure_4h"),
+                              ("INVALIDATION:", "invalidation"),
+                              ("CONFIRMATION:", "confirmation")]:
+            for line in lines:
+                s = line.strip()
+                if s.upper().startswith(_field.upper()):
+                    result[_key] = s.split(":", 1)[1].strip() if ":" in s else ""
+                    break
+
+        # Hard validation: SL/TP must be on the correct side of entry
+        if result["trade"]:
+            t = result["trade"]
+            _is_long = t["direction"] == "long"
+            _e, _sl, _tp = t["entry"], t["sl"], t["tp"]
+            _reject = None
+            if _is_long  and _sl >= _e:  _reject = f"LONG SL {_sl} must be BELOW entry {_e}"
+            if _is_long  and _tp <= _e:  _reject = f"LONG TP {_tp} must be ABOVE entry {_e}"
+            if not _is_long and _sl <= _e: _reject = f"SHORT SL {_sl} must be ABOVE entry {_e}"
+            if not _is_long and _tp >= _e: _reject = f"SHORT TP {_tp} must be BELOW entry {_e}"
+            if _reject:
+                print(f"[{datetime.now()}] TRADE REJECTED — bad SL/TP: {_reject}")
+                result["trade"] = None
+
+    # Parse WHAT WAS MISSING for SKIP responses
+    if not result["post"]:
+        for line in lines:
+            s = line.strip()
+            if s.upper().startswith("WHAT WAS MISSING:"):
+                result["what_was_missing"] = s.split(":", 1)[1].strip() if ":" in s else ""
+                break
 
     return result
 
@@ -6731,6 +6978,7 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
             if triggered:
                 trade["status"] = "OPEN"
                 trade["original_sl"] = trade.get("original_sl", trade["sl"])
+                trade["original_tp"] = trade.get("original_tp", trade["tp"])
                 margin = round(trade.get("position_size_usd", 0) / max(trade.get("leverage", 1), 1), 2)
                 trade["margin_reserved"] = margin
                 balance = get_balance(dashboard_ws)
@@ -6802,6 +7050,8 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
         # Store original SL once (before any trailing modifies it)
         if "original_sl" not in trade:
             trade["original_sl"] = trade["sl"] if not trade.get("sip_active") else trade["entry"]
+        if "original_tp" not in trade:
+            trade["original_tp"] = trade["tp"]
 
         orig_risk = abs(trade["entry"] - trade["original_sl"])
 
@@ -6810,6 +7060,61 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
             trade["sip_active"] = True
             trade["sip_price"]  = trade["sl"]
             print(f"[SIP] {trade['symbol']} SL {trade['sl']} crossed entry {trade['entry']} — SIP active, trade cannot lose.")
+
+        # ── Partial TP at 1R: auto-close 50% when live PnL reaches original risk amount ───
+        _risk_usd   = trade.get("risk_amount_usd", 0)
+        _orig_tp    = trade.get("original_tp", trade["tp"])
+        _orig_tp_rr = abs(_orig_tp - trade["entry"]) / orig_risk if orig_risk > 0 else 0
+        if (
+            _risk_usd > 0
+            and orig_risk > 0
+            and not trade.get("partial_done")       # only once
+            and not trade.get("sip_active")         # SIP = risk already managed structurally
+            and _orig_tp_rr > 1.05                  # skip if Chev set a tight TP (scalp <1R)
+            and live_pnl_dollars >= _risk_usd       # price moved 1R in our favour
+        ):
+            partial_pnl = round(live_pnl_dollars * 0.5, 2)
+            balance     = get_balance(dashboard_ws)
+            new_balance = round(balance + partial_pnl, 2)
+            set_balance(dashboard_ws, new_balance)
+            _cached_balance = new_balance
+            trade["position_size_usd"] = round(trade["position_size_usd"] * 0.5, 2)
+            trade["partial_done"]      = True
+            trade["partial_pnl"]       = partial_pnl
+            print(f"[PARTIAL TP] {trade['symbol']} {trade['direction'].upper()} — 1R hit, 50% closed at ${partial_pnl:+.2f} | Piggy bank: ${balance:.2f} → ${new_balance:.2f} | Remaining 50% now running")
+            _partial_entry = {
+                "ts":               datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "symbol":           trade["symbol"],
+                "asset_type":       trade.get("asset_type", "crypto"),
+                "direction":        trade["direction"],
+                "entry":            trade["entry"],
+                "sl":               trade["sl"],
+                "tp":               trade["tp"],
+                "exit_price":       price,
+                "pnl":              partial_pnl,
+                "outcome":          "PARTIAL_TP",
+                "close_type":       "PARTIAL_1R",
+                "tags":             trade.get("tags", ""),
+                "duration":         "partial",
+                "reasoning":        trade.get("reasoning", ""),
+                "analysis":         f"Auto partial close: 50% of {trade['symbol']} locked at 1R (${partial_pnl:+.2f}). Remaining 50% continues with current SL/TP.",
+                "r_multiple":       1.0,
+                "risk_amount_usd":  _risk_usd,
+                "position_size_usd": trade["position_size_usd"],
+                "leverage":         trade.get("leverage", 1),
+                "setup_grade":      trade.get("setup_grade", ""),
+                "session_quality":  trade.get("session_quality", ""),
+                "heat_at_entry":    trade.get("heat_at_entry", 0),
+                "chev_moves":       [],
+                "open_ts":          trade.get("open_ts", ""),
+            }
+            try:
+                _j = _load_journal()
+                _j.append(_partial_entry)
+                with open(JOURNAL_PATH, "w", encoding="utf-8") as _f:
+                    json.dump(_j, _f, indent=2)
+            except Exception as _pe:
+                print(f"[PARTIAL TP] Journal write failed: {_pe}")
 
         # ── Milestone alerts: 50% and 75% toward TP or SL ─────────────────────
         tp_range = abs(trade["tp"] - trade["entry"])
@@ -7431,10 +7736,17 @@ while True:
                             except Exception as _e:
                                 print(f"[Dexter] RSI div parse error ({td[_rdi_key]}): {_e}")
                     new_trade = log_new_trade(worksheet, dashboard_ws, result["symbol"], item["type"], parsed["trade"], result["current_price"], confluence_prices=conf_prices)
-                    new_trade["reasoning"]   = parsed["trade"].get("reasoning") or ""
-                    new_trade["opened_at"]   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    new_trade["original_sl"] = new_trade.get("sl", 0)
-                    new_trade["primary_tf"]  = primary_tf
+                    new_trade["reasoning"]      = parsed["trade"].get("reasoning") or ""
+                    new_trade["structure_4h"]  = parsed.get("structure_4h", "")
+                    new_trade["invalidation"]  = parsed.get("invalidation", "")
+                    new_trade["confirmation"]  = parsed.get("confirmation", "")
+                    new_trade["opened_at"]     = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    new_trade["original_sl"]   = new_trade.get("sl", 0)
+                    new_trade["original_tp"]   = new_trade.get("tp", 0)
+                    new_trade["primary_tf"]    = primary_tf
+                    # risk_amount_usd: dollars at risk based on balance at time of entry
+                    _bal_at_open = get_balance(dashboard_ws) or balance
+                    new_trade["risk_amount_usd"] = round(new_trade.get("risk_pct", 1.0) / 100 * _bal_at_open, 2)
                     _g, _      = _setup_grade(result, asset_type)
                     _, _sq     = _session_grade(asset_type)
                     _open_risk = [t for t in open_trades if t.get("status") == "OPEN"]
