@@ -5467,7 +5467,7 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         # TF quality multiplier — higher TF signals require fewer confluences because
         # each one is structurally more significant.  Lower TF signals need more confluences
         # to overcome the discount.  Same thresholds apply; the multiplier shifts effective difficulty.
-        _tf_mult = {"4h": 1.2, "1h": 1.0, "30m": 0.9, "15m": 0.8}.get(primary_tf, 1.0)
+        _tf_mult = {"4h": 1.2, "1h": 1.0, "30m": 0.9, "15m": 0.9}.get(primary_tf, 1.0)
         total_score = round(total_score * _tf_mult, 2)
         # Prefix forming reasons so Chev can see them but knows their status
         _form_reasons_labelled  = [f"[WATCH — not yet confirmed] {r}" for r in form_reasons]
@@ -6258,8 +6258,67 @@ def _build_management_brief(symbol, asset_type, primary_tf, direction, entry, tp
         return f"[Market snapshot unavailable: {e}]"
 
 
-def ask_chev_manage_trade(trade, current_price):
+def _trade_duration_str(trade):
+    """Return human-readable time elapsed since trade opened, e.g. '3h 12m'."""
+    try:
+        opened = datetime.strptime(trade.get("opened_at", ""), "%Y-%m-%d %H:%M:%S")
+        secs   = int((datetime.now() - opened).total_seconds())
+        h, m   = secs // 3600, (secs % 3600) // 60
+        return f"{h}h {m}m" if h > 0 else f"{m}m"
+    except Exception:
+        return "?"
+
+
+def _maybe_send_bos_alert(trade, current_price):
+    """Detect a new BOS/CHoCH on the trade's primary TF and, if unseen, fire a management message."""
+    try:
+        symbol     = trade["symbol"]
+        asset_type = next((w["type"] for w in WATCHLIST if w["symbol"] == symbol), "crypto")
+        primary_tf = trade.get("primary_tf", "1h")
+        df = fetch_candles(symbol, asset_type, primary_tf, limit=100)
+        if df is None or len(df) < 25:
+            return
+        bos = _bos_choch_label(df)
+        if not bos or bos["event"] == "STRUCTURE UNCLEAR":
+            return
+
+        # One alert per unique structural event (event type + price level to 4 sig figs)
+        fingerprint = f"{bos['event']}_{round(current_price, 4)}"
+        if "bos_alerts_sent" not in trade:
+            trade["bos_alerts_sent"] = set()
+        if fingerprint in trade["bos_alerts_sent"]:
+            return
+        trade["bos_alerts_sent"].add(fingerprint)
+
+        is_warn = "WARNING" in bos["event"]
+        urgency = "⚠ STRUCTURE CHANGING" if is_warn else "⚠ STRUCTURE BREAK DETECTED"
+        bos_paragraph = (
+            f"{urgency} — {bos['event']}\n"
+            f"  What happened : {bos['detail']}\n"
+            f"  Still valid if: price stays {bos['hold']}\n" if bos.get("hold") else ""
+            f"  Watch for     : {bos['warning']}\n\n"
+            f"This structural event was NOT present when you entered this trade. It does not\n"
+            f"automatically invalidate your position — but review whether it changes your premise.\n"
+            f"If your INVALIDATION condition has been met, that is your signal to act.\n"
+        )
+        print(f"[BOS Alert] {symbol} {bos['event']} — firing management message")
+        threading.Thread(
+            target=lambda t=trade, p=current_price, bp=bos_paragraph: ask_chev_manage_trade(t, p, bos_paragraph=bp),
+            daemon=True
+        ).start()
+    except Exception as e:
+        print(f"[BOS Alert] Error for {trade.get('symbol','?')}: {e}")
+
+
+def ask_chev_manage_trade(trade, current_price, bos_paragraph=None):
     """Ask Chev to manage an open trade — trail SL/SIP, close, or hold."""
+
+    # ── Cooldown: max one ask per 30 min. BOS alerts always bypass. ───
+    _now_ts = time.time()
+    if bos_paragraph is None and _now_ts - trade.get("last_management_at", 0) < 30 * 60:
+        return None
+    trade["last_management_at"] = _now_ts
+
     is_long    = trade["direction"] == "long"
     sip_active = trade.get("sip_active") or _is_sip(trade)
     orig_sl    = trade.get("original_sl", trade["sl"] if not sip_active else trade["entry"])
@@ -6271,6 +6330,50 @@ def ask_chev_manage_trade(trade, current_price):
     primary_tf = trade.get("primary_tf", "1h")
     asset_type = next((w["type"] for w in WATCHLIST if w["symbol"] == symbol), "crypto")
     market_brief = _build_management_brief(symbol, asset_type, primary_tf, trade["direction"], trade["entry"], trade["tp"])
+
+    # ── Build "then vs now" context block ─────────────────────────────
+    _opened_at  = trade.get("opened_at", "?")
+    _duration   = _trade_duration_str(trade)
+    _now_str    = datetime.now().strftime("%Y-%m-%d %H:%M")
+    _snap       = trade.get("entry_brief_snapshot", "")
+    _snap_time  = trade.get("entry_snapshot_time", _opened_at)
+    _last_dec   = trade.get("last_chev_decision", "")
+    _last_price = trade.get("last_decision_price", "")
+    _last_when  = trade.get("last_decision_time", "")
+    _floor_lbl  = "Profit floor (SIP)" if sip_active else "Stop Loss"
+
+    _context = ""
+    if bos_paragraph:
+        _context += f"{bos_paragraph}\n"
+
+    _context += (
+        f"══════════════════════════════════════════\n"
+        f"TRADE CONTEXT — {symbol} {trade['direction'].upper()}\n"
+        f"Opened: {_opened_at}  |  Now: {_now_str}  |  Running: {_duration}\n"
+        f"══════════════════════════════════════════\n\n"
+    )
+    if _last_dec:
+        _context += f"YOUR LAST DECISION: {_last_dec} (price was {_last_price} at {_last_when})\n\n"
+
+    _context += (
+        f"ORIGINAL ENTRY:\n"
+        f"  Entry price       : {trade['entry']}\n"
+        f"  {_floor_lbl:20}: {trade['sl']}\n"
+        f"  Original TP       : {trade.get('original_tp', trade['tp'])}\n"
+        f"  Current TP        : {trade['tp']}\n"
+        f"  Entry tags        : {trade.get('tags', 'n/a')}\n\n"
+        f"WHY YOU ENTERED (your words at open):\n"
+        f"  POST        : {(trade.get('reasoning') or 'not recorded')[:150]}\n"
+        f"  4H STRUCTURE: {trade.get('structure_4h') or 'not recorded'}\n"
+        f"  INVALIDATION: {trade.get('invalidation') or 'not recorded'}\n"
+        f"  CONFIRMATION: {trade.get('confirmation') or 'not recorded'}\n\n"
+    )
+    if _snap:
+        _context += (
+            f"─── MARKET AT ENTRY ({_snap_time}) ───────────────────────\n"
+            f"{_snap}\n\n"
+            f"─── MARKET NOW ({_now_str}) — {_duration} later ──────────\n"
+        )
 
     tool_instructions = (
         f"TOOLS — call these before deciding. You have NO memory of this trade's original setup.\n"
@@ -6295,6 +6398,7 @@ def ask_chev_manage_trade(trade, current_price):
     if sip_active:
         msg = (
             f"Dexter checkpoint — {symbol} {trade['direction'].upper()} — PROFIT FLOOR ACTIVE.\n\n"
+            f"{_context}"
             f"{market_brief}\n\n"
             f"CURRENT STATUS:\n"
             f"  Entry:          {trade['entry']}\n"
@@ -6329,6 +6433,7 @@ def ask_chev_manage_trade(trade, current_price):
         halfway_to_tp = round(trade["entry"] + (trade["tp"] - trade["entry"]) * 0.5, 6)
         msg = (
             f"Dexter checkpoint — {symbol} {trade['direction'].upper()} — trade is running.\n\n"
+            f"{_context}"
             f"{market_brief}\n\n"
             f"CURRENT STATUS:\n"
             f"  Entry:         {trade['entry']}\n"
@@ -6369,7 +6474,13 @@ def ask_chev_manage_trade(trade, current_price):
         )
     playbook_text = _load_playbook(asset_type)
     content = (f"=== YOUR TRADING PLAYBOOK ===\n{playbook_text}\n\n" if playbook_text else "") + msg
-    return _call_chev([{"role": "user", "content": content}], timeout=60)
+    reply = _call_chev([{"role": "user", "content": content}], timeout=60)
+    # Store Chev's decision so the next management brief can quote it back to him
+    if reply:
+        trade["last_chev_decision"]  = reply.strip()[:80]
+        trade["last_decision_price"] = round(current_price, 5)
+        trade["last_decision_time"]  = datetime.now().strftime("%H:%M")
+    return reply
 
 
 def send_telegram_alert(message):
@@ -7195,7 +7306,7 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
                     print(f"[{datetime.now()}] {trade['symbol']} {direction_label} {milestone}% to TP — Chev reviewing")
                     # Call Chev at both 50% (SIP evaluation) and 75% (trail aggressively)
                     threading.Thread(
-                        target=lambda t=dict(trade), p=price: ask_chev_manage_trade(t, p),
+                        target=lambda t=trade, p=price: ask_chev_manage_trade(t, p),
                         daemon=True
                     ).start()
 
@@ -7210,7 +7321,7 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
                     print(f"[{datetime.now()}] {trade['symbol']} {direction_label} {milestone}% to {floor_label} — Chev reviewing")
                     if milestone == 75:
                         threading.Thread(
-                            target=lambda t=dict(trade), p=price: ask_chev_manage_trade(t, p),
+                            target=lambda t=trade, p=price: ask_chev_manage_trade(t, p),
                             daemon=True
                         ).start()
 
@@ -7300,6 +7411,9 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
 
                 except (ValueError, IndexError) as e:
                     print(f"[{datetime.now()}] Couldn't parse Chev's TRAIL reply: {reply} — {e}")
+
+        # BOS/CHoCH structural alert — fires a management message if new structure event detected
+        _maybe_send_bos_alert(trade, price)
 
         still_open.append(trade)
 
@@ -7838,6 +7952,16 @@ while True:
                         _cached_balance = round(bal_before - margin, 2)
                         print(f"[Dexter] {new_trade['symbol']} OPEN ({primary_tf} {result.get('trade_type','day')}) | Margin: ${margin:.2f} | Balance: ${bal_before:.2f} -> ${_cached_balance:.2f}")
                     open_trades.append(new_trade)
+                    # Snapshot market state at entry for "then vs now" management context
+                    try:
+                        _snap_brief = _build_management_brief(
+                            new_trade["symbol"], item["type"], primary_tf,
+                            new_trade["direction"], new_trade["entry"], new_trade["tp"]
+                        )
+                        new_trade["entry_brief_snapshot"] = _snap_brief
+                        new_trade["entry_snapshot_time"]  = new_trade.get("opened_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    except Exception as _se:
+                        print(f"[Entry snapshot] Failed for {new_trade['symbol']}: {_se}")
                     # Performance Engine: link this trade to the top hypothesis
                     try:
                         _perf_survey = result.get("survey")
