@@ -1482,6 +1482,7 @@ _ESCALATION_COOLDOWN   = 600   # 10 min cooldown after SKIP or malformed reply
 _POST_COOLDOWN         = 14400 # 4 hour cooldown after a POST (trade is live — don't re-hammer same pair)
 _force_closed_rows: set = set()  # row numbers force-closed by user; price thread skips these
 _CHEV_DECISIONS_LOG = r"C:\ChevTools\chev_decisions.jsonl"  # one JSON-line per Chev decision
+_recent_losses: list = []  # rolling store of loss fingerprints for confluence re-entry cooldown
 
 
 def _log_chev_decision(symbol, primary_tf, dexter_score, dexter_reasons, decision, reason, regime_4h=None):
@@ -5650,6 +5651,71 @@ def _setup_grade(result, asset_type):
     return grade, {"B": 0.75, "A": 1.5, "A+": 2.5}[grade]
 
 
+def _record_loss_for_cooldown(trade):
+    """Store a loss fingerprint so the confluence re-entry check can warn on repeat setups."""
+    global _recent_losses
+    try:
+        tags = set(t.strip().lower() for t in (trade.get("tags") or "").split(",") if t.strip())
+        _recent_losses.append({
+            "symbol":    trade["symbol"],
+            "direction": trade.get("direction", ""),
+            "entry":     float(trade.get("entry", 0)),
+            "tags":      tags,
+            "atr":       float(trade.get("atr_at_entry") or trade.get("atr") or 0),
+            "closed_at": time.time(),
+        })
+        _recent_losses[:] = _recent_losses[-30:]  # keep last 30 losses
+    except Exception:
+        pass
+
+
+def _check_confluence_pattern(symbol, direction, proposed_entry, proposed_tags_str, current_atr):
+    """
+    Option A+C combined re-entry check.
+    C — same price level (within 0.5 ATR of a recent losing entry).
+    A — same reasoning (≥2 overlapping tags with the losing trade).
+    Both together = strong PATTERN ALERT. Either alone = softer note.
+    Returns a list of warning strings (empty = clean).
+    """
+    warnings = []
+    cutoff = time.time() - 2 * 3600  # 2-hour look-back window
+    proposed_tags = set(t.strip().lower() for t in proposed_tags_str.split(",") if t.strip())
+
+    for loss in _recent_losses:
+        if loss["symbol"] != symbol or loss["direction"] != direction:
+            continue
+        if loss["closed_at"] < cutoff:
+            continue
+
+        atr_ref    = current_atr or loss["atr"] or abs(proposed_entry * 0.005)
+        same_level = abs(proposed_entry - loss["entry"]) <= 0.5 * atr_ref
+        shared     = loss["tags"] & proposed_tags
+        same_logic = len(shared) >= 2
+        ago        = int((time.time() - loss["closed_at"]) / 60)
+
+        if same_level and same_logic:
+            warnings.append(
+                f"⚠ PATTERN ALERT — {ago}m ago this exact setup FAILED on {symbol} {direction.upper()}.\n"
+                f"  Failed entry  : {loss['entry']:.5g}  (current proposal within 0.5 ATR)\n"
+                f"  Shared tags   : {', '.join(sorted(shared))} — same reasoning as the losing trade\n"
+                f"  Action        : require at least ONE additional confluence not present in the losing trade\n"
+                f"                  before entering. Same level + same logic = high repeat-mistake risk."
+            )
+        elif same_level:
+            warnings.append(
+                f"ℹ LEVEL NOTE — {ago}m ago a loss occurred near this price ({loss['entry']:.5g}) on {symbol} {direction.upper()}.\n"
+                f"  Different confluences this time — approach with awareness. Level has rejected once recently."
+            )
+        elif same_logic:
+            warnings.append(
+                f"ℹ LOGIC NOTE — {ago}m ago a {symbol} {direction.upper()} trade with similar confluences "
+                f"({', '.join(sorted(shared))}) closed at a loss at a different price level.\n"
+                f"  This may be a genuinely different setup — use your judgement."
+            )
+
+    return warnings
+
+
 def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
     global _chev_online
     symbol = result["symbol"]
@@ -5708,6 +5774,17 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         )
     else:
         context_prefix += "=== YOUR CURRENT OPEN POSITIONS: none ===\n\n"
+
+    # Confluence re-entry pattern check (A+C) — warn if same level + same logic failed recently
+    _pat_warnings = _check_confluence_pattern(
+        symbol, result.get("direction", ""), confluence_zone or 0,
+        result.get("tags", ""), result.get("atr") or 0
+    )
+    if _pat_warnings:
+        context_prefix += "=== RECENT LOSS PATTERN WARNING ===\n"
+        for _w in _pat_warnings:
+            context_prefix += _w + "\n"
+        context_prefix += "\n"
 
     # Full market data brief — primary TF gets full candles, others get rich summaries
     primary_tf = result.get("primary_tf", "1h")
@@ -7203,6 +7280,7 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
                 close_type = "SIP_HIT"
             else:
                 close_type = "SL_HIT"
+                _record_loss_for_cooldown(trade)  # flag for confluence re-entry check
             balance = get_balance(dashboard_ws)
             margin_to_return = trade.get("margin_reserved", 0)
             new_balance = round(balance + margin_to_return + exit_pnl, 2)
@@ -7319,16 +7397,15 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
                     trade["milestones_hit"].add(tag)
                     direction_label = "long" if is_long else "short"
                     print(f"[{datetime.now()}] {trade['symbol']} {direction_label} {milestone}% to {floor_label} — Chev reviewing")
-                    if milestone == 75:
-                        threading.Thread(
-                            target=lambda t=trade, p=price: ask_chev_manage_trade(t, p),
-                            daemon=True
-                        ).start()
+                    threading.Thread(
+                        target=lambda t=trade, p=price: ask_chev_manage_trade(t, p),
+                        daemon=True
+                    ).start()
 
-        # Ask Chev to manage the trade only when price has moved 0.5R since the last check
+        # Ask Chev to manage swing trades when price has moved 0.5R (scalp/day rely on milestones)
         last_trail_price = trade.get("last_trail_price", trade["entry"])
         price_delta = abs(price - last_trail_price)
-        if move_pct > 0 and orig_risk > 0 and price_delta >= 0.5 * orig_risk:
+        if move_pct > 0 and orig_risk > 0 and price_delta >= 0.5 * orig_risk and trade.get("trade_type") == "swing":
             trade["last_trail_price"] = price
             reply = ask_chev_manage_trade(trade, price)
             reply_upper = (reply or "").strip().upper()
@@ -7336,6 +7413,8 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
             if reply_upper.startswith("CLOSE"):
                 outcome = "WIN" if live_pnl_dollars > 0 else "LOSS"
                 close_type = "CHEV_CLOSE"
+                if outcome == "LOSS":
+                    _record_loss_for_cooldown(trade)  # flag for confluence re-entry check
                 balance = get_balance(dashboard_ws)
                 margin_to_return = trade.get("margin_reserved", 0)
                 new_balance = round(balance + margin_to_return + live_pnl_dollars, 2)
@@ -7924,6 +8003,7 @@ while True:
                     # risk_amount_usd: dollars at risk based on balance at time of entry
                     _bal_at_open = get_balance(dashboard_ws) or balance
                     new_trade["risk_amount_usd"] = round(new_trade.get("risk_pct", 1.0) / 100 * _bal_at_open, 2)
+                    new_trade["atr_at_entry"]    = result.get("atr", 0)
                     _g, _      = _setup_grade(result, asset_type)
                     _, _sq     = _session_grade(asset_type)
                     _open_risk = [t for t in open_trades if t.get("status") == "OPEN"]
