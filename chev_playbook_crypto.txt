@@ -3,9 +3,16 @@ Last updated: 2026-07-03 18:23:17 | Based on 48 CRYPTO trades
 ========================================
 
 ### CONFLUENCE CONDITIONS
-- The combination of Fibonacci confluence (fib_1h), EMA crossover (ema_15m), divergence (dv), and Bollinger Bands squeeze (bbsq) has a 100% win rate, indicating strong signal reliability.
+- The combination of Fibonacci confluence (fib_1h), EMA crossover (ema_15m), and divergence (dv) won every trade seen so far, but that's a handful of trades under the pre-recalibration scoring — tentative, small-sample, a lead to keep watching, not a proven edge yet.
 - RSI divergence (rsi_form_1h) often fails as a standalone indicator in setups without additional confluence points like S/R levels or EMA crosses, showing high noise to signal ratio.
 - Golden pocket (gp), Fibonacci retracement (fib_1h), and 4-hour support/resistance (sr_4h) together have mixed results; gp alone adds marginal value unless paired with RSI divergence and clear market structure.
+
+### TRENDING MARKET BEHAVIOUR — CRITICAL
+- In a confirmed uptrend (4H making HH/HL, net move > +5%), resistance levels are CONTINUATION ZONES. The market is expected to break them, not reverse from them. Shorting resistance in an uptrend is the single lowest-probability trade in crypto — historical win rate < 15%.
+- In a confirmed downtrend (4H making LH/LL, net move < -5%), support levels are CONTINUATION ZONES. The market is expected to break them. Longing support in a downtrend fails ~85% of the time.
+- The correct response in a STRONG UPTREND is: wait for a dip to a higher low support → go LONG. Not: short every resistance.
+- Counter-trend trades (short in uptrend / long in downtrend) require ALL of: (1) A+ score ≥ 1.5× the normal threshold (crypto = 15), (2) confirmed RSI divergence — not forming, (3) explicit 4H BOS or CHoCH proving reversal. Any one missing → SKIP.
+- Dexter will show you a '4H Macro Trend Context' block at the top of every market brief. Read it first, before looking at individual levels.
 
 ### MARKET STRUCTURE RULES
 - High-quality setups occur in trending markets where confluence includes hidden bullish/bearish divergences and strong structural levels, suggesting a directional bias.
@@ -14,7 +21,7 @@ Last updated: 2026-07-03 18:23:17 | Based on 48 CRYPTO trades
 
 ### ENTRY QUALITY STANDARDS
 - High-conviction entries are characterized by strong confluence at structural levels like Fibonacci golden pockets (gp) and clear support/resistance on the 4-hour chart.
-- Winners often have additional confirmatory signals like EMA crossovers, Bollinger Bands squeeze, or RSI divergence, while losers lack these confirming factors despite initial good indicators.
+- Winners often have additional confirmatory signals like EMA crossovers, RSI divergence, or volume at the level, while losers lack these confirming factors despite initial good indicators — a squeeze is a timing/volatility warning under current rules, not a confluence.
 - Marginal entries typically rely heavily on short-term confluences without long-term structural support, leading to premature stop-outs due to market noise.
 
 ### TRADE MANAGEMENT PATTERNS

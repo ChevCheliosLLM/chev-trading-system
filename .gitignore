@@ -25,7 +25,18 @@ performance.jsonl
 chev_journal.json
 chev_decisions.jsonl
 jane_journal.json
+labels_open.jsonl
+labels_closed.jsonl
+labels_discovery.json
+daily_risk.json
 *.log
+
+# ─── Local backups / scratch ─────────────────────────────────────────────────
+*.bak
+*.bak-*
+
+# ─── Third-party tools downloaded locally, not part of this project ─────────
+scrcpy-win64-v4.0/
 
 # ─── Binaries / executables ──────────────────────────────────────────────────
 *.exe

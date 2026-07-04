@@ -9,7 +9,7 @@ Last updated: 2026-07-02 08:58:20 | Based on 60 Chev + 2 Jane closed trades
 
 ### MARKET STRUCTURE RULES
 - Trend context improves setup quality when there is a clear directional bias (e.g., head & shoulders breakout) supported by multiple technical indicators.
-- Confidence in reaching TP increases when setups align with strong structural support/resistance and are confirmed by recent price action, such as EMA crossovers or Bollinger Bands squeezes.
+- Confidence in reaching TP increases when setups align with strong structural support/resistance and are confirmed by recent price action, such as EMA crossovers or volume expansion at the level.
 - High-quality setups often show robust market sentiment through high volume spikes at key levels or confluence of multiple bullish/bearish signals.
 
 ### ENTRY QUALITY STANDARDS

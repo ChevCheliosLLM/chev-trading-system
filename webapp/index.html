@@ -2359,9 +2359,6 @@
       { symbol: 'PEPEUSDT', label: 'PEPE', icon: 'pepe', type: 'crypto' },
       { symbol: 'ZECUSDT',  label: 'ZEC',  icon: 'zec',  type: 'crypto' },
       { symbol: 'UNIUSDT',  label: 'UNI',  icon: 'uni',  type: 'crypto' },
-      { symbol: 'HYPEUSDT', label: 'HYPE', icon: 'hype', type: 'crypto' },
-      { symbol: 'RAINUSDT', label: 'RAIN', icon: 'rain', type: 'crypto' },
-      { symbol: 'LEOUSDT',  label: 'LEO',  icon: 'leo',  type: 'crypto' },
     ],
     forex: [
       { symbol: 'EUR/USD', label: 'EUR/USD', type: 'forex' },
@@ -2399,12 +2396,11 @@
       { symbol: 'POET',  label: 'POET',  type: 'stock' },
       { symbol: 'TE',    label: 'TE',    type: 'stock' },
       { symbol: 'NVTS',  label: 'NVTS',  type: 'stock' },
-      { symbol: 'QUBY',  label: 'QUBY',  type: 'stock' },
     ],
   };
 
   const GROUPS_FB_URL = `${FIREBASE_BASE}/watchlist/groups.json`;
-  const GROUPS_VERSION = '2';  // bump when DEFAULT_GROUPS changes — forces reset on old clients
+  const GROUPS_VERSION = '3';  // bump when DEFAULT_GROUPS changes — forces reset on old clients
   function loadGroups() {
     const saved = localStorage.getItem('chevWatchlistGroups');
     const ver   = localStorage.getItem('chevWatchlistGroupsVer');

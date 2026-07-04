@@ -1,6 +1,14 @@
 ================================================================================
 CHEV CHELIOS PROJECT — AI HANDOFF DOCUMENT
-Generated: 2026-07-02  (updated from 2026-06-30)
+Generated: 2026-07-04  (updated: escalation pipeline overhaul, derivatives layer,
+trade forensics, playbook guardrails — EXPLORATION MODE currently ACTIVE, see below)
+================================================================================
+
+*** EXPLORATION_MODE = True RIGHT NOW — READ THIS FIRST ***
+Dexter is currently running with a lowered, temporary paper-trading entry bar so the
+learning loops get data to learn from (escalation volume was near-zero at the normal
+threshold). Everything about this is reversible from ONE constant. Full detail in the
+"EXPLORATION MODE" section below — read it before touching any threshold code.
 ================================================================================
 
 ## WHAT THIS PROJECT IS
@@ -31,7 +39,18 @@ A fully local, private AI trading terminal built for one user (Kev). Three parts
 
 C:\ChevTools\dexter.py              — Main bot + Flask server (port 8080)
 C:\ChevTools\engines.py             — Price mathematics (SR, Fib, RSI, pivots)
+C:\ChevTools\labeller.py            — The Examiner: triple-barrier labelling + meta-labelling
+C:\ChevTools\risk_gauntlet.py       — Pre-trade risk validation (ATR SL, R:R, position cap)
+C:\ChevTools\honest_sim.py          — Candle-true exit sim, real costs, daily circuit breaker (Steps 1-2 done)
+C:\ChevTools\derivs.py              — Binance funding rate + OI trend scoring (crypto only, cached 5min)
+C:\ChevTools\trade_forensics.py     — Post-trade MAE/MFE/RSI path attribution (pure functions, 19/19 tests)
+C:\ChevTools\daily_risk.json        — Circuit breaker state (today's accumulated R). Created by Step 4, not yet built.
 C:\ChevTools\chart_drawer.py        — Open WebUI tool (copy-paste into tool editor)
+C:\ChevTools\Chev Prompt            — Chev's Open WebUI system prompt (plain text, no extension, no
+                                       underscore in the filename — despite being referred to as
+                                       "Chev_Prompt" in some task briefs). Editing this file changes
+                                       NOTHING until the content is manually pasted into Open WebUI's
+                                       model system prompt editor. Not auto-loaded by anything.
 C:\ChevTools\telegram_listener.py   — Jane's Telegram signal listener
 C:\ChevTools\webapp\index.html      — Web terminal (single HTML file, ~7000+ lines)
 C:\ChevTools\webapp\monitor.html    — Live trade monitor (simpler, mobile-friendly)
@@ -40,8 +59,21 @@ C:\ChevTools\webapp\manifest.json   — PWA manifest (Add to Home Screen)
 C:\ChevTools\webapp\sw.js           — PWA service worker
 C:\ChevTools\google_credentials.json — Google service account (NEVER commit to GitHub)
 C:\ChevTools\chev_journal.json      — Chev's trade history
-C:\ChevTools\chev_playbook.txt      — Auto-updated playbook from learning sessions
+C:\ChevTools\chev_playbook_crypto.txt  — Auto-updated playbook (crypto)
+C:\ChevTools\chev_playbook_forex.txt   — Auto-updated playbook (forex)
+C:\ChevTools\chev_playbook_stocks.txt  — Auto-updated playbook (stocks)
+C:\ChevTools\chev_playbook.txt         — LEGACY generic playbook, no asset suffix. FROZEN: the
+                                          learning session (_run_learning_session) is only ever
+                                          called with asset_type in {forex,crypto,stocks} now, so
+                                          this file is never rewritten — but it is NOT dead: still
+                                          actively read by the Firebase monitor snapshot push and by
+                                          _ask_chev_about_jane_trade() for Jane's advisory prompt.
+                                          Kev's call whether to archive it — do not delete/rename.
 C:\ChevTools\jane_journal.json      — Jane's trade log
+C:\ChevTools\labels_open.jsonl      — Examiner: open/pending shadow records
+C:\ChevTools\labels_closed.jsonl    — Examiner: resolved shadow records (permanent log)
+C:\ChevTools\labels_discovery.json  — Examiner: discovery timestamps (written once, never revised)
+C:\ChevTools\label_report.txt       — Examiner: latest full report output
 C:\ChevTools\handoff.txt            — This file
 C:\ChevTools\ALEJANDRO_GUIDE.html   — Visual onboarding guide for Alejandro
 C:\ChevMonitorApp\                  — React Native mobile app (no node_modules in backup)
@@ -57,9 +89,26 @@ Open WebUI API key: sk-91bd167cca0142c983379ebe27b4e621
 ## WATCHLIST
 ================================================================================
 
-Crypto:  BTCUSDT, ETHUSDT, XRPUSDT, XLMUSDT, ADAUSDT, SOLUSDT  (Binance)
-Forex:   EUR/USD, GBP/USD, USD/JPY, AUD/USD                     (yfinance + Twelve Data)
-Stocks:  NVDA, TSLA, AMZN, AMD                                   (yfinance + Twelve Data)
+Crypto (Binance):
+  BTCUSDT, ETHUSDT, XRPUSDT, XLMUSDT, ADAUSDT, SOLUSDT,
+  BNBUSDT, TRXUSDT, DOGEUSDT, LINKUSDT, SUIUSDT, AVAXUSDT,
+  NEARUSDT, DOTUSDT, AAVEUSDT, PEPEUSDT, ZECUSDT, UNIUSDT
+
+Forex (Twelve Data):
+  EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD, USD/CHF, NZD/USD, USD/CNH
+
+Stocks (Twelve Data / Finnhub):
+  NVDA, TSLA, AMZN, AMD, META, MSFT, AAPL, GOOGL, NFLX, BABA,
+  MRVL, NOW, HOOD, MARA, MRNA, BAC, GME, AMC, SQQQ, QQQ,
+  ASTS, FCEL, POET, TE, NVTS
+
+CONFIRMED NOT AVAILABLE (verified 2026-07-04 via Binance API + Yahoo Finance):
+  HYPEUSDT — not on Binance (Hyperliquid DEX token only)
+  RAINUSDT — not on Binance
+  LEOUSDT  — Bitfinex-only token, not on Binance
+  QUBY     — not a real stock ticker (404 on Yahoo Finance)
+  All four removed from dexter.py WATCHLIST, COINGECKO_IDS, and webapp/index.html.
+  GROUPS_VERSION bumped to '3' (browser watchlist cache auto-resets on next load).
 
 ================================================================================
 ## HOW DEXTER WORKS
@@ -81,31 +130,310 @@ Chev replies in strict format:
          sr_level=X, fib_high=X, fib_low=X, vp_start=YYYY-MM-DD,
          rsi_div_t1=YYYY-MM-DD, rsi_div_t2=YYYY-MM-DD
   REASONING: <full analysis, no word limit>
+     Must include: 4H STRUCTURE / INVALIDATION / CONFIRMATION blocks
 
-  OR: SKIP: <one sentence why>
+  OR: SKIP: <one sentence why — must state what was missing>
 
 Dexter parses the TRADE: line, validates confluence score, checks SL direction,
 logs to Google Sheets, and monitors until TP/SL/expiry.
 
+Gate order (2026-07-04 — a whole pre-Chev stage was added; see CONFLUENCE SCORING
+SYSTEM → TRADEABILITY PRE-GATE for full detail):
+  0. TRADEABILITY PRE-GATE (BEFORE Chev is asked): trade threshold, struct pre-gate,
+     distance-from-level, directional-conflict — all shadow-logged, all skip Chev
+     entirely if failed
+  1. Format check (POST:/SKIP: present) — retry once if missing
+  2. Post-Chev hard score gate (Dexter's own score vs _active_thresholds(), independent
+     of anything Chev tagged — rejects if Chev somehow posts on a setup that shouldn't
+     have reached him)
+  3. STRUCT_REJECT gate (sr_score ≥ 2 OR vp_score ≥ 2 required) — legacy, redundant with
+     the pre-gate's struct check on purpose, both measured
+  4. risk_gauntlet validation (ATR SL sanity, R:R ≥ 2.0, position size cap)
+  5. Google Sheets log + monitoring loop
+
 ================================================================================
-## CONFLUENCE SCORING SYSTEM
+## CONFLUENCE SCORING SYSTEM (recalibrated 2026-07-03, thresholds reworked 2026-07-04)
 ================================================================================
 
-Minimum score to open a trade: crypto=10, forex/stock=7
+NORMAL minimum score to open a trade: crypto=10, forex=8, stock=8
+EXPLORATION minimum (currently ACTIVE — see EXPLORATION MODE section): crypto=7, forex=6, stock=6
 
-Tags and their scores:
-  sr_4h=4  sr_1h=3  sr_30m=2  sr_15m=1
-  fib_4h=3  fib_1h=2  fib_30m=2  fib_15m=1
-  rsi_4h=4  rsi_1h=4  rsi_30m=3  rsi_15m=2
-  ema_4h=3  ema_1h=2  ema_30m=1  ema_15m=1
-  bb_4h=3   bb_1h=2   bb_30m=2   bb_15m=1
-  tri_4h=3  tri_1h=2  tri_30m=1  tri_15m=1
-  gp=4  (Golden Pocket 0.618-0.65 fib zone)
-  vp=3  (Volume Profile POC/VAH/VAL)
-  vw=3  (VWAP)
-  dv=3  (Divergence non-RSI)
-  cp=1  (Candle Pattern — confirmation only)
-  ms_1d=5  ms_4h=4  ms_1h=3  ms_30m=2  ms_15m=1  (Market Structure)
+Both sets of numbers live as constants near the top of dexter.py
+(CONFLUENCE_THRESHOLD_CRYPTO/FOREX/STOCK and EXPLORATION_THRESHOLD_CRYPTO/FOREX/STOCK).
+EVERY gate that checks "is this score/distance good enough" MUST read them through the
+single helper _active_thresholds(asset_type) — never the raw constants directly — so
+exploration mode can never be half-applied across gates. Three call sites currently use
+it: the TRADEABILITY PRE-GATE, the post-Chev hard score gate, and the "Score X vs
+threshold Y" line shown to Chev in ask_chev_to_judge. _setup_grade() deliberately does
+NOT use the helper — grading always uses the FULL normal threshold regardless of
+exploration mode, because the grade (and its suggested risk %) is the real risk control
+during the exploration phase. See EXPLORATION MODE section for why this matters.
+
+Score = raw_score × TF_multiplier. TF multipliers:
+  4H × 1.2   |   1H × 1.0   |   30M × 0.9   |   15M × 0.8
+
+Raw scores by signal type:
+  SR (multi-touch, ≥3x):   3pt  — exposed as sr_score
+  SR (single/double, 1-2x): 2pt
+    NOTE (2026-07-04): if BOTH a resistance and support zone are within the 1.5% window,
+    only the NEARER one scores — price sandwiched mid-range no longer collects points
+    for both sides (that was chop, not confluence).
+  Golden Pocket (GP):       3pt
+  Volume Profile (VP POC/VAH/VAL): 3pt — exposed as vp_score
+    NOTE (2026-07-04): VP now respects the underlying auction anchor's own validation
+    stamps (from _validate_anchor). If the anchor is no longer "active" (price broke back
+    through it), that timeframe's VP is skipped entirely. If active but NOT "confirmed"
+    (no follow-through yet), the VP still scores but at HALF points, and the reason string
+    gets an "unconfirmed-anchor," note — e.g. "VP POC 4h (0.12% away ≤0.40% prox,
+    unconfirmed-anchor, 1.5pt)".
+  RSI divergence confirmed: 3pt (4pt if both regular + hidden)
+    NOTE (2026-07-04): only the two HIGHEST-scoring divergences that share the SAME bias
+    (bull or bear) can both score — a Regular Bullish and a Hidden Bearish no longer both
+    add points to one setup (that was contradiction counted as confluence; caught live on
+    USD/CAD 15m). The dominant-bias divergence always scores; a second one only scores if
+    its bias matches.
+  EMA (55/21/13 support/resist): 2pt / 1pt / 0.5pt respectively; total EMA capped 3pt
+  Bollinger Band (BURST/near/mid): 2pt / 0.5pt / 1pt
+    SQUEEZE — NO LONGER SCORED (2026-07-04): demoted to 0pt context, same treatment as
+    RSI 50-cross. Every playbook and Chev's prompt said "do NOT enter during a squeeze"
+    while the score argued FOR entry — contradiction resolved by making it context-only.
+    Reason string still appears (`BB squeeze (width X%, context, 0pt)`) so Chev/Examiner
+    still see it, it just can't push a setup over threshold.
+  Derivatives — funding + OI trend (crypto only, via derivs.py): 0–4.5pt combined
+    "Funding extreme" (contrarian — crowded side is squeeze fuel): 2pt notable / 3pt extreme
+    "OI divergence" (price up + OI down = weak rally; price down + OI down = short
+      covering): 1.5pt.  "OI confirmation" (price and OI agree — real participation): 1pt.
+    See DERIVATIVES LAYER section below.
+  Chart pattern (high/mid conf): 2pt / 1pt
+  Sweep (liquidity sweep):  3pt
+  Fib retracement level:    1.5pt
+  RSI OB/OS:                0.5pt
+  RSI 50-cross:             context only (0pt — shown in brief, not scored)
+  [WATCH — forming div]:    context only (0pt — never scored, shown as amber watch)
+
+TRADEABILITY PRE-GATE (added 2026-07-04, runs BEFORE Chev is ever asked):
+  Fires inside scan_pair_tf's caller, in this order, each shadow-logged to the Examiner
+  under a distinct NOT_ESCALATED reason so skip_reason_audit() can measure each gate:
+    1. Score < _active_thresholds() trade threshold → "below_trade_threshold"
+    2. sr_score < 2 AND vp_score < 2 (no structural anchor) → "struct_pregate"
+    3. dist_from_level > _active_thresholds() max distance, UNLESS vp_score ≥ 2
+       (a VP anchor IS its own location — SR/Fib distance is irrelevant to it)
+       → "too_far_from_level"
+    4. Conflicting directional signals: _directional_split(reasons) splits bull vs bear
+       points; if the minor side ≥ 2.0 pts AND the dominant side < 2.0× the minor side →
+       "conflicting_signals" (contradictory setup, not scored as confluence)
+  Weekend crypto bump (+2 to the trade threshold on Sat/Sun UTC) is DISABLED entirely as
+  of 2026-07-04 (commented out in place, not deleted) — this is a paper account, so thin
+  weekend books / sweep risk don't cost anything real yet. A REMINDER comment sits right
+  above the commented-out block in dexter.py: restore it once a live Binance API key +
+  real funds are wired in and weekend slippage/sweeps actually matter. This is
+  independent of EXPLORATION_MODE now — previously it was gated to `not EXPLORATION_MODE`,
+  but is off regardless of that switch as of this change.
+
+This pre-gate is separate from, and runs in addition to, the OLD structural gate
+(STRUCT_REJECT, described below) which still fires after Chev replies via risk_gauntlet's
+sibling checks — the two are redundant on purpose right now (measuring both).
+
+Structural prerequisite gate (STRUCT_REJECT, legacy, still present post-Chev):
+  sr_score ≥ 2 OR vp_score ≥ 2 must be true before any trade passes.
+  Purpose: kills mid-range EMA/fib-only setups with no structural anchor.
+  If gate fails: reason_code = "STRUCT_REJECT", NOT_ESCALATED hook fires.
+
+MTF confidence tax (counter-trend trades only):
+  A trade against the 4H regime (e.g. long in TRENDING_DOWN) requires:
+    1. Score ≥ 1.5× the NORMAL threshold (crypto ≥ 15, forex ≥ 12, stocks ≥ 12) — this is
+       always the full normal threshold, never the exploration one, even during exploration
+    2. Confirmed RSI divergence present (not forming)
+  If either condition fails: trade blocked before Chev is asked.
+  The "Score ≥ 13" literal that used to appear in Chev's prompt AND all three playbooks
+  was inconsistent with the actual 1.5× rule — fixed 2026-07-04, now computed live and
+  shown as the real per-asset number in both places.
+
+================================================================================
+## EXPLORATION MODE — CURRENTLY ACTIVE (added 2026-07-04)
+================================================================================
+
+WHY THIS EXISTS: after the 2026-07-04 scoring recalibration, Dexter's normal threshold
+was so tight that Chev received hundreds of escalations over ~10 hours and posted ZERO
+trades. With no trades, the learning loops (playbooks, the Examiner's POST-vs-SKIP
+comparison) have no data. This is a PAPER account, so a deliberate, time-boxed, fully
+reversible exploration phase was built: lower the entry bar, keep every safety/hygiene
+gate at full strength, let small graded trades flow, and let the data reveal where the
+real threshold belongs.
+
+THE SWITCH — everything hangs off ONE boolean, near the top of dexter.py:
+  EXPLORATION_MODE = True     ← flip to False to restore normal thresholds EVERYWHERE
+                                 at once. No other code needs to change. Restart Dexter
+                                 after flipping.
+
+When EXPLORATION_MODE is True:
+  - Trade thresholds: crypto=7, forex=6, stock=6 (vs normal 10/8/8)
+  - Max escalation distance from a confluence level: 1.5% (vs normal 0.75%)
+  - Weekend crypto threshold bump (+2) is disabled entirely, not just during exploration
+    (see CONFLUENCE SCORING SYSTEM section for the reminder-to-restore-on-real-money note)
+  - Chev's escalation prompt gets an extra paragraph: this is a paper-trading DATA-
+    COLLECTION PHASE, losses are tuition, DEFAULT is POST if there's a nameable entry/
+    stop/target, and a SKIP must name ONE concrete broken element (no invalidation level,
+    counter-trend without meeting the MTF tax conditions, price nowhere near any zone) —
+    never general caution, "not enough confluence", a letter grade alone, or maturity/
+    participation figures alone (those are sizing inputs in this phase, not vetoes)
+  - Chev's system prompt ("Chev Prompt" file — MUST be manually pasted into Open WebUI
+    for this half to actually take effect) carries a matching paragraph right before
+    "WHEN DEXTER ESCALATES A SIGNAL": the Operating System's hard skip conditions
+    (auction maturity, participation floor, TRANSITIONING state, direction-score
+    contradiction) become CONVICTION/SIZING inputs on Dexter escalations ONLY, not vetoes,
+    for the duration of the phase. Kev's normal chat requests are completely unaffected.
+  - Dexter prints the live regime on startup, right after
+    "labeller.start_resolver_daemon(...)" — first screen of the terminal tells you
+    whether EXPLORATION MODE is ACTIVE (with its numbers) or OFF (normal thresholds).
+
+DELIBERATELY UNCHANGED BY THE SWITCH (the hygiene stays at full strength — that's the
+entire point of this design — none of these read EXPLORATION_MODE at all):
+  - STRUCT PRE-GATE and the CONFLICT gate (_directional_split) inside the TRADEABILITY
+    PRE-GATE — same sr/vp ≥2 requirement, same bull/bear contradiction check
+  - risk_gauntlet.py — ATR SL sanity, R:R ≥ 2.0, position size cap, stale price guard,
+    ATR staleness — completely untouched
+  - SL-direction hard-rejects
+  - _setup_grade() — ALWAYS grades against the FULL normal threshold (10/8/8), regardless
+    of exploration mode. This is intentional and is the real risk control of the whole
+    phase: a score-7 exploration trade still only grades as a B (or lower), so it gets
+    small suggested risk (0.75%) rather than being treated like a full-strength A+ setup.
+  - labeller.py, engines.py, honest_sim.py, derivs.py, any jane_* function — all untouched
+
+THE HELPER — _active_thresholds(asset_type) in dexter.py: the single source of truth.
+Returns (score_threshold, max_dist_pct) for the given asset type, reading the exploration
+constants when EXPLORATION_MODE is True and the normal constants otherwise. Every gate
+that checks a score or distance goes through this — never the raw CONFLUENCE_THRESHOLD_*
+or ESCALATION_MAX_DIST_PCT constants directly — specifically so the mode can never be
+half-applied (e.g. the pre-gate accepting a score-7 setup that the post-Chev hard score
+gate then rejects at 10, which is exactly the bug this fixes).
+
+WHAT KEV SHOULD SEE: escalation volume rises within a day of restarting; posted trades
+appear, mostly graded B at small suggested risk; Chev's skips each cite one concrete
+missing element instead of "score too low" or general caution.
+
+ENDING THE PHASE: once roughly 30–40 trades per asset class have closed, flip
+EXPLORATION_MODE to False in dexter.py, restart Dexter, and re-paste the ORIGINAL
+(pre-exploration) Chev Prompt paragraph back out if Kev wants the system prompt fully
+reverted too — the dexter.py side reverts automatically on the flip, but the Chev Prompt
+text file is not touched by the switch and stays as edited until manually changed back.
+
+================================================================================
+## DERIVATIVES LAYER (derivs.py, added 2026-07-04)
+================================================================================
+
+C:\ChevTools\derivs.py — Binance USDT-M perpetual futures context: funding rate + open
+interest trend, for crypto symbols only. 5-minute per-symbol cache shared by the scanner
+and the brief builder (one network round-trip per symbol per 5 min, not per caller).
+
+get_derivs(symbol) → {"funding_rate", "open_interest", "oi_chg_6h_pct", "oi_chg_24h_pct"}
+or None on any fetch failure (cached either way for the TTL).
+
+classify_derivs(funding_rate, oi_chg_6h_pct, price_chg_6h_pct) — PURE, unit-tested
+function, no network. Funding is read as a CONTRARIAN signal (crowded side pays to stay
+in — fuel for a squeeze against them). OI × price is a participation matrix: price+OI
+both up = bullish confirmation (real participation); price up + OI down = bearish
+divergence (weak rally); price down + OI down = bullish divergence (short covering);
+price down + OI up = bearish confirmation. See CONFLUENCE SCORING SYSTEM above for the
+point values. Self-test: `python -X utf8 derivs.py` → 12/12 passing.
+
+Wired into scan_pair_tf (crypto only) — contributes to total_score and to the
+TRADEABILITY PRE-GATE's conflict-gate bull/bear split via reason-string keywords
+("bullish"/"bearish") so _directional_split() classifies it correctly. Also upgraded the
+Futures block in Chev's market brief — now shows 6h/24h OI trend and a how-to-read line,
+not just a bare funding/OI snapshot. The old _fetch_binance_futures_data() function is
+left defined but orphaned (deprecated, same convention as _sim_trading_cost) — do not
+delete it, do not resurrect it.
+
+================================================================================
+## TRADE FORENSICS (trade_forensics.py, added 2026-07-04)
+================================================================================
+
+C:\ChevTools\trade_forensics.py — post-trade path attribution. Pure functions, no
+network, no state — same pattern as derivs.py. Self-test: `python -X utf8
+trade_forensics.py` → 19/19 passing.
+
+compute_forensics(trade, candles) → dict with EXACTLY these keys: r_dist, mae_r, mfe_r,
+bars_held, exit_type_detail, stopped_then_ran, rsi_entry, rsi_exit.
+  - r_dist/mae_r/mfe_r require trade["sl_original"] (added at trade creation, see below);
+    None for all three if it's missing rather than guessing.
+  - exit_type_detail ('wick' vs 'close') and stopped_then_ran (did price reach the
+    ORIGINAL tp before re-touching sl_original) are SL-exit-only; stopped_then_ran uses
+    the same pessimistic same-candle tie-break as labeller.py (both touched same candle
+    → loss wins → False).
+  - rsi_entry/rsi_exit are None unless at least 20 candles precede the entry index in the
+    supplied candle list (real warm-up, not a garbage Wilder's-RSI value).
+  - Internally locates the actual exit candle by walking forward from entry looking for
+    the first SL/TP touch — NOT by assuming "last candle in the list", since callers may
+    append post-exit candles for the stopped_then_ran check.
+
+Wired into dexter.py:
+  1. Trade creation (single call site, right after log_new_trade() in the main escalation
+     loop): new_trade["sl_original"]/["tp_original"] stamped alongside the existing
+     original_sl/original_tp fields (different field names, deliberately additive —
+     original_sl/original_tp already meant something else to honest_sim).
+  2. _do_postmortem (fires on every full close): fetches candles via
+     _fetch_candles_for_labeller (reused, no new fetch path) at a timeframe keyed by
+     trade_type — scalp→5m, day→15m, swing→1h — with a 30-bar buffer before opened_at for
+     RSI warm-up. Result stored on the journal entry under the key "forensics". Wrapped so
+     any failure logs one line and never blocks the close/journal path.
+  3. _run_learning_session: once ≥10 closed entries for an asset type carry a forensics
+     dict, a "TRADE PATH FORENSICS (n=X)" block is appended to the learning input (NOT a
+     new playbook section) with exactly 5 aggregates: % SL losses classified 'wick', %
+     SL losses where stopped_then_ran, median MFE of losers, median MAE of winners,
+     average bars held wins vs losses. Below 10 samples: nothing appended.
+
+================================================================================
+## DEXTER SCAN STRINGS — EXACT FORMATS (important for REASON_MAP)
+================================================================================
+
+These are the verbatim strings dexter's scan_pair_tf() puts in result["reasons"].
+The Examiner's normalize_reasons() maps these to canonical tokens. Knowing the
+exact format prevents substring pollution (e.g. "EMA55 support" → ema55, not sr).
+
+  SR:        "Resistance(3x,3pt)"  "Support(2x,2pt)"   format: {Label}({N}x,{pts}pt)
+             Resistance = sr_multi if N>=3, sr_single if N<=2. Same for Support.
+  Fib:       "Fib 61.8% (golden pocket) (2pt)"  "Fib 50% (2pt)"  "Fib 38.2%"
+  GP:        "★ GOLDEN POCKET"
+             "★★ GP×SR DEADLY COMBO (×1.15 quality bonus applied)"  → gp_sr_combo
+  GP watch:  "[WATCH — approaching GP] GP zone [...]..."  → gp_approach (not scored)
+  RSI div:   "Regular Bearish Divergence (str=1.5pt)"  "Hidden Bullish (str=1.0pt)"
+             "Hidden Bearish (str=1.0pt)"  "Regular Bullish Divergence (str=1.0pt)"
+  Forming:   "[WATCH — not yet confirmed] FORMING bullish divergence (RSI gap Xpt, Y bars, str=Zpt)"
+             → rsi_div_forming (NEVER maps to rsi_div — separate stat bucket)
+  EMA:       "EMA55 support (2.0pt)"  "EMA21 resistance (1.0pt)"  "EMA13 support (0.5pt)"
+             format: "{ema_label} {side} ({weight}pt)"
+  EMA cross: "EMA crossover bullish_cross 2c ago"  → ema_cross
+  BB:        "BB upper BURST (%B=1.12, 12.0% of band outside, 2pt)"  → bb_burst
+             "BB lower BURST (%B=-0.05, ...)"                         → bb_burst
+             "BB near upper (%B=0.88, top 15% of band, 0.5pt)"       → bb_near
+             "BB near lower (%B=0.12, ...)"                           → bb_near
+             "BB mid support (%B=0.50, 1pt)"                          → bb_mid
+             "BB mid resistance (%B=0.50, 1pt)"                       → bb_mid
+             "BB squeeze (width 1.2%, context, 0pt)"                  → bb_squeeze (0pt since 2026-07-04 — see CONFLUENCE SCORING SYSTEM)
+  VP:        "VP POC 4h (0.15% away ≤0.40% prox, 3pt)"               → vp_poc
+             "VP VAH 1h (...)"  → vp_vah     "VP VAL 4h (...)"  → vp_val
+             Unconfirmed-anchor variant (half points): "VP POC 4h (0.12% away ≤0.40%
+             prox, unconfirmed-anchor, 1.5pt)" — same vp_poc/vah/val token, note is inline.
+  RSI level: "RSI OVERBOUGHT (82.3, 0.5pt)"  → rsi_ob
+             "RSI OVERSOLD (18.1, 0.5pt)"    → rsi_os
+             "RSI crossed 50 up 2 bar(s) ago"  → rsi_50_cross (context, 0pt)
+  Sweep:     "Sweep:buy_side (3pt)"  "Sweep:sell_side (3pt)"  → sweep
+  Pattern:   "ascending_triangle (bullish, conf=0.75) BREAKOUT+vol"  → pattern_breakout_vol
+             "head_and_shoulders (bearish, conf=0.65) BREAKOUT"      → pattern_breakout
+             "bull_flag (bullish, conf=0.55)"                        → pattern_high_conf or mid_conf
+  Derivs (crypto only, added 2026-07-04, from derivs.py — see DERIVATIVES LAYER section):
+             "Funding extreme +0.0812% — crowded longs, bearish squeeze risk (3pt)"
+                                                                       → funding_extreme
+             "OI divergence — price +2.1% on OI -3.4% — weak rally, bearish (1.5pt)"
+                                                                       → oi_divergence
+             "OI confirmation — price +2.1% with OI +3.0% — bullish participation (1pt)"
+                                                                       → oi_confirm
+
+Ordering rule in normalize_reasons(): S/R detected by regex (^(Resistance|Support)\(\d+x,),
+patterns detected by "conf=" substring. All other strings matched against REASON_MAP_ORDERED
+list, longest/most-specific pattern first. EMA55/21/13 entries appear before any generic
+"support"/"resistance" substring would match, preventing cross-contamination.
 
 ================================================================================
 ## VISUAL ANCHORS (drawn on chart when trade is clicked)
@@ -124,14 +452,56 @@ If Chev tags ms or ms_Xtf  → no anchor needed, chart auto-overlays higher TF c
 Sheet ID: 1V1b2aU3SJu_R7VjFKGp9J6uFwucGSamhRWyq6jgCbFs
 
 Trade Log tab columns:
-  A: Pair | B: Direction | C: Entry | D: Stop-Loss | E: Take-Profit
-  F: Risk % | G: Leverage | H: Position Size | I: Margin Used ($)
-  J: Confluences Used | K: Live Price | L: Live PnL $ | M: Status
-  N: Result $ | O: Timestamp | P: Trade Type | Q: Expiry At
-  R: Confluence Prices JSON | S: Chev's Notes (annotate_trade)
+  A: Pair          | B: Direction     | C: Entry          | D: SL
+  E: TP            | F: Risk %        | G: Leverage       | H: Position USD
+  I: Margin USD    | J: Tags          | K: Live Price     | L: Live PnL $
+  M: Status        | N: Result $      | O: Opened At UTC  | P: Trade Type
+  Q: Expiry UTC    | R: Conf Data JSON| S: Trigger Above
 
-Dashboard tab: B1 = live balance (starts $10,000, updates on realized close)
-Jane tab: paper trading account for comparison
+Status values: PENDING / OPEN / WIN / LOSS / EXPIRED / PARTIAL_1R
+
+Dashboard tab: A1="Current Balance", B1=live balance (starts $10,000)
+               B17=malformed Chev reply count
+Jane tab: same column structure as Trade Log
+
+Skip Log tab (added 2026-07-04): every trade Chev did NOT take, and why — SKIP,
+GATE_REJECT, STRUCT_REJECT, MTF_TAX_REJECT, GEOMETRY_REJECT, GAUNTLET_REJECT,
+FORMAT_ERROR. POST is excluded (that already gets its own Trade Log row).
+  Columns: Timestamp UTC | Pair | TF | Decision | Score | Regime | Reason |
+           Confluences Seen
+  Auto-created by dexter.py's connect_to_sheet() on first run after this update
+  (same pattern as the Jane tab auto-create) — restart Dexter once if it's missing.
+  Written from inside _log_chev_decision() (dexter.py), which already fires for
+  every non-pre-gate decision — so this is Chev's own SKIP reasoning plus every
+  downstream reject AFTER he actually replied to an escalation.
+  DELIBERATELY EXCLUDED: the TRADEABILITY PRE-GATE's NOT_ESCALATED reasons
+  (below_trade_threshold, struct_pregate, too_far_from_level, conflicting_signals,
+  choppy_regime, cooldown, event_block) do NOT get a Sheet row — those fire with
+  NO cooldown (by design, so the Examiner sees every occurrence for dedup) and
+  can refire every ~2min scan cycle for a persistent setup. Writing all of those
+  to Sheets would flood it into unreadability. They remain visible in the
+  terminal print statements and in labels_open.jsonl/labels_closed.jsonl (the
+  Examiner) — this tab is specifically for "Chev actually looked at it and here's
+  what happened," not for the mechanical pre-filtering.
+  Also written to chev_decisions.jsonl (unchanged) — so the same data now lives
+  in both places, JSONL for programmatic analysis and the Sheet for reading.
+
+Google Sheets formatting (format_sheets.py):
+  Run C:\ChevTools\format_sheets.py once to apply visual formatting.
+  Script uses .venv: C:\ChevTools\.venv\Scripts\python.exe format_sheets.py
+  Idempotent — safe to run again. Applies:
+    - Dark navy header row, frozen, with basic filter
+    - Trade Log/Jane row colours by Status: WIN=green, LOSS=red, OPEN=blue,
+      PENDING=amber, EXPIRED=grey, PARTIAL_1R=purple (all ~15% saturation)
+    - Skip Log row colours by Decision: SKIP=light blue, any *_REJECT=light red,
+      FORMAT_ERROR=light grey (same tint palette as Trade Log, reused for
+      visual consistency across tabs)
+    - Column widths optimised (Tags=260px wide, Conf Data=55px collapsed,
+      Skip Log's Reason/Confluences columns wide + word-wrapped since that's
+      the actual point of the tab)
+    - Result $ column always bold
+  Does NOT modify any data cells. Skip Log tab is skipped gracefully (with a
+  message) if it doesn't exist yet — restart Dexter once first to auto-create it.
 
 ================================================================================
 ## WEB TERMINAL — CHART TOOLBAR BUTTONS
@@ -147,10 +517,9 @@ Analysis buttons (all call Dexter's /api/analysis/* endpoints):
   Fib  — multi-TF golden pockets (15m=blue, 1h=gold, 4h=orange), overlap=white
   RSI÷ — RSI divergence: dropdown by TF (15m/30m/1h/4h), click TF to draw lines
 
-RSI DIV pill on trade card (On Radar): clicking the pill now calls showRSIDiv()
+RSI DIV pill on trade card (On Radar): clicking the pill calls showRSIDiv()
 which hits /api/analysis/rsi_div?tf=all and shows the TF dropdown, then draws
-divergence trendlines when a TF is selected. Previously it was wired to a dead path
-(conf.RSI_DIV_T1 fields that are never populated — don't try to use those).
+divergence trendlines when a TF is selected.
 
 Other buttons: Bollinger Bands toggle, VWAP toggle, EMA toggle, S/R auto-draw,
                Magnet, Object Tree, Clear All
@@ -173,7 +542,7 @@ Favicon: /chevlogo.png set as browser tab icon.
 /api/analysis/rsi_div        — RSI divergence detection (all TFs or single TF)
 /api/analysis/rsi_div?tf=all — returns {by_tf: {15m:[...], 30m:[...], 1h:[...], 4h:[...]}}
                                each div has: ts_t1, price_t1, rsi_t1, ts_t2, price_t2,
-                               rsi_t2, type, bias, note
+                               rsi_t2, type, bias, note, forming (bool)
 
 Analysis endpoint parameters: ?symbol=SOLUSDT&tf=1h
 
@@ -187,46 +556,21 @@ TWO types of divergence Dexter detects:
    Functions: _ca_detect_rsi_divergence(df), detect_rsi_divergence(df),
               _detect_hidden_divergence(df)
    These find TWO confirmed swing pivots where price and RSI disagreed.
-   Output now includes: ts_t1, price_t1, rsi_t1, ts_t2, price_t2, rsi_t2, bias, tf
+   Output includes: ts_t1, price_t1, rsi_t1, ts_t2, price_t2, rsi_t2, bias, tf
    The website draws solid green/red trendlines connecting the two pivots.
 
-2. FORMING DIVERGENCE — live, predictive (IMPLEMENTED 2026-07-02)
+2. FORMING DIVERGENCE — live, predictive
    Functions: _detect_forming_divergence(df)
    Finds one CONFIRMED pivot + CURRENT mini-extreme as second point.
-   Output now includes: forming=True, ts_t1, price_t1, rsi_t1, ts_t2, price_t2, rsi_t2, bias
+   Output includes: forming=True, ts_t1, price_t1, rsi_t1, ts_t2, price_t2, rsi_t2, bias
    Displayed as dashed amber trendlines. Projection extends 4 bars ahead at same slope.
-   _calc_for_tf() returns confirmed + forming combined — website separates by forming flag.
-
-BUGS FIXED in this session (2026-07-02):
-  - _ca_detect_rsi_divergence: was returning {type, price, note} only — no anchor points.
-    Fixed to return ts_t1, price_t1, rsi_t1, ts_t2, price_t2, rsi_t2, bias.
-  - detect_rsi_divergence (older version): same fix applied.
-  - _detect_hidden_divergence: same fix applied.
-  - scan_pair_tf: now tags every div with d["tf"] = primary_tf.
-  - _drawRsiDivVisual (index.html): validation guard was killing the PRICE trendline
-    when chart RSI disagreed with Dexter RSI. Fixed: price trendline always draws,
-    RSI panel line draws only if chart RSI agrees.
-  - _applyIdeaPill (index.html): RSI pill click was calling _drawRsiDivergence(conf)
-    which immediately returns when conf.RSI_DIV_T1 is missing (always is).
-    Fixed: now calls showRSIDiv() which hits the API and shows TF dropdown.
+   IMPORTANT: forming divergence is tagged "[WATCH — not yet confirmed]" in result["reasons"]
+   and maps to token rsi_div_forming in the Examiner. Never mixed with confirmed rsi_div stats.
 
 PREVIOUS DEAD APPROACHES (don't retry these):
-  - conf.RSI_DIV_T1 / conf.RSI_DIV_T2: fields in the TRADE: line that Chev was
-    supposed to fill with dates. Never worked — Chev fills dates not Unix timestamps,
-    and the matching logic failed. The whole RSI_DIV_T1/T2 path in _drawRsiDivergence()
-    is a dead end. The live scan via showRSIDiv() is the correct path.
-  - Trying to use the RSI validation guard to confirm direction: it's too aggressive,
-    fires on timing mismatches, kills drawings silently. Guard now only affects RSI
-    panel line, never the price trendline.
-
-NEXT: Forming divergence drawing
-  - Add ts_t1 (df.index[pi].timestamp()) and ts_t2 to _detect_forming_divergence output
-  - Draw as DASHED ORANGE/AMBER line (not solid) to distinguish from confirmed
-  - Extend 3-5 bars to the right as a projection
-  - Label "FORMING Bear 1H" vs "Bear 1H" for confirmed
-  - Auto-refresh on each Dexter poll (5 min)
-  - forming_divs already flows through scan_pair_tf output — just needs timestamp and
-    a drawing path in the website
+  - conf.RSI_DIV_T1 / conf.RSI_DIV_T2: fields Chev was supposed to fill. Dead path.
+  - Using the RSI validation guard to confirm direction: too aggressive, kills drawings.
+    Guard only affects RSI panel line, never the price trendline.
 
 ================================================================================
 ## CHEV'S OPEN WEBUI TOOLS (chart_drawer.py)
@@ -256,24 +600,218 @@ Public functions (async, in Tools class):
 
 Located at ~line 3590 in dexter.py. Called when scan_pair_tf() detects 3+ confluences.
 
-The message sent to Chev includes:
-1. Chev's playbook (last 500 chars)
-2. Recent relevant journal entries (last 3 same asset type + last 2 any type)
-3. Full market brief: primary TF candles + OHLCV + RSI + EMA + volume trend
-4. Higher TF summary (4H context)
-5. Dexter's detected confluence zone + reasons
-6. Direction hint (near support = long bias, near resistance = short bias)
-7. TOOLS AVAILABLE block — explicit instructions to call these before deciding:
-   - get_support_resistance(symbol, tf) — ALWAYS, verify Dexter's zone
-   - get_stacked_fibonacci(symbol, tf) — if fib retracement visible
-   - get_volume_profile(symbol, tf) — if near volume cluster
-   - detect_rsi_divergence(symbol, tf) — if RSI diverging
-   - get_atr_stop_suggestion(symbol, tf, entry, direction) — SL sanity check
-8. Full trading rules (SL placement, RR expectations, pending orders, etc.)
-9. ABSOLUTE RULES (SL must be below entry for long, above for short)
-10. Confluence scoring table + threshold
+The message sent to Chev includes (in order):
+1.  Chev's asset-specific playbook (chev_playbook_crypto/forex/stocks.txt)
+2.  Recent relevant journal entries (last 3 same asset type + last 2 any type)
+3.  Current open/pending positions (full list with entry/SL/TP/R:R) + correlation note
+4.  Confluence re-entry pattern warning (A+C check — same level + same tags failed
+    recently fires "PATTERN ALERT" or soft note; 2-hour window, last 30 losses)
+5.  Full market brief (primary TF full candle dump + rich summaries for other TFs):
+      - 4H MACRO TREND CONTEXT block — near the top, before Fib:
+        "STRONG UPTREND / UPTREND / RANGING / DOWNTREND / STRONG DOWNTREND"
+        Shows: net % move over ~3 days, HH/HL or LH/LL count, volume profile note,
+        and a trend implication warning
+      - Price snapshot (price, VWAP, EMA20, RSI, ATR, volume, BB)
+      - Fibonacci levels
+      - S/R zones (validated across 15m/30m/1h/4h, touch count shown)
+      - Volume Profile (4H + 1H, anchor-based)
+      - Previous day H/L/C
+      - ADR for forex/stocks (with "x% of daily range already used" warning)
+      - Forming + confirmed RSI divergence
+      - BOS/CHoCH structural event
+      - Zone dwell analysis (prior rejection count at confluence level)
+      - MACD summary
+6.  Session context (PEAK/GOOD/LOW) + economic calendar warnings
+7.  Dexter's detected confluence zone + reasons + distance from level
+8.  Direction hint (structural context: "near support/resistance — read the structure")
+9.  Market regime (4H ADX + EMA regime label)
+10. COUNTER-TREND ALERT — fires when confluence is near resistance in an uptrend or
+    near support in a downtrend. 5-point checklist (score ≥ 1.5× the normal per-asset
+    threshold — computed live, no longer a hardcoded "13" — confirmed divergence,
+    4H BOS/CHoCH, structural SL, scalp only). "If you cannot articulate points 2-3 → SKIP"
+11. RSI forming divergence block (if detected)
+12. Engine survey (market state + geometry + auction hypothesis)
+13. TOOLS AVAILABLE — explicit instructions to call before deciding
+14. Full trading rules (SL placement, R:R, pending orders, SIP, scoring table)
+15. ABSOLUTE RULES (SL direction, R:R ≥ 2.0, structural SL only)
 
 If Chev's reply doesn't start with POST:/SKIP:, Dexter retries once with reminder.
+Geometry validation gate fires AFTER Chev posts (risk_gauntlet checks ATR SL + R:R +
+position size cap). Balance guard: cap only fires if balance > 0.
+
+================================================================================
+## RISK GAUNTLET (risk_gauntlet.py)
+================================================================================
+
+C:\ChevTools\risk_gauntlet.py — Pre-trade risk validation, 13/13 tests passing.
+
+Called by Dexter immediately after Chev posts a TRADE: line. If any gate fails,
+Dexter rejects the trade with a logged reason (no Google Sheets entry).
+
+Gates (in order):
+  1. ATR SL sanity: SL must be between 0.5× and 4× ATR from entry.
+       < 0.5× ATR → RED zone (too tight, will be stopped by noise)
+       > 4× ATR   → RED zone (position size will be negligibly small)
+       0.5–1×     → YELLOW zone (tight — Chev warned but not blocked on this alone)
+  2. R:R minimum: TP must be ≥ 2.0× the SL distance from entry. Flat 2.0 for all grades.
+  3. Position size cap: position_size_usd ≤ account_balance (no over-leveraging).
+       Only fires when balance > 0 (guards against Google Sheets read failure).
+  4. Stale price guard: entry price must be within 1.5% of live price (prevents
+       fills on completely stale Chev decisions made while price moved away).
+  5. ATR staleness: ATR computed from candles ≤ 6 hours old (scalp/day) or 24h (swing).
+
+Cost constants (used by labeller for cost_R calculation — must stay in sync):
+  Fee (per side):      crypto=0.05%  forex=0.015%  stock=0.02%
+  Slippage (per side): crypto=0.02%  forex=0.01%   stock=0.02%
+  Overnight funding (swing only): 0.06% per side
+
+R multipliers (must match labeller.py R_MULT):
+  scalp=1.0×ATR  day=1.2×ATR  swing=1.5×ATR
+
+================================================================================
+## THE EXAMINER (labeller.py)
+================================================================================
+
+C:\ChevTools\labeller.py — Triple-barrier labelling + meta-labelling. 26/26 tests passing.
+
+Purpose: Build a shadow trading record for EVERY setup Dexter encounters (POST, SKIP,
+NOT_ESCALATED, REJECT), label each outcome objectively, and measure whether Chev's
+judgment adds alpha above the raw Dexter score.
+
+--- SHADOW RECORD LIFECYCLE ---
+
+Stage 1: PENDING — created when Dexter encounters a setup.
+  - entry_ref = result["price"] (the confluence zone), NOT current_price.
+    Using current_price would collapse the two-stage design (immediate touch).
+  - expiry_ts = now + EXPIRY_HOURS[trade_type] from setup time.
+  - Waits for price to touch the zone (touch_band = max(0.1%, 0.25×ATR)).
+  - If price never touches by expiry → label = NO_FILL (closed as untraded).
+
+Stage 2: ACTIVE — armed when zone is touched.
+  - active_expiry_ts = touched_ts + EXPIRY_HOURS[trade_type] from touch time.
+  - session_at_touch and regime_at_touch stamped at transition.
+  - Barriers armed: upper (profit), lower (loss), upper_2r (+2R target).
+  - Long:  upper = entry+1R  lower = entry-1R  upper_2r = entry+2R
+  - Short: upper = entry-1R  lower = entry+1R  upper_2r = entry-2R
+
+Labels:
+  +1     — profit barrier hit before loss barrier
+  -1     — loss barrier hit (or same-candle pessimistic rule fires)
+   0     — active_expiry reached without barrier; realized_R = drift (close−entry)/r_dist
+  NO_FILL — PENDING expired without touch (never activated)
+  VOID    — ACTIVE expiry passed 7+ days ago with no candle data covering the window.
+             Honest: we refuse to invent a label when data is unavailable.
+
+Pessimistic same-candle rule: if BOTH barriers hit in the same candle → label=-1.
+Rationale: worst-case assumption; eliminates fill-order ambiguity.
+
+hit_2r flag (post-resolution trailing walk):
+  Definition: "did price touch +2R before returning to the loss barrier AFTER profit exit?"
+  After label=+1 resolves, walk subsequent candles (strictly after profit exit candle):
+    - +2R reached before loss barrier → hit_2r=True
+    - Loss barrier reached before +2R → hit_2r=False
+    - Same candle: both 2R and loss → loss wins, hit_2r=False (pessimism)
+    - active_expiry or no subsequent candles → hit_2r=False
+  bars_held is frozen at the profit exit candle (trailing walk is post-resolution only).
+
+EXPIRY_HOURS (wall-clock, not bars):
+  scalp=2h  day=6h  swing=48h
+
+Deduplication:
+  record_setup() skips if an unresolved PENDING record for the same symbol+tf already
+  has entry_ref within 0.5×ATR. Prevents 2-minute rescan loop from flooding the shadow
+  book with near-identical records for the same persistent zone.
+
+--- DIRECTION SOURCE ---
+
+direction_src = "chev"  — direction came from Chev's TRADE: line (POST decision).
+direction_src = "proxy" — direction inferred from zone position:
+    result["price"] (zone) < result["current_price"] → zone below price → support → long
+    result["price"] > result["current_price"]        → zone above price → resistance → short
+    At-level (within 0.05%): regime tiebreak (TRENDING_UP → long, TRENDING_DOWN → short).
+
+CRITICAL: chev and proxy stats are NEVER mixed in any report. Separate buckets always.
+This enforces statistical integrity: chev direction reflects Chev's active judgment;
+proxy direction reflects a structural baseline. Mixing the two poisons both.
+
+--- DEXTER HOOKS (10 edits applied to dexter.py) ---
+
+1. import labeller  (top of file)
+2. _fetch_candles_for_labeller()  — wrapper that converts fetch_candles() output
+   to the [{t, o, h, l, c}] format labeller expects; detects asset_type from symbol suffix.
+3. labeller.start_resolver_daemon(_fetch_candles_for_labeller) at startup (interval=900s).
+
+Four NOT_ESCALATED hooks (each stamps chev_reason with the block cause):
+4. cooldown block    → labeller.record_setup(result, asset_type, "NOT_ESCALATED", {"reason":"cooldown"})
+5. event block       → chev_reason="event_block"
+6. choppy regime     → chev_reason="choppy_regime"
+7. below threshold   → chev_reason="below_threshold"
+
+8. SKIP hook — fires after _log_chev_decision("SKIP"):
+   labeller.record_setup(result, asset_type, "SKIP", {"reason": parsed["skip_reason"]})
+
+9. POST hook — fires after _log_chev_decision("POST"):
+   labeller.record_setup(result, asset_type, "POST", chev_meta={
+       "direction": parsed["direction"], "entry": parsed["entry"],
+       "tags": parsed["tags"], "reason": parsed["reasoning"],
+       "trade_type": parsed["trade_type"]
+   })
+
+10. Syntax check: passed.
+
+--- EFFECTIVE N (overlap weighting) ---
+
+When multiple records share asset_type + direction with overlapping ACTIVE windows,
+they are statistically non-independent (same market move affects all of them).
+Effective N = sum(1/k) where k = count of overlapping co-directional records.
+All report stats use eff_N, not raw_N. This prevents spurious high confidence from
+correlated trades made during the same trending move.
+
+--- REPORT FUNCTIONS ---
+
+chev_scoreboard()   — POST vs SKIP expectancy stratified by Dexter score band.
+                      Bands: [10-12], [12-14], [14+]. Wilson 95% CI on all win rates.
+                      Net expectancy = realized_R - cost_R (round-trip trading cost).
+
+tag_lift_report()   — Per-feature-token lift stats.
+                      lift = P(win|token) / P(win overall, base rate).
+                      Temporal discovery split: discovery_ts = first epoch where token
+                      SIMULTANEOUSLY meets eff_N ≥ 30 AND lift > 1.0 (using running
+                      base rate at that point — no lookahead). Persisted in
+                      labels_discovery.json once set, never revised.
+                      Post-discovery actionable = eff_N ≥ 30 AND CI_lo > post-discovery base rate.
+
+weight_suggestions()  — For tokens with eff_N ≥ 50: INCREASE / DECREASE / KEEP.
+                        INCREASE: lift > 1.5 AND CI_lo > base_rate.
+                        DECREASE: lift < 0.8.
+
+skip_reason_audit()   — Groups closed records by chev_decision:chev_reason.
+                        Shows win rate + Wilson CI + avg_R per gate cause.
+                        If NOT_ESCALATED cooldown setups outperform POST → gate is hurting.
+
+fill_rate_report()    — fill_rate = filled / (filled + NO_FILL). VOID excluded from both.
+
+full_report()         — Writes all the above to label_report.txt.
+
+--- CONFIG ---
+
+R_MULT = {scalp:1.0, day:1.2, swing:1.5}    — matches risk_gauntlet.py ATR floors
+EXPIRY_HOURS = {scalp:2, day:6, swing:48}
+MIN_N_EFF = 30   (discovery threshold; tag lift only shown above this)
+MIN_N_WEIGHT = 50  (weight suggestion floor)
+Score bands: [10-12], [12-14], [14+]
+
+--- SELF-TEST (26 cases, all must pass) ---
+
+Run: python -X utf8 labeller.py
+
+Tests cover: PENDING expiry→NO_FILL, PENDING→touch→win, loss barrier, pessimistic
+same-candle, time expiry→label=0, SHORT barriers (both directions), hit_2r trailing
+walk (profit+2R on subsequent candle, loss before 2R), at-level activation,
+session_at_touch=PEAK, Wilson CI, PENDING→ACTIVE→expire→label=0 (NOT NO_FILL),
+VOID timeout (8+ days past), EMA55 reason → ema55 not sr, forming div → rsi_div_forming,
+SR multi/single, profit candle 1 + 2R candle 5 (no loss) → hit_2r=True, profit candle 1
++ loss candle 4 (before 2R) → hit_2r=False.
 
 ================================================================================
 ## JANE (PAPER TRADING COMPARISON)
@@ -348,8 +886,13 @@ Node version issue:
   tools (no Alpaca/Binance trade execution tools in Open WebUI).
 - Always use localhost:8080 (Dexter's Flask). Never 5500 (VS Code Live Server).
 - google_credentials.json must stay at C:\ChevTools\ (not in subfolders, never GitHub).
-- Do NOT commit google_credentials.json to GitHub under any circumstances.
   Share only via WhatsApp/email directly.
+- labeller.py direction_src "chev" and "proxy" must NEVER be mixed in any statistic.
+- EXPLORATION_MODE (dexter.py) is a deliberate TEMPORARY state, currently True. Don't
+  "clean it up" or remove the exploration constants/helper without checking with Kev —
+  the phase ends by flipping the boolean, not by deleting the machinery.
+- Editing the "Chev Prompt" text file does NOT change Chev's behavior by itself — it
+  must be manually pasted into Open WebUI's model system prompt editor every time.
 
 ================================================================================
 ## WHAT WAS BUILT — SESSION 2026-06-30
@@ -371,228 +914,414 @@ Node version issue:
 ## WHAT WAS BUILT — SESSION 2026-07-02
 ================================================================================
 
-1. ALEJANDRO_GUIDE.html (C:\ChevTools\ALEJANDRO_GUIDE.html)
-   Full visual HTML onboarding guide for Alejandro — system flow diagram, module
-   cards, confluence scoring with weight bars, annotated Dexter report, rules of
-   engagement, Alejandro's task list. Dark theme, self-contained.
-   NotebookLM prompt also provided so Alejandro can query the codebase by voice/chat.
+1. ALEJANDRO_GUIDE.html — full visual HTML onboarding guide for Alejandro.
 
-2. RSI Divergence drawing — full root cause diagnosis and fix (see RSI section above)
-   Four changes in dexter.py, two changes in index.html. Confirmed working path:
-   pill click → showRSIDiv() → /api/analysis/rsi_div?tf=all → TF dropdown → draw.
+2. RSI Divergence drawing — full root cause diagnosis and fix (4 dexter.py changes,
+   2 index.html changes). Confirmed working path: pill → showRSIDiv() → API → draw.
 
-3. FORMING DIVERGENCE — fully implemented (dexter.py + index.html)
-   Dexter now returns both confirmed + forming divs from /api/analysis/rsi_div.
-   _detect_forming_divergence() updated to output ts_t1/price_t1/rsi_t1/ts_t2/
-   price_t2/rsi_t2 + forming:True flag for all 4 result types.
-   _calc_for_tf() returns confirmed + forming combined list.
-   Website: _drawRsiDivVisual() now handles forming flag:
-     - Confirmed = solid green/red line
-     - Forming = dashed amber line + faint 4-bar projection at same slope
-   _buildRsiDropdown(): 🟢/🔴 for confirmed, 🟡/🟠 for forming in TF dropdown.
-   REQUIRES Dexter restart to take effect.
+3. FORMING DIVERGENCE — implemented in dexter.py + index.html.
+   Confirmed = solid green/red, Forming = dashed amber + 4-bar projection.
 
-4. PWA additions (monitor.html + webapp/)
-   manifest.json and sw.js added. monitor.html gets "Add to Home Screen" on Android.
-   This is NOT a real app — just a homescreen shortcut. Different from ChevMonitorApp.
+4. PWA additions (manifest.json + sw.js for monitor.html homescreen shortcut).
 
-5. ChevMonitorApp — full React Native app built (see Mobile App section above)
+5. ChevMonitorApp — full React Native app built (not yet on device).
 
-6. Favicon added to index.html (<link rel="icon" href="/chevlogo.png">)
+6. Favicon added to index.html.
 
-7. Backup created: C:\ChevBackUp\Backup_2026-07-02_16-30\ (54 files, 3.66 MB)
-   Organized into 7 emoji-labeled folders. No git connections.
+7. Firebase SSE race condition fixed (RSI div lines now survive Firebase SSE updates).
 
 ================================================================================
-## BUGS FIXED — SESSION 2026-07-02 (continued, same date)
+## WHAT WAS BUILT — SESSION 2026-07-03/04
 ================================================================================
 
-RSI÷ button had two post-launch bugs reported after first test. Both fixed in index.html:
+1. TIMEZONE FIX — all Google Sheets timestamps explicitly UTC.
 
-BUG 1 — RSI÷ pill glitch (had to toggle twice to see dropdown)
-  Root cause: rsiCard.active is set to true when a TF is selected (_rsiTfSelected).
-  When switching to a new trade card, selectIdea() called _setRsiActive(false) but
-  never stripped rsiCard.active. Next call to showRSIDiv() saw active=true and
-  immediately toggled OFF (treating it as a close), returning before fetching.
-  On the SECOND click, active was now false, so it worked.
-  Fix: _clearRsiDivOverlay() now also removes rsiCard.active and closes the dropdown.
-  selectIdea() now calls _clearRsiDivOverlay() before loading the new trade.
-  _applyIdeaPill() RSI off-branch now calls _clearRsiDivOverlay() (was filtering wrong
-  flag: !d._rsiDiv camelCase vs actual flag _rsi_div snake_case).
+2. 4H MACRO TREND CONTEXT (_macro_trend_context) — injected near top of market brief.
+   Verdict: STRONG_UPTREND / UPTREND / RANGING / DOWNTREND / STRONG_DOWNTREND.
 
-BUG 2 — RSI trendlines floating, not connected to price/RSI curve after refresh
-  Root cause A: saveDrawings() was saving _rsi_div trendlines to localStorage + Firebase.
-  On refresh those stale lines reloaded (from a different chart zoom/state) and
-  appeared as floating ghosts that don't align with the current chart.
-  Fix: saveDrawings() now filters out _rsi_div drawings before saving. RSI div lines
-  are ephemeral — regenerated each scan, never persisted.
-  Root cause B: After TF switch in _rsiTfSelected(), overlay was drawn after only
-  2 animation frames (~33ms), before the RSI chart had time to repopulate with
-  new candle data, causing misaligned Y positions on the RSI panel.
-  Fix: Replaced 2-frame RAF wait with setTimeout(250ms) to let RSI chart settle.
+3. COUNTER-TREND ALERT REDESIGN — bordered block with 5-point checklist Chev must satisfy.
 
-ALSO FIXED: Page-load restore path
-  On refresh with RSI pill saved as ON, the restore code called _drawRsiDivergence()
-  (dead path — conf.RSI_DIV_T1 always empty). Changed to call showRSIDiv() instead,
-  triggering a fresh Dexter scan on load.
+4. THREE ASSET-SPECIFIC PLAYBOOKS — chev_playbook_crypto/forex/stocks.txt.
+   Learning sessions now run per asset type every 10 closed trades.
 
-  _applyIdeaPill() RSI branch simplified: removed the conf.RSI_DIV_T1 fallback check
-  entirely. Always calls showRSIDiv() on turn-on. The dead fallback path is gone.
+5. SCORING RECALIBRATION — SR 3pt (multi) / 2pt (single); Sweep 3pt; EMA capped 3pt;
+   BB near-band flat 0.5pt; VP proximity 0.40%; TF multipliers applied; RSI 50-cross
+   removed from score; STRUCT_REJECT gate added; forex threshold 7→8.
 
-================================================================================
-## BUGS FIXED — SESSION 2026-07-02 (late evening continuation)
-================================================================================
+6. GOOGLE SHEETS VISUAL FORMATTING — format_sheets.py (idempotent, run once).
 
-** THIS SECTION DOCUMENTS WHAT WAS TRIED AND FAILED — READ BEFORE TOUCHING THESE AREAS **
+7. DEAD SYMBOLS REMOVED — HYPEUSDT, RAINUSDT, LEOUSDT, QUBY from all locations.
 
---- DEXTER STARTUP HANG ---
+8. WATCHLIST EXPANDED — 14→56 symbols (crypto, forex, stocks). See WATCHLIST section.
 
-BUG: Dexter froze at "Dexter is watching the markets..." on startup.
-  Root cause: connect_to_sheet() called synchronously before Flask starts. Google Sheets
-  API was hanging indefinitely (no timeout in gspread). Website unreachable until Sheets
-  connected or failed.
-  Fix: Moved Flask thread start BEFORE the Google Sheets connection block. Sheets now
-  connects with a 3-attempt retry loop (5s sleep between attempts). If all 3 fail,
-  Dexter logs a WARNING and continues without Sheets — trade logging disabled but
-  website fully accessible.
+9. MANAGEMENT OVERHAUL — "then vs now" brief, 30-min cooldown, BOS/CHoCH alert,
+   50%+75% SL milestones, 0.5R trigger gated to swings only.
 
-WHAT DIDN'T WORK — client.session.timeout:
-  Tried adding `client.session.timeout = 20` inside connect_to_sheet() to enforce a
-  20-second timeout on the gspread HTTP session. This caused:
-    AttributeError: 'Client' object has no attribute 'session'
-  The gspread version in this project does NOT have a .session attribute on the Client
-  object. NEVER add that line. Remove it if you ever see it there.
-  Solution was the retry loop + Flask-first approach, not a timeout.
+10. CONFLUENCE RE-ENTRY COOLDOWN — PATTERN ALERT if same level + same tags failed
+    recently within 0.5 ATR. 2-hour window, last 30 losses.
 
---- api_pending CRASH ---
+11. PARTIAL TP AT 1R — auto-closes 50% when live_pnl ≥ risk_amount_usd. PARTIAL_1R
+    journal entry. Skips if SIP active or TP ≤ 1.05R.
 
-BUG: "Dexter unreachable" on the website after Dexter started without Sheets.
-  Root cause: /api/pending called worksheet.get_all_values() without checking if
-  worksheet was None (happens when Sheets connection fails). Caused an AttributeError
-  that crashed the Flask request.
-  Fix: Added guard at top of api_pending:
-    if worksheet is None: return jsonify([])
-  Applied same guard to any other endpoint that uses worksheet directly.
+12. STRUCTURED REASONING — POST requires 4H STRUCTURE/INVALIDATION/CONFIRMATION blocks.
+    SKIP requires WHAT WAS MISSING. All parsed and stored.
 
---- FIREBASE SSE RACE CONDITION (most complex bug of the session) ---
+13. R-MULTIPLE TRACKING — risk_amount_usd stored at open; r_multiple = pnl/risk at close.
 
-BUG: RSI div trendlines not appearing when clicking a TF in the RSI÷ dropdown.
-  Also: dropdown disappeared after clicking a TF.
+14. LOSS PATTERN EXTRACTION — learning session now extracts SETUPS NEEDING EXTRA
+    CONFIRMATION from last 15 losses + WIN/LOSS INSIGHT comparison.
 
-  ROOT CAUSE (critical — understand this before touching RSI div code):
-  Every call to saveDrawings() does a Firebase PUT. This triggers the SSE stream
-  (_subscribeDrawings listener). The SSE listener replaced drawings[] with whatever
-  Firebase returned — a version filtered to exclude _rsi_div. So:
-
-    Click TF → _clearRsiDivOverlay() → saveDrawings() → Firebase PUT → SSE fires →
-    drawings[] replaced (no _rsi_div) → _drawRsiDivVisual() runs → pushes _rsi_div
-    lines to drawings[] → ANOTHER SSE fires (or first one arrives late) → drawings[]
-    replaced again → _rsi_div lines wiped → chart redraws with no lines.
-
-  The window between "lines pushed" and "SSE overwrites them" was so short the lines
-  never appeared visually.
-
-FIXES APPLIED (all in index.html):
-
-  Fix 1 — Remove saveDrawings() from _clearRsiDivOverlay():
-    The old code called saveDrawings() at the end of _clearRsiDivOverlay(). Since
-    _rsi_div drawings are never persisted anyway, there's nothing new to save.
-    Calling saveDrawings() here was the trigger that fired the SSE race.
-    RULE: _clearRsiDivOverlay() must NEVER call saveDrawings().
-
-  Fix 2 — Remove saveDrawings() from _drawRsiDivVisual():
-    Old version called saveDrawings() after pushing _rsi_div lines. Same problem.
-    RULE: _drawRsiDivVisual() must NEVER call saveDrawings().
-
-  Fix 3 — SSE listener preserves live _rsi_div drawings on Firebase update:
-    In _subscribeDrawings, when an SSE message arrives, the listener now does:
-      const live_rsi = drawings.filter(d => d._rsi_div);
-      drawings = Array.isArray(msg.data) ? msg.data : [];
-      if (live_rsi.length) drawings.push(...live_rsi);
-    This means even if an SSE fires while RSI div lines are on screen, they survive.
-
-  Fix 4 — _syncDrawings (one-time Firebase pull on symbol switch) same treatment:
-    Same preserve logic added: pull Firebase data → keep any live _rsi_div from current
-    drawings[] → merge. Without this, switching symbols wiped live RSI div lines too.
-
-  Fix 5 — Dropdown stays open after TF click:
-    _clearRsiDivOverlay() closes the dropdown (classList.remove('open')).
-    _rsiTfSelected() re-opens it after drawing (classList.add('open')).
-    Also adds CSS .rsi-tf-row.selected { background: #1a2035; border-left: 2px solid #f0a500; }
-    to highlight which TF is currently active.
-
---- DRAWING TOOLS INVISIBLE WHEN RSI PANEL OPEN ---
-
-BUG: Drawing tools (trendlines, hlines, etc.) appeared invisible after placing them
-  while the RSI panel was open. Drawings saved fine but weren't visible until refresh.
-  Root cause: Two LightweightCharts instances (main chart + RSI chart) both attach
-  document-level mousemove handlers. RSI chart's handlers stole the mousemove events,
-  preventing chartWrap.mousemove → markDirty() from firing after a drawing was committed.
-  Without markDirty(), the canvas never repainted with the new drawing.
-  Fix: Added explicit markDirty() call to every drawing commit path in the
-  chartWrap click handler (hline, channel, triangle, and the generic trendline/fib
-  commit path). Now repaint happens regardless of whether mousemove fires.
-
---- WHAT STILL NEEDS TESTING ---
-
-After all the above fixes:
-- Hard-refresh browser (Ctrl+Shift+R) to pick up latest index.html
-- Click On Radar trade → RSI÷ pill → dropdown appears
-- Click a TF (e.g. 1h) → dropdown stays open with amber highlight on selected TF
-  → trendlines appear on price chart + RSI panel
-- Place a drawing (e.g. trendline) while RSI panel is open → should be visible immediately
-- Switch to different trade card → RSI overlay clears cleanly, pill resets
-If trendlines still don't appear: open F12 → Console and look for errors from
-_drawRsiDivVisual, timeToX returning null, or uncaught exceptions.
-
---- EAS BUILD (Android APK) ---
-
-BUG: EAS Build failed with 3 errors:
-  1. "splash" key in wrong location (was at expo.splash, must be inside expo-splash-screen plugin array)
-  2. react-native-worklets peer dep missing
-  3. @expo/vector-icons missing
-
-Fix: Updated app.json to move splash config into the expo-splash-screen plugin.
-  Ran: npx expo install expo-splash-screen react-native-worklets @expo/vector-icons
-  Then resubmitted: eas build --platform android --profile preview
-
-Node version issue (ALWAYS check this first for Expo errors):
-  Node 24 breaks Expo config plugins with SyntaxError: Unexpected token ':'
-  ALWAYS run `nvm use 20` before any expo or eas command.
-  expo-haptics in app.json plugins array caused PluginError — removed from plugins
-  (JS import still works, only the native config entry was removed).
+15. INFORMATION GAP FIXES — hidden divergence on primary TF, direction hint rewrite,
+    ATR label per TF, counter-trend warning using booleans (not string matching),
+    economic calendar extended to crypto/stocks (FOMC/CPI/NFP/GDP/PCE keywords),
+    open positions shown before every escalation, MACD summary, equal highs/lows SL
+    warning, ADR for forex/stocks.
 
 ================================================================================
-## WHAT TO WORK ON NEXT (priority order as of 2026-07-02)
+## WHAT WAS BUILT — THIS SESSION (2026-07-04 Part 3)
 ================================================================================
 
-1. TEST FORMING DIVERGENCE (coded, awaiting test)
-   Restart Dexter (C:\ChevTools\ → python dexter.py), hard-refresh browser.
-   Click On Radar trade → click RSI÷ pill → dropdown should appear first click.
-   TF rows show 🟡/🟠 for forming, 🟢/🔴 for confirmed.
-   Clicking a TF should draw: dashed amber line (forming) + solid green/red (confirmed)
-   + faint projection 4 bars ahead.
-   If RSI panel lines are still floating after 250ms wait, try increasing the timeout
-   in _rsiTfSelected: setTimeout(r, 400).
+1. RISK GAUNTLET (risk_gauntlet.py) — 13/13 tests passing.
+   See RISK GAUNTLET section above for full architecture.
 
-2. MOBILE APP APK
-   Check expo.dev build status. If failed, rerun: cd C:\ChevMonitorApp && nvm use 20
-   && eas build --platform android --profile preview
-   Once APK downloads, install on phone and test.
+2. DEXTER PARSER TOLERANCE — TRADE: line parser updated to tolerate both
+   "leverage=10x" and "leverage=10" (strips trailing 'x'). Prompt format lines
+   (leverage=, position_size_usd=) restored after accidental removal.
 
-3. MTF direction gate in Dexter
-   Already has timeframe-weighted scoring. Missing: hard direction agreement gate.
-   ~20-30 lines to add. Dexter should reject trades where 4H trend opposes entry.
+3. THE EXAMINER (labeller.py) — 26/26 tests passing.
+   Full triple-barrier labelling and meta-labelling system. See THE EXAMINER section.
+   Accepted after two review rounds (10-item rejection + hit_2r semantics correction).
 
-4. Jane signals on dashboard (index.html)
-   Show Jane's open positions alongside Chev's in the main web terminal.
+   Key decisions made and finalised:
+   - Two-file JSONL: labels_open.jsonl (open) + labels_closed.jsonl (resolved, append-only)
+   - Two-stage PENDING → ACTIVE shadow records
+   - threading.Lock on all I/O
+   - All timestamps timezone-aware UTC, compared as epoch seconds
+   - VOID for unresolvable windows (never estimated) — honest over optimistic
+   - config_ver string on every record (future schema migration support)
+   - direction_src split: "chev" vs "proxy" — NEVER mixed in statistics
+   - NO_FILL only for PENDING records; ACTIVE + expired = label=0 with drift
+   - Pessimistic same-candle rule: both barriers same candle → label=-1
+   - hit_2r = trailing walk AFTER profit exit, not same-candle check
+   - REASON_MAP built against actual dexter scan strings, ordered longest-first
+   - Discovery fires on lift criterion (eff_N≥30 AND lift>1.0), not sample size alone
+   - Discovery timestamp frozen in labels_discovery.json — never revised
+   - Actionable = post-discovery CI lower bound > post-discovery base rate (not 0.50)
 
-5. Chev/Jane disagreement flag
-   When Chev says LONG but Jane is SHORT on same pair, flag it visually.
+================================================================================
+## THE HONEST SIMULATOR (honest_sim.py) — Steps 1-2 of 4 done
+================================================================================
 
-6. RSI Divergence trendlines on chart for Chev-drawn lines
-   When Chev identifies a divergence via chart_drawer.py detect_rsi_divergence(),
-   the resulting pivot coordinates should auto-draw on the web terminal chart.
+C:\ChevTools\honest_sim.py — candle-true exit simulation, real trading costs, and a
+daily circuit breaker. Self-test: 25/25 passing (`python -X utf8 honest_sim.py`).
+
+PURPOSE: today's paper-trade exits are checked against ~2-minute spot polls, which
+(a) misses wicks that pierce SL and recover between polls, (b) checks TP before SL when
+both were touched (optimistic ambiguity), (c) fills exactly at TP/SL even through gaps,
+and (d) — before this build — left one close path (_startup_sl_audit) charging zero fees.
+This makes the shadow book (labeller.py, which already grades pessimistically) a fairer
+referee than the real trade log, corrupting POST-vs-SKIP comparisons.
+
+CORRECTION TO PRIOR HANDOFF: this build's research found the "MILESTONE PARTIAL TP +
+CHEV JUDGMENT" feature (previously listed above as "designed but not built") was ALREADY
+LIVE in dexter.py — _ask_chev_partial_tp() and _execute_partial_close() implement exactly
+that HOLD/TAKE25/TAKE50/TRAIL_SL flow at trade-type thresholds (scalp=0.7R, day=1.0R,
+swing=1.5R). Also already live before this build: cost deduction on most close paths via
+_sim_trading_cost(), and r_multiple already computed/journaled in _do_postmortem. The
+honest_sim project's real net-new work is narrower than first scoped: candle-true wick/gap
+detection for forex+stock (crypto already had a cruder version via _detect_sl_tp_hit),
+candle-true PENDING fills for ALL asset types (previously spot-only everywhere), and the
+circuit breaker (fully new).
+
+--- STEP 1: honest_sim.py module (done) ---
+
+Public functions: get_exit_candles, check_exit, check_pending_fill, apply_costs,
+record_close_R, breaker_status. Config mirrors risk_gauntlet.FEE_SIDE/SLIPPAGE_SIDE/
+FUNDING_EST_SWING (imported directly, not duplicated).
+
+THE RULEBOOK (check_exit, applied per-candle in order — this is law, not a heuristic):
+  R1 gap-through-SL: candle open already at/beyond SL → exit at OPEN (worse than SL).
+  R2 SL touch: checked BEFORE any profit logic — ambiguous candle (both SL+TP touched)
+      always resolves SL_HIT (house pessimism).
+  R3 partial at 1R: fires once, only if not already partial_done/sip_active and
+      orig_tp_rr > 1.05. Same-candle ordering: partial first, then TP if also touched.
+  R4 gap-through-TP: open already at/beyond TP → exit at TP exactly (never better).
+  R5 TP touch.
+  R6 nothing touched → next candle.
+
+check_exit has a THREE-STATE return (all callers must branch on
+`result is not None and result["exit_price"] is not None`, never bare dict truthiness,
+since a partial-only result is a truthy dict with exit_price/close_type = None):
+  None                                    → nothing happened
+  {exit_price: None, close_type: None, partial: {...}}  → 1R partial fired, still open
+  {exit_price: float, close_type: str, partial: dict|None}  → trade exited
+
+check_pending_fill: STOP-style orders (breakout, chasing the trigger direction) fill at
+the candle OPEN if it already gapped past entry (worse than quoted); LIMIT-style orders
+(pullback, against the trigger direction) always fill at exactly entry, never better,
+even on a favorable gap. The remainder of that same fill candle is then run through
+check_exit using its REAL open (not the fill price) — a fill candle can gap you straight
+through your stop in the same bar, and that must surface as an exit at the real gap price.
+
+get_exit_candles: returns None on genuine fetch failure (caller falls back to spot logic)
+vs [] on a successful fetch with nothing new yet (normal, most cycles — NOT a fallback
+trigger). Crypto uses a small dynamic candle count (1m, no scanner equivalent to share a
+cache with). Forex/stock request a FIXED 500 candles matching the main scanner's own 15m
+fetch depth (tf_fetch_limits in dexter.py) specifically so whichever of the two callers
+runs first this cycle populates fetch_candles()'s 60s cache for the other — this only
+works because the request SIZE matches; a dynamically-sized request (what was tried first)
+almost never matches the scanner's size and would just add a second network call.
+
+--- STEP 2: dexter.py wiring (done) ---
+
+Anchor A: `import honest_sim` added.
+New helper _honest_sim_last_check_ts(trade): reads trade["last_exit_check_ts"], else
+parses trade["opened_at"] (the reliable UTC string field — see KNOWN BUGS re: open_ts
+vs opened_at), else falls back to now-300s. Legacy trades from before this deploy get
+bootstrapped automatically, no backfill needed.
+
+Anchor C (PENDING, check_and_update_open_trades): candle fetch failure → byte-identical
+spot fallback. Otherwise honest_sim.check_pending_fill decides the fill. Fill price is
+now written back into trade["entry"] AND sheet column C (can legitimately differ from the
+quoted entry on a stop-style gap fill). If the fill candle also produced an immediate
+SL/TP hit, the trade opens and closes in the same cycle.
+
+Anchor B (OPEN, same function): fetch failure → the ENTIRE original spot block (TP/SL
+check + legacy 1R auto-partial) runs completely unchanged, still calling
+_sim_trading_cost — that swap is Step 3's job, not Step 2's. Otherwise honest_sim.check_exit
+decides; a partial executes at the exact 1R price via apply_costs(fraction=0.5) and writes
+the same-shaped PARTIAL_1R journal entry as before; a real exit still computes cost via
+_sim_trading_cost for now (same reason). The legacy partial block gained one guard clause
+(`exit_candles is None and ...`) so it only fires in the fallback branch. Milestones, SIP
+transition/ratchet, swing trailing, BOS alerts: untouched, still spot-price-driven, still
+unconditional.
+
+Jane (jane_*, check_and_update_jane_trades): zero edits, confirmed untouched — deliberate
+control arm on the old rules.
+
+================================================================================
+## WHAT WAS BUILT — THIS SESSION (2026-07-04, continued — escalation pipeline overhaul)
+================================================================================
+
+Context: the scoring recalibration (previous session) made the normal threshold so tight
+that Dexter escalated hundreds of setups over 10 hours and Chev posted ZERO trades. This
+whole run of work fixed the escalation pipeline itself, then built the infrastructure to
+run a data-collection phase safely, then closed 6 more bugs found by re-reading the
+scoring code end to end.
+
+1. TRADEABILITY PRE-GATE (new, runs before Chev is ever asked) — see CONFLUENCE SCORING
+   SYSTEM section above for full detail: trade threshold, struct pre-gate, distance gate
+   (now VP-aware), directional conflict gate (_directional_split). All four shadow-logged
+   under distinct NOT_ESCALATED reasons.
+
+2. THREE INCONSISTENT THRESHOLD LITERALS UNIFIED — min_score in ask_chev_to_judge,
+   min_score in the post-Chev hard score gate, and the raw CONFLUENCE_THRESHOLD_* checks
+   all used to compute the threshold slightly differently (one was even missing the
+   stock branch entirely, silently falling into the crypto=10 bucket). All three now
+   route through _active_thresholds()/the same CONFLUENCE_THRESHOLD_STOCK constant.
+
+3. CHEV'S SCORING RUBRIC REPLACED — Chev's system prompt used to hand him a stale,
+   differently-weighted scoring table and tell him to re-count points himself and SKIP if
+   under threshold. Since Dexter's score is now authoritative and pre-gates already
+   enforce it, the prompt now tells Chev the setup ALREADY PASSED the gate — his job is
+   judgment (structure, trend, contradictions, timing), never re-arithmetic. Also added
+   ENTRY MODES (confirmation vs pending-limit) so "price hasn't tagged the zone yet" no
+   longer produces a bad SKIP — Chev now parks a PENDING order instead.
+
+4. WEEKEND MARKET GATES — is_forex_market_open() added (forex closed Fri 22:00 UTC →
+   Sun 22:00 UTC); is_ny_market_hours() now also excludes weekends. Both gate their
+   respective scan loops so stocks/forex don't scan against stale closed-market candles.
+
+5. SIX BUG FIXES found re-reading the scoring code (see CONFLUENCE SCORING SYSTEM section
+   for the mechanics of each): VP distance-gate false rejection when a setup already has
+   a VP anchor; a second, older forming-divergence detector was silently occupying one of
+   the two confirmed-divergence scoring slots (removed from the scoring path only — the
+   display-only occurrence elsewhere is untouched); SR now scores only the nearer of
+   R/S when both are in range; opposing divergences (bull vs bear) can no longer both
+   score; BB squeeze demoted to 0pt context; the counter-trend "score ≥13" literal
+   unified to the real computed 1.5× number, in both dexter.py's prompt AND all three
+   playbook files. A seventh fix (VP respecting the auction anchor's own
+   active/confirmed validation stamps) landed in the same pass — see CONFLUENCE SCORING
+   SYSTEM section.
+
+6. DERIVATIVES LAYER — derivs.py, see its own section above.
+
+7. TRADE FORENSICS — trade_forensics.py, see its own section above.
+
+8. CHEV_PROMPT ("Chev Prompt" file) OVERHAUL — 5 edits: stripped stale point-value
+   annotations from the tag list (Dexter's score is authoritative, tags are for chart
+   anchors/learning only); replaced the false "SL automatically moves to breakeven at 1R"
+   claim with the real PARTIAL_1R / milestone-checkpoint / SIP mechanics; made the
+   Bollinger BURST rule regime-conditional (fade logic only applies in RANGING/weak
+   trend — in a CONFIRMED 4H trend price can "walk the band" and fading it is the
+   low-probability counter-trend trade); established explicit precedence between
+   Dexter's score (decides ELIGIBILITY, already decided) and the survey's letter grade
+   (conviction/sizing only, never a veto, and a SKIP on grade alone is no longer valid);
+   added an explicit "NO TOOL CALLS during Dexter escalations" rule (everything needed is
+   already embedded in the escalation message — calling get_market_survey etc. mid-
+   escalation just re-fetches data Chev already has and burns the response window).
+
+9. EXPLORATION MODE — see its own section above. Currently ACTIVE.
+
+10. PLAYBOOK TEXT CORRECTIONS + LEARNING-SESSION GUARDRAILS:
+    - Removed a false-confidence "100% win rate" claim and all remaining Bollinger-
+      squeeze-as-winner-ingredient mentions from chev_playbook_crypto.txt and the legacy
+      chev_playbook.txt (squeeze is 0pt context now, not a confluence).
+    - STATISTICAL HONESTY prompt block added to the learning-session generation prompt:
+      every win-rate/performance claim must state its sample size; no absolute language
+      ("always"/"never"/"100%"/"guaranteed") below n=20; patterns with <10 supporting
+      trades must be labeled tentative; only tag codes actually present in the supplied
+      journal data may be referenced.
+    - _preserve_critical_section() added — the learning session FULLY OVERWRITES each
+      playbook file on every rewrite, and its generation prompt never even asked the
+      model to reproduce the TRENDING MARKET BEHAVIOUR — CRITICAL section (hand-written,
+      must survive every rewrite). This was being silently dropped on every learning
+      session. Now: after generation, before write, the existing file's CRITICAL section
+      is extracted verbatim (works for both "### heading" and "**heading**" styles) and
+      spliced back into the generated text, replacing whatever the model produced there
+      (or inserting it if the model omitted it entirely, which it always was). Wrapped so
+      a preservation bug logs one line and falls back to the generated text as-is —
+      never blocks a learning session from completing.
+    - Investigated (not changed): the legacy chev_playbook.txt is frozen but not dead —
+      see FILE LOCATIONS section for detail.
+
+VERIFICATION STATUS ACROSS ALL OF THE ABOVE: dexter.py compiles clean throughout every
+step; labeller.py's 26/26 self-test re-run and re-passed after every dexter.py-adjacent
+change (confirms REASON_MAP tokenization untouched); derivs.py 12/12; trade_forensics.py
+19/19. Dexter was NOT restarted at any point during this work — Kev restarts it and
+pastes the updated Chev Prompt into Open WebUI himself.
+
+================================================================================
+## ARCHITECTURE — DESIGNED BUT NOT YET BUILT
+================================================================================
+
+--- REGIME TRANSITION DETECTION ---
+
+Store _prev_regimes = {} per symbol. After each _an_regime() call, compare.
+Transition confirmed when ALL THREE hold for 2 consecutive scans:
+  a. ADX rising (current ADX > ADX 3 candles ago)
+  b. Price closes above range top (or below bottom for downtrend)
+  c. Volume > 1.5× 20-period average
+
+Pre-transition fast-scan: when ADX is 20-25 AND rising, scan at 2-minute intervals.
+Output: pullback setup alert (NOT a chase signal).
+
+================================================================================
+## WHAT TO WORK ON NEXT (priority order as of 2026-07-04)
+================================================================================
+
+** FIRST: RESTART DEXTER, AND PASTE THE UPDATED CHEV PROMPT **
+All session changes are in dexter.py but Dexter is running old code.
+  cd C:\ChevTools && .venv\Scripts\python.exe dexter.py
+Separately (not automatic): open the "Chev Prompt" file, copy its full contents, and
+paste into Open WebUI's model system prompt editor for "chev-chelios" — the file edits
+this session (exploration paragraph, tag-list cleanup, BURST rewrite, score precedence,
+no-tools-during-escalation rule) change NOTHING in Chev's actual behavior until this is
+done manually. Confirm on the first terminal screen after restart that it prints
+"EXPLORATION MODE ACTIVE" with the expected numbers (crypto=7, forex=6, stock=6, max
+dist=1.5%) — if it prints "EXPLORATION MODE OFF" instead, EXPLORATION_MODE got flipped
+somewhere and needs checking before trusting escalation volume.
+
+0. WATCH THE EXPLORATION PHASE (new, see EXPLORATION MODE section above)
+   Expect escalation volume to rise within a day and small graded (mostly B) trades to
+   start posting. Watch for: Chev skipping on the old forbidden grounds (general caution,
+   letter grade alone, "not enough confluence") — if that happens, the Chev Prompt paste
+   likely didn't take. Once roughly 30–40 trades per asset class have closed, flip
+   EXPLORATION_MODE to False in dexter.py, restart, and decide whether to revert the Chev
+   Prompt exploration paragraph too (it is not auto-reverted by the code-side flip).
+
+1. HONEST SIMULATOR — STEP 3 (in progress, see THE HONEST SIMULATOR section below)
+   Replace every _sim_trading_cost() call site in dexter.py with honest_sim.apply_costs()
+   (six close paths: main TP/SL/SIP, legacy 1R partial fallback, _execute_partial_close
+   TAKE25/TAKE50, CHEV_CLOSE, api_close_trade, _startup_sl_audit — the last of which
+   currently charges ZERO cost, the one real gap found). Wire honest_sim.record_close_R
+   into all full closes. After Step 3: `grep _sim_trading_cost dexter.py` must show zero
+   call sites (function can stay defined, orphaned, marked deprecated).
+
+2. HONEST SIMULATOR — STEP 4
+   Circuit breaker gate before ask_chev_to_judge: check honest_sim.breaker_status(),
+   skip escalation + labeller NOT_ESCALATED/circuit_breaker + one Telegram alert/day if
+   halted. Open trades keep managing normally — breaker only blocks NEW risk.
+
+3. OPEN QUESTION FROM STEP 2 (needs Kev's decision before Step 3 locks it in):
+   The new candle-true house partial (fires automatically at exactly 1R) and the
+   existing Chev-milestone partial ask (_ask_chev_partial_tp, HOLD/TAKE25/TAKE50/TRAIL_SL)
+   can now both fire the same cycle on scalp/day trades, since the house partial runs
+   earlier in the function than before. Need to decide: suppress the milestone-ask once
+   the house partial has already fired, or leave both live and let Chev judge on the
+   already-reduced position.
+
+4. STACKED GP PRE-COMPUTED IN BRIEF
+   In _build_rich_market_brief(), check if 1H and 4H golden pockets overlap.
+   If yes, show "⚡ STACKED GP: 1H + 4H overlap @ X.XX – X.XX" near the top.
+   Overlap = max(lo_1h, lo_4h) to min(hi_1h, hi_4h) if result > 0.
+
+5. PERFORMANCE ANALYTICS — QUANTITATIVE
+   Replace descriptive learning summary with real numbers from chev_journal.json:
+   win rate / avg R-multiple / expectancy by: confluence tag combo, session, TF, grade.
+   NOTE: trade_forensics.py's "forensics" journal field (MAE/MFE/RSI path, wick-vs-close,
+   stopped_then_ran) is now being populated on every close — once ≥10 closed trades per
+   asset carry it, the learning session already surfaces a TRADE PATH FORENSICS aggregate
+   block as model input. This item is about surfacing the same numbers to Kev directly
+   (e.g. in label_report.txt or a new report function), not just feeding the LLM.
+
+6. REGIME TRANSITION DETECTION (see design above)
+
+7. VERIFY FORMING DIVERGENCE IN BROWSER
+   Restart Dexter, open webapp, click RSI÷, verify 🟡/🟠 for forming in dropdown,
+   dashed amber + 4-bar projection on chart. Solid lines for confirmed.
+
+REMOVED FROM PIPELINE (do not bring back):
+  - Same-pair cooldown — Kev explicitly rejected (paper trading context)
+  - Correlated pair guard — pairs move differently intraday, not a real risk
+
+================================================================================
+## KNOWN BUGS / GOTCHAS
+================================================================================
+
+- client.session.timeout in gspread: NEVER add this. That version of gspread has no
+  .session attribute on Client. Adding it causes AttributeError.
+
+- Expo Node version: Node 24 breaks Expo config plugins. Always `nvm use 20` first.
+
+- Dexter's /api/pending: always guard with `if worksheet is None: return jsonify([])`
+  before any worksheet.get_all_values() call. Worksheet can be None when Sheets fails.
+
+- Firebase SSE race: RSI div lines (_rsi_div flag) must NEVER be saved to Firebase/
+  localStorage. _clearRsiDivOverlay() and _drawRsiDivVisual() must never call
+  saveDrawings(). SSE listener must preserve live _rsi_div drawings on update.
+
+- labeller.py: direction_src "chev" and "proxy" must NEVER be mixed in statistics.
+  A setup where Chev's direction contradicts the zone proxy is NOT an error — it's
+  Chev exercising judgment. Record both; compare separately.
+
+- labeller.py entry_ref for non-POST: always result["price"] (the confluence zone).
+  Never result["current_price"] — that would make every record immediately touch-activate.
+
+- Two different "when opened" fields exist on a trade dict: opened_at (a plain UTC
+  string, "%Y-%m-%d %H:%M:%S", reliably stamped at creation for every real trade) and
+  open_ts (an ISO-format field _sim_trading_cost() reads for crypto-swing funding math,
+  but which is basically never populated for real trades — only ever set when loading
+  old Jane rows from the sheet). Net effect: crypto swing funding cost has likely been
+  silently computing as $0 this whole time. honest_sim keys off opened_at, not open_ts.
+  Not fixed as part of the honest_sim build (out of scope) — flagging for whenever it is.
+
+- "Chev Prompt" is the ACTUAL filename — no underscore, no file extension. Task briefs
+  and prior conversation sometimes refer to it as "Chev_Prompt" or "chev_prompt.txt";
+  those don't exist. Editing the real file changes nothing in Chev's behavior until the
+  content is manually pasted into Open WebUI's model system prompt editor.
+
+- _setup_grade()'s min_score must NEVER be routed through _active_thresholds() — it is
+  the one deliberate exception to "every gate reads thresholds through the helper".
+  Grading always uses the full normal per-asset threshold regardless of EXPLORATION_MODE,
+  because the grade (and its suggested risk %) is the actual risk control during the
+  exploration phase. If a future edit "fixes" this to be consistent with the other
+  threshold call sites, it defeats the entire safety design of exploration mode.
+
+- chev_playbook.txt (no asset suffix, legacy) is frozen but NOT dead: _run_learning_
+  session is never called with asset_type=None anymore, so nothing rewrites this file —
+  but the Firebase monitor snapshot push and _ask_chev_about_jane_trade() both still read
+  it live. Don't assume "no writer" means "safe to delete."
 
 ================================================================================
 ## INFRASTRUCTURE

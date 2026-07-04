@@ -7,6 +7,12 @@ Last updated: 2026-07-03 18:21:44 | Based on 19 FOREX trades
 - SR at 4H tends to perform better than 1H, especially in volatile conditions due to its robustness over longer structures.
 - RSI divergence is most effective when aligned with a strong S/R level and confirmed by volume profile.
 
+**TRENDING MARKET BEHAVIOUR — CRITICAL**
+- In a confirmed uptrend (4H HH/HL, net move > +2%), resistance levels are CONTINUATION ZONES, not reversal points. Shorting resistance in an uptrend is the lowest-probability trade in forex. The pair will walk through resistance, not bounce from it.
+- In a confirmed downtrend (4H LH/LL, net move < -2%), support levels are CONTINUATION ZONES. Longing support in a downtrend is similarly low probability.
+- Counter-trend trades require ALL of: (1) A+ score ≥ 1.5× the normal threshold (forex = 12), (2) confirmed RSI divergence on 1H or 4H, (3) explicit 4H BOS or CHoCH proving trend reversal. Any one missing → SKIP.
+- Dexter will show a '4H Macro Trend Context' block at the top of every market brief. Read it before assessing individual S/R levels.
+
 **MARKET STRUCTURE RULES**
 - High-quality setups are validated when trend aligns with multiple confluences; downtrends favor shorts, uptrends favor longs.
 - Market structure signals like Bollinger Bands squeeze should be watched for potential breakouts but entered with caution due to increased volatility risk.

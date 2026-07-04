@@ -3,12 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Chev Trading System — Alejandro's Guide</title>
+<title>Chev Trading System — Pipeline Guide</title>
 <style>
   :root {
     --bg: #0d0f1b;
     --surface: #13152a;
     --surface2: #1a1d33;
+    --surface3: #21254a;
     --border: rgba(255,255,255,0.07);
     --accent: #6c8cff;
     --green: #3ecf8e;
@@ -28,16 +29,18 @@
     font-size: 15px;
     line-height: 1.6;
     padding: 40px 20px 80px;
-    max-width: 960px;
+    max-width: 980px;
     margin: 0 auto;
   }
+  a { color: var(--accent); }
+  code { font-family: 'Consolas', monospace; }
 
   /* ── HERO ── */
   .hero {
     text-align: center;
-    padding: 60px 20px 40px;
+    padding: 60px 20px 30px;
     border-bottom: 1px solid var(--border);
-    margin-bottom: 60px;
+    margin-bottom: 40px;
   }
   .hero .badge {
     display: inline-block;
@@ -62,376 +65,194 @@
     background-clip: text;
     margin-bottom: 16px;
   }
-  .hero p {
-    color: var(--muted);
-    font-size: 17px;
-    max-width: 600px;
-    margin: 0 auto;
-  }
+  .hero p { color: var(--muted); font-size: 17px; max-width: 640px; margin: 0 auto; }
+  .hero .updated { margin-top: 18px; font-size: 12px; color: var(--muted); }
 
-  /* ── SECTION HEADERS ── */
-  .section-label {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--accent);
-    margin-bottom: 12px;
-  }
-  h2 {
-    font-size: 26px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    margin-bottom: 8px;
-  }
-  .section-intro {
-    color: var(--muted);
-    margin-bottom: 36px;
-    max-width: 680px;
-  }
-  section { margin-bottom: 72px; }
-
-  /* ── FLOW DIAGRAM ── */
-  .flow {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0;
-    flex-wrap: wrap;
-    padding: 40px 20px;
+  /* ── TOC ── */
+  .toc {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    row-gap: 20px;
+    padding: 20px 24px;
+    margin-bottom: 60px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 6px 24px;
   }
-  .flow-node {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    min-width: 110px;
+  .toc a {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    text-decoration: none;
+    padding: 5px 0;
   }
+  .toc a:hover { color: var(--accent); }
+  .toc a b { color: var(--text); font-weight: 600; }
+
+  /* ── SECTION HEADERS ── */
+  .section-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 12px;
+  }
+  h2 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 8px; }
+  h3 { font-size: 17px; font-weight: 700; margin-bottom: 10px; }
+  .section-intro { color: var(--muted); margin-bottom: 32px; max-width: 700px; }
+  section { margin-bottom: 72px; scroll-margin-top: 20px; }
+
+  /* ── FLOW DIAGRAM ── */
+  .flow {
+    display: flex; align-items: center; justify-content: center; gap: 0;
+    flex-wrap: wrap; padding: 40px 20px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: var(--radius); row-gap: 24px;
+  }
+  .flow-node { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 108px; max-width: 130px; }
   .flow-icon {
-    width: 64px;
-    height: 64px;
-    border-radius: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    border: 1px solid transparent;
-    position: relative;
+    width: 60px; height: 60px; border-radius: 16px; display: flex;
+    align-items: center; justify-content: center; font-size: 26px;
+    border: 1px solid transparent; position: relative;
   }
   .flow-icon.data    { background: rgba(62,207,142,0.12); border-color: rgba(62,207,142,0.25); }
   .flow-icon.engine  { background: rgba(108,140,255,0.12); border-color: rgba(108,140,255,0.25); }
   .flow-icon.dexter  { background: rgba(245,200,66,0.12); border-color: rgba(245,200,66,0.25); }
+  .flow-icon.gate    { background: rgba(255,92,92,0.12); border-color: rgba(255,92,92,0.25); }
   .flow-icon.chev    { background: rgba(108,140,255,0.18); border-color: rgba(108,140,255,0.40); box-shadow: 0 0 24px rgba(108,140,255,0.2); }
-  .flow-icon.jane    { background: rgba(185,124,243,0.12); border-color: rgba(185,124,243,0.25); }
-  .flow-icon.output  { background: rgba(255,154,60,0.12); border-color: rgba(255,154,60,0.25); }
-  .flow-label {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text);
-    text-align: center;
+  .flow-icon.risk    { background: rgba(255,154,60,0.12); border-color: rgba(255,154,60,0.25); }
+  .flow-icon.manage  { background: rgba(185,124,243,0.12); border-color: rgba(185,124,243,0.25); }
+  .flow-icon.learn   { background: rgba(62,207,142,0.12); border-color: rgba(62,207,142,0.25); }
+  .flow-label { font-size: 12px; font-weight: 600; color: var(--text); text-align: center; }
+  .flow-sub { font-size: 10px; color: var(--muted); text-align: center; line-height: 1.3; }
+  .flow-arrow { font-size: 20px; color: var(--muted); padding: 0 2px; }
+
+  /* ── LIVE CONFIG STRIP ── */
+  .config-strip {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px; background: var(--border); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden; margin-top: 20px;
   }
-  .flow-sub {
-    font-size: 10px;
-    color: var(--muted);
-    text-align: center;
-    line-height: 1.3;
-  }
-  .flow-arrow {
-    font-size: 22px;
-    color: var(--muted);
-    padding: 0 4px;
-    margin-top: -24px;
-  }
+  .config-cell { background: var(--surface); padding: 16px 18px; }
+  .config-cell .cfg-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 6px; }
+  .config-cell .cfg-value { font-size: 18px; font-weight: 700; }
+  .config-cell .cfg-value.on { color: var(--green); }
+  .config-note { font-size: 12px; color: var(--muted); margin-top: 10px; }
 
   /* ── MODULE CARDS ── */
-  .cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 16px;
-  }
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 24px;
-    position: relative;
-    overflow: hidden;
-  }
-  .card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 3px;
-    border-radius: var(--radius) var(--radius) 0 0;
-  }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; position: relative; overflow: hidden; }
+  .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; border-radius: var(--radius) var(--radius) 0 0; }
   .card.green::before  { background: var(--green); }
   .card.blue::before   { background: var(--accent); }
   .card.yellow::before { background: var(--yellow); }
   .card.purple::before { background: var(--purple); }
   .card.orange::before { background: var(--orange); }
   .card.red::before    { background: var(--red); }
-
-  .card-icon { font-size: 28px; margin-bottom: 12px; }
-  .card-title {
-    font-size: 16px;
-    font-weight: 700;
-    margin-bottom: 4px;
-  }
-  .card-role {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 14px;
-  }
-  .card p {
-    color: var(--muted);
-    font-size: 13.5px;
-    margin-bottom: 16px;
-  }
-  .io-row {
-    display: flex;
-    gap: 10px;
-    font-size: 12px;
-  }
-  .io-box {
-    flex: 1;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 12px;
-  }
-  .io-box .io-label {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-bottom: 6px;
-  }
-  .io-box.in .io-label  { color: var(--green); }
-  .io-box.out .io-label { color: var(--accent); }
-  .io-box ul { list-style: none; }
-  .io-box ul li { color: var(--muted); margin-bottom: 3px; }
-  .io-box ul li::before { content: '› '; color: var(--border); }
-
-  .touch-rule {
-    margin-top: 14px;
-    padding: 10px 14px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .touch-rule.danger { background: rgba(255,92,92,0.1); border: 1px solid rgba(255,92,92,0.2); color: var(--red); }
-  .touch-rule.caution { background: rgba(245,200,66,0.1); border: 1px solid rgba(245,200,66,0.2); color: var(--yellow); }
-  .touch-rule.safe { background: rgba(62,207,142,0.1); border: 1px solid rgba(62,207,142,0.2); color: var(--green); }
+  .card-icon { font-size: 26px; margin-bottom: 10px; }
+  .card-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; font-family: monospace; }
+  .card-role { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+  .card p { color: var(--muted); font-size: 13.5px; }
 
   /* ── CONFLUENCE TABLE ── */
-  .conf-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 14px;
-  }
-  .conf-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
-  }
-  .conf-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 12px;
-  }
-  .conf-dot {
-    width: 12px; height: 12px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .conf-name {
-    font-size: 14px;
-    font-weight: 700;
-  }
-  .conf-code {
-    font-family: monospace;
-    font-size: 11px;
-    color: var(--muted);
-    background: var(--surface2);
-    padding: 2px 8px;
-    border-radius: 4px;
-    margin-left: auto;
-  }
-  .conf-desc {
-    font-size: 13px;
-    color: var(--muted);
-    margin-bottom: 12px;
-  }
-  .conf-bar-wrap {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 12px;
-  }
-  .conf-bar-track {
-    flex: 1;
-    height: 6px;
-    background: var(--surface2);
-    border-radius: 99px;
-    overflow: hidden;
-  }
-  .conf-bar-fill {
-    height: 100%;
-    border-radius: 99px;
-  }
-  .conf-strength {
-    font-size: 11px;
-    font-weight: 700;
-    min-width: 40px;
-    text-align: right;
-  }
+  .conf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .conf-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; }
+  .conf-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .conf-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+  .conf-name { font-size: 13.5px; font-weight: 700; }
+  .conf-pt { font-family: monospace; font-size: 11px; color: var(--text); background: var(--surface2); padding: 2px 8px; border-radius: 4px; margin-left: auto; white-space: nowrap; }
+  .conf-desc { font-size: 12.5px; color: var(--muted); }
 
-  /* ── SCORING THRESHOLD ── */
-  .threshold-row {
-    display: flex;
-    align-items: center;
-    gap: 0;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
-    margin-bottom: 16px;
-  }
-  .th-cell {
-    flex: 1;
-    padding: 20px;
-    text-align: center;
-    border-right: 1px solid var(--border);
-    position: relative;
-  }
+  /* ── THRESHOLD STRIP ── */
+  .threshold-row { display: flex; align-items: stretch; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 16px; flex-wrap: wrap; }
+  .th-cell { flex: 1; min-width: 140px; padding: 18px; text-align: center; border-right: 1px solid var(--border); }
   .th-cell:last-child { border-right: none; }
-  .th-score {
-    font-size: 32px;
-    font-weight: 800;
-    letter-spacing: -0.03em;
-  }
-  .th-label {
-    font-size: 11px;
-    color: var(--muted);
-    margin-top: 4px;
-    font-weight: 600;
-  }
-  .th-action {
-    font-size: 12px;
-    margin-top: 6px;
-    font-weight: 600;
-    padding: 4px 10px;
-    border-radius: 99px;
-  }
+  .th-score { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
+  .th-label { font-size: 11px; color: var(--muted); margin-top: 4px; font-weight: 600; }
+  .th-action { font-size: 11px; margin-top: 6px; font-weight: 600; padding: 3px 9px; border-radius: 99px; display: inline-block; }
   .th-skip { color: var(--red); background: rgba(255,92,92,0.1); }
   .th-watch { color: var(--yellow); background: rgba(245,200,66,0.1); }
   .th-escalate { color: var(--green); background: rgba(62,207,142,0.1); }
 
-  /* ── ANNOTATED EXAMPLE ── */
-  .example-wrap {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+  /* ── ACCORDION (pipeline walkthrough) ── */
+  .accordion { display: flex; flex-direction: column; gap: 10px; }
+  details.step {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
     overflow: hidden;
   }
-  .example-header {
-    padding: 16px 24px;
-    background: var(--surface2);
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
-    color: var(--muted);
-    display: flex;
-    align-items: center;
-    gap: 10px;
+  details.step[open] { border-color: rgba(108,140,255,0.3); }
+  details.step summary {
+    list-style: none; cursor: pointer; padding: 16px 20px; display: flex;
+    align-items: center; gap: 14px; user-select: none;
   }
-  .example-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); }
-  .example-body { padding: 24px; }
-  .anno-line {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 12px;
-    align-items: flex-start;
+  details.step summary::-webkit-details-marker { display: none; }
+  .step-num {
+    width: 28px; height: 28px; border-radius: 50%; background: var(--surface3);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; color: var(--accent); flex-shrink: 0;
   }
-  .anno-code {
-    font-family: monospace;
-    font-size: 13px;
-    color: var(--text);
-    background: var(--surface2);
-    padding: 6px 12px;
-    border-radius: 6px;
-    min-width: 300px;
-    flex-shrink: 0;
-    border-left: 3px solid;
+  .step-title { font-weight: 700; font-size: 14.5px; flex: 1; }
+  .step-tag { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 9px; border-radius: 99px; }
+  .step-tag.dexter { background: rgba(245,200,66,0.12); color: var(--yellow); }
+  .step-tag.chev   { background: rgba(108,140,255,0.15); color: var(--accent); }
+  .step-tag.gate   { background: rgba(255,92,92,0.12); color: var(--red); }
+  .step-chevron { color: var(--muted); font-size: 12px; transition: transform 0.15s; }
+  details.step[open] .step-chevron { transform: rotate(90deg); }
+  .step-body { padding: 0 20px 20px 62px; color: var(--muted); font-size: 13.5px; }
+  .step-body p { margin-bottom: 10px; }
+  .step-body code.inline { background: var(--surface2); padding: 1px 6px; border-radius: 4px; font-size: 12px; color: var(--text); }
+  .step-body ul { margin: 8px 0 8px 18px; }
+  .step-body li { margin-bottom: 4px; }
+
+  /* ── TABS (scenarios) ── */
+  .tabs { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .tab-buttons { display: flex; flex-wrap: wrap; background: var(--surface2); border-bottom: 1px solid var(--border); }
+  .tab-btn {
+    background: none; border: none; color: var(--muted); font-size: 12.5px; font-weight: 600;
+    padding: 14px 18px; cursor: pointer; border-bottom: 2px solid transparent; font-family: inherit;
   }
-  .anno-arrow {
-    font-size: 18px;
-    color: var(--muted);
-    margin-top: 4px;
-    flex-shrink: 0;
-  }
-  .anno-explain {
-    font-size: 13px;
-    color: var(--muted);
-    padding-top: 4px;
-  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; padding: 24px; }
+  .tab-panel.active { display: block; }
+  .scenario-verdict { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; padding: 5px 12px; border-radius: 99px; margin-bottom: 16px; }
+  .scenario-verdict.post { background: rgba(62,207,142,0.12); color: var(--green); }
+  .scenario-verdict.skip { background: rgba(245,200,66,0.12); color: var(--yellow); }
+  .scenario-verdict.blocked { background: rgba(255,92,92,0.12); color: var(--red); }
+  .scenario-timeline { display: flex; flex-direction: column; gap: 0; }
+  .tl-row { display: flex; gap: 14px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .tl-row:last-child { border-bottom: none; }
+  .tl-dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+  .tl-text { font-size: 13.5px; color: var(--muted); }
+  .tl-text b { color: var(--text); }
+
+  /* ── ANNOTATED EXAMPLE ── */
+  .example-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .example-header { padding: 14px 22px; background: var(--surface2); border-bottom: 1px solid var(--border); font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 10px; }
+  .example-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+  .example-body { padding: 22px; }
+  .anno-line { display: flex; gap: 16px; margin-bottom: 14px; align-items: flex-start; flex-wrap: wrap; }
+  .anno-code { font-family: monospace; font-size: 12.5px; color: var(--text); background: var(--surface2); padding: 6px 12px; border-radius: 6px; min-width: 260px; flex-shrink: 0; border-left: 3px solid; }
+  .anno-arrow { font-size: 16px; color: var(--muted); margin-top: 5px; flex-shrink: 0; }
+  .anno-explain { font-size: 13px; color: var(--muted); padding-top: 5px; flex: 1; min-width: 200px; }
   .anno-explain strong { color: var(--text); }
 
-  /* ── RULES TABLE ── */
-  .rules-table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-  .rules-table th {
-    text-align: left;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--muted);
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border);
-  }
-  .rules-table td {
-    padding: 14px 16px;
-    font-size: 13.5px;
-    border-bottom: 1px solid rgba(255,255,255,0.03);
-    vertical-align: top;
-  }
-  .rules-table tr:last-child td { border-bottom: none; }
-  .rules-table td:first-child { color: var(--muted); min-width: 180px; }
-  .pill {
-    display: inline-block;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 9px;
-    border-radius: 99px;
-    margin-right: 4px;
-  }
-  .pill.kev { background: rgba(108,140,255,0.15); color: var(--accent); }
-  .pill.ale { background: rgba(62,207,142,0.15); color: var(--green); }
-  .pill.both { background: rgba(245,200,66,0.12); color: var(--yellow); }
-  .pill.never { background: rgba(255,92,92,0.12); color: var(--red); }
+  /* ── DIAGNOSIS PANEL ── */
+  .diag-panel { background: var(--surface); border: 1px solid rgba(255,92,92,0.25); border-radius: var(--radius); overflow: hidden; }
+  .diag-header { padding: 16px 24px; background: rgba(255,92,92,0.08); border-bottom: 1px solid rgba(255,92,92,0.2); display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 14px; }
+  .diag-body { padding: 24px; }
+  .diag-stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 12px; margin: 16px 0 22px; }
+  .diag-stat { background: var(--surface2); border-radius: 10px; padding: 14px 16px; text-align: center; }
+  .diag-stat .n { font-size: 24px; font-weight: 800; }
+  .diag-stat .l { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 3px; }
+  .fix-box { background: rgba(62,207,142,0.06); border: 1px solid rgba(62,207,142,0.2); border-radius: 10px; padding: 14px 18px; margin-top: 12px; }
+  .fix-box .fix-label { font-size: 11px; font-weight: 700; color: var(--green); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+  .fix-box p { font-size: 13px; color: var(--muted); }
+
+  /* ── GLOSSARY ── */
+  .glossary { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px,1fr)); gap: 2px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .g-item { background: var(--surface); padding: 14px 18px; }
+  .g-term { font-family: monospace; font-size: 12.5px; font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+  .g-def { font-size: 12.5px; color: var(--muted); }
 
   /* ── FOOTER ── */
-  .footer {
-    text-align: center;
-    padding-top: 40px;
-    border-top: 1px solid var(--border);
-    color: var(--muted);
-    font-size: 13px;
-  }
+  .footer { text-align: center; padding-top: 40px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
   .footer strong { color: var(--text); }
 </style>
 </head>
@@ -439,518 +260,610 @@
 
 <!-- HERO -->
 <div class="hero">
-  <div class="badge">For Alejandro — Read This First</div>
+  <div class="badge">Pipeline Reference — Updated Live</div>
   <h1>The Chev Trading System</h1>
-  <p>Everything you need to understand what we built, how it works, and what you can safely touch — without reading 7,000 lines of code.</p>
+  <p>Dexter watches the market, scores what he sees, and only bothers Chev when something looks real. Chev decides. Dexter executes, manages, and grades the outcome. This page follows one setup all the way through — plus what actually happened tonight.</p>
+  <div class="updated">Verified directly against the running code on 2026-07-04, 23:55 UTC+1 — not a static description, every number below was checked against the source.</div>
 </div>
 
-<!-- SECTION 1: SYSTEM FLOW -->
-<section>
+<div class="toc">
+  <div><a href="#big-picture"><b>01</b> — The Big Picture</a></div>
+  <div><a href="#walkthrough"><b>02</b> — Follow a Setup Through the Pipeline</a></div>
+  <div><a href="#scoring"><b>03</b> — How Dexter Scores a Setup</a></div>
+  <div><a href="#gates"><b>04</b> — The Gates Before Chev Ever Sees It</a></div>
+  <div><a href="#sends"><b>05</b> — What Dexter Actually Sends Chev</a></div>
+  <div><a href="#responds"><b>06</b> — How Chev Must Respond</a></div>
+  <div><a href="#gauntlet"><b>07</b> — What Happens After Chev Says Yes</a></div>
+  <div><a href="#managing"><b>08</b> — Managing an Open Trade</a></div>
+  <div><a href="#closing"><b>09</b> — When a Trade Closes (the learning loop)</a></div>
+  <div><a href="#scenarios"><b>10</b> — Four Real Scenarios</a></div>
+  <div><a href="#tonight"><b>11</b> — Tonight: Why Has Nothing Posted?</a></div>
+  <div><a href="#glossary"><b>12</b> — Glossary</a></div>
+</div>
+
+<!-- 01 BIG PICTURE -->
+<section id="big-picture">
   <div class="section-label">01 — The Big Picture</div>
   <h2>How the system flows</h2>
-  <p class="section-intro">Five components working in a chain. Each one has a single job. Nothing talks out of order. Follow the arrows.</p>
+  <p class="section-intro">Market data goes in one end. A trade decision — or a documented "no" — comes out the other. Nothing skips a step, and every rejection is logged somewhere, even the ones Chev never sees.</p>
 
   <div class="flow">
     <div class="flow-node">
       <div class="flow-icon data">📡</div>
       <div class="flow-label">Market Data</div>
-      <div class="flow-sub">Live OHLCV<br>candles via API</div>
+      <div class="flow-sub">Live candles: Binance (crypto), Twelve Data / Finnhub (forex, stocks)</div>
     </div>
     <div class="flow-arrow">→</div>
     <div class="flow-node">
       <div class="flow-icon engine">⚙️</div>
-      <div class="flow-label">engines.py</div>
-      <div class="flow-sub">The calculator.<br>Pure maths.</div>
+      <div class="flow-label">engines.py + patterns.py + derivs.py</div>
+      <div class="flow-sub">Pure maths: SR, Fib, VP, RSI div, patterns, funding/OI</div>
     </div>
     <div class="flow-arrow">→</div>
     <div class="flow-node">
       <div class="flow-icon dexter">🔬</div>
-      <div class="flow-label">dexter.py</div>
-      <div class="flow-sub">The analyst.<br>Runs every 5 min.</div>
+      <div class="flow-label">dexter.py<br>scan_pair_tf()</div>
+      <div class="flow-sub">Scores every pair/timeframe, every ~2 min</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="flow-icon gate">🚦</div>
+      <div class="flow-label">The Gates</div>
+      <div class="flow-sub">Cooldowns, regime, pre-gate, circuit breaker — most setups die here</div>
     </div>
     <div class="flow-arrow">→</div>
     <div class="flow-node">
       <div class="flow-icon chev">🧠</div>
       <div class="flow-label">Chev (LLM)</div>
-      <div class="flow-sub">The senior trader.<br>Decides yes/no.</div>
+      <div class="flow-sub">POST or SKIP, with reasoning</div>
     </div>
     <div class="flow-arrow">→</div>
     <div class="flow-node">
-      <div class="flow-icon output">📊</div>
-      <div class="flow-label">Outputs</div>
-      <div class="flow-sub">Telegram, Sheets,<br>Webapp dashboard</div>
+      <div class="flow-icon risk">🛡️</div>
+      <div class="flow-label">risk_gauntlet.py</div>
+      <div class="flow-sub">14 checks decide real size &amp; leverage — Chev's numbers are a request, not the final word</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="flow-icon manage">📈</div>
+      <div class="flow-label">Live Management</div>
+      <div class="flow-sub">honest_sim exits, level-health, SIP, milestones</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node">
+      <div class="flow-icon learn">🎓</div>
+      <div class="flow-label">Close + Learn</div>
+      <div class="flow-sub">Postmortem, forensics, the Examiner, playbook rewrite</div>
+    </div>
+  </div>
+
+  <div class="config-strip">
+    <div class="config-cell">
+      <div class="cfg-label">Exploration Mode</div>
+      <div class="cfg-value on">ACTIVE</div>
+    </div>
+    <div class="config-cell">
+      <div class="cfg-label">Crypto Threshold</div>
+      <div class="cfg-value">7 <span style="color:var(--muted);font-size:12px;">(normal: 10)</span></div>
+    </div>
+    <div class="config-cell">
+      <div class="cfg-label">Forex / Stock Threshold</div>
+      <div class="cfg-value">6 <span style="color:var(--muted);font-size:12px;">(normal: 8)</span></div>
+    </div>
+    <div class="config-cell">
+      <div class="cfg-label">Max Distance From Level</div>
+      <div class="cfg-value">1.5% <span style="color:var(--muted);font-size:12px;">(normal: 0.75%)</span></div>
+    </div>
+    <div class="config-cell">
+      <div class="cfg-label">Circuit Breaker Halt</div>
+      <div class="cfg-value">−3.0R / day</div>
+    </div>
+  </div>
+  <div class="config-note">This is a paper account in a deliberate data-collection phase: the entry bar is lowered so the learning loop (the Examiner, the playbooks) gets enough closed trades to learn from. Every safety gate downstream of entry — risk sizing, stop-loss sanity, circuit breaker — is untouched by this and runs at full strength regardless. Check dexter.py's first console lines on startup to confirm this is still the live state; it is designed to be turned off by flipping one constant once ~30–40 trades per asset class have closed.</div>
+</section>
+
+<!-- 02 WALKTHROUGH -->
+<section id="walkthrough">
+  <div class="section-label">02 — Interactive</div>
+  <h2>Follow one setup through the entire pipeline</h2>
+  <p class="section-intro">Click each step to expand it. This is the exact order the code runs in — nothing here is simplified or reordered for narrative convenience.</p>
+
+  <div class="accordion">
+
+    <details class="step" open>
+      <summary>
+        <div class="step-num">1</div>
+        <div class="step-title">Every ~2 minutes, Dexter scans every pair × timeframe combination</div>
+        <div class="step-tag dexter">DEXTER</div>
+        <div class="step-chevron">▶</div>
+      </summary>
+      <div class="step-body">
+        <p>Crypto scans <code class="inline">5m / 15m / 30m / 1h / 4h</code>. Forex and stocks scan <code class="inline">15m / 30m / 1h / 4h</code> only — no 5m, the data's too thin to trust at that speed. Each (symbol, timeframe) pair only re-scans when its own candle has actually closed, not on a flat timer — a 4H pair isn't re-evaluated every 2 minutes, only every 4 hours.</p>
+        <p>If a symbol already has an open trade, it's skipped from new scans entirely for that symbol — Dexter doesn't pile more scrutiny onto something he's already managing.</p>
+      </div>
+    </details>
+
+    <details class="step">
+      <summary>
+        <div class="step-num">2</div>
+        <div class="step-title">engines.py / patterns.py / derivs.py do the actual measuring</div>
+        <div class="step-tag dexter">DEXTER</div>
+        <div class="step-chevron">▶</div>
+      </summary>
+      <div class="step-body">
+        <p>Dexter never eyeballs a chart — everything is a number produced by a dedicated module:</p>
+        <ul>
+          <li><b style="color:var(--text)">engines.py</b> — swing highs/lows, SR zone touch counts, Fibonacci anchors, Volume Profile bins, RSI divergence pivots.</li>
+          <li><b style="color:var(--text)">patterns.py</b> — chart pattern detection (head & shoulders, double top/bottom, triangles, flags) with a confidence score.</li>
+          <li><b style="color:var(--text)">derivs.py</b> — crypto-only: Binance funding rate (read as a <i>contrarian</i> signal — the crowded side pays to stay in, which is squeeze fuel against them) and open-interest trend (price+OI direction agreement/disagreement).</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="step">
+      <summary>
+        <div class="step-num">3</div>
+        <div class="step-title">Every signal gets turned into points, then multiplied by timeframe</div>
+        <div class="step-tag dexter">DEXTER</div>
+        <div class="step-chevron">▶</div>
+      </summary>
+      <div class="step-body">
+        <p>Full breakdown in <a href="#scoring">section 03</a>. The short version: SR, Golden Pocket, Volume Profile, and confirmed RSI divergence are the heavyweight signals (3–4pt); EMA position, Bollinger Band state, chart patterns, and Fibonacci add smaller amounts; a few things (BB squeeze, RSI 50-cross, "forming" divergence) are shown to Chev as context but score <b style="color:var(--text)">zero</b> points on purpose, because scoring them contradicted the playbook rule to avoid entering during them.</p>
+      </div>
+    </details>
+
+    <details class="step">
+      <summary>
+        <div class="step-num">4</div>
+        <div class="step-title">The gates — most setups die right here, before Chev is ever asked</div>
+        <div class="step-tag gate">GATE</div>
+        <div class="step-chevron">▶</div>
+      </summary>
+      <div class="step-body">
+        <p>Full breakdown in <a href="#gates">section 04</a>. In order: circuit breaker → rate-limit/Chev-health check → cooldown → forex event block → choppy-regime filter → the minimum-worth-evaluating pre-check → the four-part Tradeability Pre-Gate (score threshold, structural anchor, distance from level, directional conflict). Every rejection here is shadow-logged to the Examiner with a specific reason code — nothing just silently vanishes.</p>
+      </div>
+    </details>
+
+    <details class="step">
+      <summary>
+        <div class="step-num">5</div>
+        <div class="step-title">If it survives everything above, Chev gets asked</div>
+        <div class="step-tag chev">CHEV</div>
+        <div class="step-chevron">▶</div>
+      </summary>
+      <div class="step-body">
+        <p>Full breakdown in <a href="#sends">section 05</a>. Chev receives his own playbook, recent journal entries, current open positions, a full market brief (price, Fib, SR, Volume Profile, RSI, BOS/CHoCH, session context), and an explicit set of tools he's instructed to call before deciding. He replies in a strict format — see <a href="#responds">section 06</a>.</p>
+      </div>
+    </details>
+
+    <details class="step">
+      <summary>
+        <div class="step-num">6</div>
+        <div class="step-title">If Chev says POST, risk_gauntlet.py decides what actually happens</div>
+        <div class="step-tag gate">GATE</div>
+        <div class="step-chevron">▶</div>
+      </summary>
+      <div class="step-body">
+        <p>Full breakdown in <a href="#gauntlet">section 07</a>. Chev's requested size, risk %, and leverage are treated as a <i>request</i>, not an instruction — 14 sequential checks (equity floor, side sanity, ATR data quality, stale price, ATR floor, risk-band clamp by setup grade, cost model, net R:R after costs, sizing, leverage <i>derived</i> from margin budget, liquidation safety, portfolio heat cap, correlation cap, concurrency cap) can adjust or outright reject the trade before it's logged.</p>
+      </div>
+    </details>
+
+    <details class="step">
+      <summary>
+        <div class="step-num">7</div>
+        <div class="step-title">Logged to Google Sheets, then managed candle-by-candle</div>
+        <div class="step-tag dexter">DEXTER</div>
+        <div class="step-chevron">▶</div>
+      </summary>
+      <div class="step-body">
+        <p>Full breakdown in <a href="#managing">section 08</a>. Exits are checked against real candle wicks and gaps (<code class="inline">honest_sim.py</code>), not just a spot price poll — a stop can be hit and recover between two-minute checks, and this system catches that instead of missing it. Partial take-profit, stop-in-profit, and the newer level-health trade management all live here.</p>
+      </div>
+    </details>
+
+    <details class="step">
+      <summary>
+        <div class="step-num">8</div>
+        <div class="step-title">On close: Chev reviews himself, and the Examiner grades everyone</div>
+        <div class="step-tag chev">CHEV</div>
+        <div class="step-chevron">▶</div>
+      </summary>
+      <div class="step-body">
+        <p>Full breakdown in <a href="#closing">section 09</a>. Every closed trade gets a forced post-mortem from Chev, a mechanical MAE/MFE/RSI-path forensic report, and — separately, silently, for <i>every</i> setup Dexter ever saw (POST, SKIP, or blocked before Chev even heard about it) — a triple-barrier label from the Examiner (<code class="inline">labeller.py</code>), which is what eventually tells us whether Chev's judgment is actually adding anything over the raw score.</p>
+      </div>
+    </details>
+
+  </div>
+</section>
+
+<!-- 03 SCORING -->
+<section id="scoring">
+  <div class="section-label">03 — The Scoring System</div>
+  <h2>How Dexter scores a setup</h2>
+  <p class="section-intro">Score = raw points × a timeframe multiplier. The multiplier makes higher timeframes structurally worth more — the same signal on 4H needs to clear a smaller relative bar than on 15m to be taken just as seriously.</p>
+
+  <div class="threshold-row">
+    <div class="th-cell"><div class="th-score" style="color:var(--accent)">×1.2</div><div class="th-label">4H</div></div>
+    <div class="th-cell"><div class="th-score" style="color:var(--accent)">×1.0</div><div class="th-label">1H (and 5m, no TF entry)</div></div>
+    <div class="th-cell"><div class="th-score" style="color:var(--accent)">×0.9</div><div class="th-label">30M</div></div>
+    <div class="th-cell"><div class="th-score" style="color:var(--accent)">×0.9</div><div class="th-label">15M</div></div>
+  </div>
+
+  <div class="conf-grid">
+    <div class="conf-card">
+      <div class="conf-header"><div class="conf-dot" style="background:#6c8cff"></div><div class="conf-name">Support / Resistance</div><div class="conf-pt">3pt / 2pt</div></div>
+      <div class="conf-desc">A zone touched 3+ times scores 3pt (multi-touch); touched 1–2 times scores 2pt. If both a resistance and support zone are in range at once, only the <b>nearer</b> one scores — price sandwiched mid-range isn't double confluence, it's chop.</div>
+    </div>
+    <div class="conf-card">
+      <div class="conf-header"><div class="conf-dot" style="background:#3ecf8e"></div><div class="conf-name">Golden Pocket</div><div class="conf-pt">3pt</div></div>
+      <div class="conf-desc">The 0.618 Fibonacci retracement zone. Stacking with an SR zone at the same price triggers a named "GP×SR deadly combo" with a ×1.15 quality bonus.</div>
+    </div>
+    <div class="conf-card">
+      <div class="conf-header"><div class="conf-dot" style="background:#f5c842"></div><div class="conf-name">Volume Profile (POC/VAH/VAL)</div><div class="conf-pt">3pt / 1.5pt</div></div>
+      <div class="conf-desc">Full points if the underlying auction anchor is confirmed with follow-through; half points if the anchor is active but not yet confirmed (marked "unconfirmed-anchor" in the reason string, still visible to Chev).</div>
+    </div>
+    <div class="conf-card">
+      <div class="conf-header"><div class="conf-dot" style="background:#ff5c5c"></div><div class="conf-name">RSI Divergence (confirmed)</div><div class="conf-pt">3pt / 4pt</div></div>
+      <div class="conf-desc">3pt for regular or hidden; 4pt if both fire together. Only the two highest-scoring divergences that share the <b>same</b> directional bias can both score — a bullish and bearish divergence no longer cancel out into "confluence."</div>
+    </div>
+    <div class="conf-card">
+      <div class="conf-header"><div class="conf-dot" style="background:#b97cf3"></div><div class="conf-name">EMA (55 / 21 / 13)</div><div class="conf-pt">2 / 1 / 0.5pt</div></div>
+      <div class="conf-desc">Support/resistance test against each EMA period, weighted by which EMA (55 > 21 > 13). Total EMA contribution is capped at 3pt so a triple-EMA stack can't dominate the score on its own.</div>
+    </div>
+    <div class="conf-card">
+      <div class="conf-header"><div class="conf-dot" style="background:#ff9a3c"></div><div class="conf-name">Bollinger Bands</div><div class="conf-pt">2 / 0.5 / 1pt</div></div>
+      <div class="conf-desc">BURST (price outside the band) = 2pt; near-band = 0.5pt; mid-band = 1pt. <b>Squeeze scores 0pt</b> — every playbook says don't enter during a squeeze, so it's shown as context only, never used to push a setup over threshold.</div>
+    </div>
+    <div class="conf-card">
+      <div class="conf-header"><div class="conf-dot" style="background:#6c8cff"></div><div class="conf-name">Derivatives (crypto only)</div><div class="conf-pt">0–4.5pt</div></div>
+      <div class="conf-desc">Funding extreme (contrarian, crowded side = squeeze risk): 2–3pt. OI divergence (price/OI disagree — weak move): 1.5pt. OI confirmation (price/OI agree — real participation): 1pt.</div>
+    </div>
+    <div class="conf-card">
+      <div class="conf-header"><div class="conf-dot" style="background:#3ecf8e"></div><div class="conf-name">Chart Pattern / Sweep / Fib / RSI level</div><div class="conf-pt">0.5–3pt</div></div>
+      <div class="conf-desc">Pattern: 2pt (high-conf) / 1pt (mid-conf). Liquidity sweep: 3pt. Fib retracement (non-golden-pocket): 1.5pt. RSI overbought/oversold: 0.5pt. RSI 50-cross and "forming" divergence are shown to Chev but score 0pt — context, not confluence.</div>
+    </div>
+  </div>
+</section>
+
+<!-- 04 GATES -->
+<section id="gates">
+  <div class="section-label">04 — The Filter Before Chev</div>
+  <h2>The gates — this is where almost everything dies</h2>
+  <p class="section-intro">A high score alone doesn't reach Chev. Every one of these runs first, in this exact order, and every rejection is shadow-logged with a specific reason code so the Examiner can measure whether each gate is actually helping.</p>
+
+  <div class="example-wrap">
+    <div class="example-body">
+      <div class="anno-line">
+        <div class="anno-code" style="border-color:var(--red)">Circuit breaker</div>
+        <div class="anno-arrow">→</div>
+        <div class="anno-explain">If today's accumulated realized R has fallen to <b>−3.0R or worse</b>, no new escalations happen for the rest of the UTC day — a new day auto-clears it. This blocks <i>new</i> risk only; open trades keep being managed exactly as normal. One Telegram alert is sent per halted day, not one per scan cycle. <span style="color:var(--yellow)">Newest gate — wired in tonight, not live until Dexter restarts.</span></div>
+      </div>
+      <div class="anno-line">
+        <div class="anno-code" style="border-color:var(--yellow)">Rate limit / Chev health</div>
+        <div class="anno-arrow">→</div>
+        <div class="anno-explain">If Open WebUI 429'd Dexter recently, or is unreachable, escalation is paused until the cooldown clears or a health check succeeds.</div>
+      </div>
+      <div class="anno-line">
+        <div class="anno-code" style="border-color:var(--accent)">Cooldown</div>
+        <div class="anno-arrow">→</div>
+        <div class="anno-explain">Per symbol+timeframe. 10 min after a SKIP or malformed reply; much longer (up to 24h on 4H) after a POST — the pair is live, no need to re-hammer it.</div>
+      </div>
+      <div class="anno-line">
+        <div class="anno-code" style="border-color:var(--accent)">Forex event block</div>
+        <div class="anno-arrow">→</div>
+        <div class="anno-explain">No new trades within 30 minutes of a high-impact release (FOMC/CPI/NFP/GDP/PCE keywords), extended to crypto/stocks too.</div>
+      </div>
+      <div class="anno-line">
+        <div class="anno-code" style="border-color:var(--accent)">Choppy regime</div>
+        <div class="anno-arrow">→</div>
+        <div class="anno-explain">4H ADX below 15 means no directional edge — random noise, skipped outright.</div>
+      </div>
+      <div class="anno-line">
+        <div class="anno-code" style="border-color:var(--yellow)">Worth-evaluating pre-check <span style="font-size:10px;color:var(--green)">(fixed tonight)</span></div>
+        <div class="anno-arrow">→</div>
+        <div class="anno-explain">A cheap first-pass filter, per timeframe — is the score even in the neighbourhood of being interesting? <b style="color:var(--red)">Until tonight this used a hardcoded table (5/5/6/6/7) that never read Exploration Mode or asset type at all</b> — a real inconsistency, since every other gate is required to route through the same helper. Fixed to scale off the actual live threshold instead.</div>
+      </div>
+      <div class="anno-line">
+        <div class="anno-code" style="border-color:var(--red)">Tradeability Pre-Gate (4 parts)</div>
+        <div class="anno-arrow">→</div>
+        <div class="anno-explain">
+          <b>1. Score below threshold</b> — must clear 7 (crypto) / 6 (forex, stock) right now, exploration numbers.<br>
+          <b>2. No structural anchor</b> — needs SR score ≥2 <i>or</i> VP score ≥2. Kills mid-range EMA/Fib-only setups floating with nothing solid underneath.<br>
+          <b>3. Too far from the level</b> — must be within 1.5% of the confluence zone, unless it's a VP anchor (the VP zone <i>is</i> its own location).<br>
+          <b>4. Conflicting signals</b> — if the minor directional side scores ≥2pt and the dominant side isn't at least 2× it, that's contradiction, not confluence.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 05 WHAT DEXTER SENDS -->
+<section id="sends">
+  <div class="section-label">05 — The Escalation Message</div>
+  <h2>What Dexter actually puts in front of Chev</h2>
+  <p class="section-intro">One long structured message, assembled fresh every time. Chev is told the setup already passed the gates — his job from here is judgment, not re-counting points.</p>
+
+  <div class="example-wrap">
+    <div class="example-header"><div class="example-dot"></div>ask_chev_to_judge() message contents, in order</div>
+    <div class="example-body">
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--green)">1. Playbook</div><div class="anno-arrow">→</div><div class="anno-explain">Chev's own asset-specific playbook (crypto / forex / stocks) — a living document rewritten by the learning loop every 10 closed trades.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--green)">2. Recent journal + open positions</div><div class="anno-arrow">→</div><div class="anno-explain">Last few relevant journal entries, plus every currently open/pending trade with entry/SL/TP/R:R and a correlation note.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--yellow)">3. Re-entry pattern warning</div><div class="anno-arrow">→</div><div class="anno-explain">If the same level + same tags failed recently (2h window, last 30 losses), a PATTERN ALERT fires so Chev doesn't repeat a fresh mistake.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--accent)">4. Full market brief</div><div class="anno-arrow">→</div><div class="anno-explain">4H macro trend verdict, price/VWAP/EMA/RSI/ATR/volume/BB snapshot, Fib levels, multi-TF SR zones with touch counts, Volume Profile, prior day H/L/C, ADR usage, RSI divergence (confirmed + forming), BOS/CHoCH events, zone dwell history, MACD.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--red)">5. Counter-trend alert (if applicable)</div><div class="anno-arrow">→</div><div class="anno-explain">Fires when the setup fights the 4H regime. 5-point checklist including a score requirement of 1.5× the <i>normal</i> per-asset threshold (never the exploration one) and a confirmed — not forming — divergence.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--purple)">6. Tools available</div><div class="anno-arrow">→</div><div class="anno-explain">Explicit instructions to call at least one live tool (get_support_resistance, get_volume_profile, detect_rsi_divergence, etc.) before deciding — never narrated, always actually called.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--orange)">7. Trading rules + absolute rules</div><div class="anno-arrow">→</div><div class="anno-explain">SL placement, R:R expectations, entry modes (confirmation vs. pending-limit), and the hard non-negotiables: SL must be on the structurally correct side, R:R ≥ 2.0, structural SL only.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- 06 HOW CHEV RESPONDS -->
+<section id="responds">
+  <div class="section-label">06 — The Reply Contract</div>
+  <h2>How Chev must respond</h2>
+  <p class="section-intro">Strict format. If the reply doesn't start with POST: or SKIP:, Dexter retries once with a reminder before giving up on that escalation.</p>
+
+  <div class="example-wrap">
+    <div class="example-body">
+      <div class="anno-line">
+        <div class="anno-code" style="border-color:var(--green);min-width:100%;">
+POST: direction=long, entry=X, sl=Y, tp=Z, risk_pct=N, leverage=N,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;position_size_usd=N, tags=sr_4h,fib_1h,rsi, trade_type=day,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;sr_level=X, fib_high=X, fib_low=X, vp_start=YYYY-MM-DD<br><br>
+REASONING: &lt;full analysis&gt;<br>
+&nbsp;&nbsp;Must include 4H STRUCTURE / INVALIDATION / CONFIRMATION blocks
+        </div>
+      </div>
+      <div class="anno-line">
+        <div class="anno-code" style="border-color:var(--yellow);min-width:100%;">
+SKIP: &lt;must name ONE concrete broken element&gt;<br>
+&nbsp;&nbsp;e.g. "no invalidation level", "counter-trend without meeting the MTF tax conditions"<br>
+&nbsp;&nbsp;NEVER valid: general caution, "not enough confluence", a letter grade alone
+        </div>
+      </div>
+      <p style="font-size:13px;color:var(--muted);margin-top:16px;">Numbers in the TRADE: line (risk_pct, leverage, position_size_usd) are a <b style="color:var(--text)">request</b>. The real, final numbers are computed by risk_gauntlet.py in the next step — see section 07. tags= controls which anchors get drawn on the chart (sr_level, fib_high/low, vp_start) and which features the Examiner's tag-lift report tracks — it does not affect the score, which was already decided before Chev was asked.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 07 RISK GAUNTLET -->
+<section id="gauntlet">
+  <div class="section-label">07 — After Chev Says Yes</div>
+  <h2>risk_gauntlet.py — 14 checks, in order</h2>
+  <p class="section-intro">This module has grown well beyond a simple sanity check. Leverage in particular is never Chev's choice — it's a number <i>derived</i> from margin budget and safety caps, regardless of what he requested.</p>
+
+  <div class="example-wrap">
+    <div class="example-body">
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--red)">1. Equity floor</div><div class="anno-arrow">→</div><div class="anno-explain">No new trades below $100 total equity (free cash + reserved margin).</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--red)">2. Side sanity</div><div class="anno-arrow">→</div><div class="anno-explain">SL/TP must be on the structurally correct side of entry for the stated direction — malformed trades are rejected outright.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--yellow)">3. ATR data quality</div><div class="anno-arrow">→</div><div class="anno-explain">ATR must be 0.005%–10% of price — outside that band, the candle data itself is untrustworthy and the trade is refused, not patched around.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--yellow)">4. Stale price guard</div><div class="anno-arrow">→</div><div class="anno-explain">If price has already consumed &gt;50% of the entry→SL distance while Chev was deliberating, the R:R he judged no longer exists.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--accent)">5. ATR floor</div><div class="anno-arrow">→</div><div class="anno-explain">SL distance must be ≥ 1.0× ATR (scalp) / 1.2× (day) / 1.5× (swing) — otherwise it's fixable: widen SL or reclassify trade_type.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--purple)">6. Risk clamp by grade</div><div class="anno-arrow">→</div><div class="anno-explain">Chev's requested risk % is clamped into a band by setup grade: B = 0.5–1.0%, A = 1.0–1.75%, A+ = 1.75–2.5%.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--orange)">7. Cost model</div><div class="anno-arrow">→</div><div class="anno-explain">Round-trip cost expressed in R-multiples must stay under 0.20R (scalp) / 0.25R (day) / 0.30R (swing) — a stop too tight lets fees eat the trade alive.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--orange)">8. Net R:R</div><div class="anno-arrow">→</div><div class="anno-explain">R:R <b>after</b> costs must clear 2.0 (scalp) / 1.8 (day) / 2.5 (swing) — fixable by revising TP/SL.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--green)">9–10. Size &amp; leverage</div><div class="anno-arrow">→</div><div class="anno-explain">Notional is computed from risk $ ÷ stop distance. Leverage is then derived from the margin budget (10% of equity max per trade) and capped by asset/trade type (crypto 10x scalp/day, 5x swing; forex/stock 5x scalp/day, 2x swing) — never simply "whatever Chev asked for."</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--red)">11. Liquidation safety</div><div class="anno-arrow">→</div><div class="anno-explain">Stop distance must stay under 50% ÷ leverage; leverage is stepped down automatically to satisfy this before rejecting outright.</div></div>
+      <div class="anno-line"><div class="anno-code" style="border-color:var(--accent)">12–14. Portfolio caps</div><div class="anno-arrow">→</div><div class="anno-explain">Total open risk capped at 8% of equity; max 2 same-direction correlated crypto positions; concurrency capped per trade type (1 scalp, 2 day, 2 swing) at once.</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- 08 MANAGING -->
+<section id="managing">
+  <div class="section-label">08 — While the Trade is Live</div>
+  <h2>Managing an open trade</h2>
+  <p class="section-intro">Exits are checked against real candle wicks and gaps, not a 2-minute spot-price poll — a stop can be pierced and recover between polls, and a naive spot check would miss that entirely.</p>
+
+  <div class="cards">
+    <div class="card blue">
+      <div class="card-icon">🕯️</div>
+      <div class="card-title">honest_sim.py — candle-true exits</div>
+      <div class="card-role">Every management cycle</div>
+      <p>Applies a strict rulebook per candle: gap-through-SL exits at the worse open price; an ambiguous candle touching both SL and TP always resolves SL first (pessimism); gap-through-TP exits at TP, never better than quoted. Real trading costs (fees + slippage, funding for crypto swings) are deducted on every close via the same cost model risk_gauntlet uses.</p>
+    </div>
+    <div class="card purple">
+      <div class="card-icon">🩺</div>
+      <div class="card-title">Level-Health Management</div>
+      <div class="card-role">New this session — replaces the old R-distance milestone trigger</div>
+      <p>The old rule fired a partial-close or a Chev-ask purely on how far price had travelled (1R) — which tells you nothing about whether the trade is about to stall or break through. The new rule instead grades the actual level in front of the trade (TP itself, or an SR zone between entry and TP) as <b style="color:var(--green)">HOLDING</b>, <b style="color:var(--yellow)">WEAKENING</b>, or <b style="color:var(--red)">BROKEN</b> — reusing the same confirmed/active engine originally built to validate entries.</p>
+    </div>
+    <div class="card green">
+      <div class="card-icon">🛡️</div>
+      <div class="card-title">SIP — Stop In Profit</div>
+      <div class="card-role">Once the SL crosses the entry price</div>
+      <p>Once the SL has been trailed into profit territory, the trade mathematically cannot lose money anymore. Milestone alerts fire at 50%/75% progress toward TP or the (SIP) floor, prompting Chev to review whether to trail further.</p>
     </div>
   </div>
 
   <br>
 
-  <div class="flow" style="justify-content: flex-start; gap: 20px; flex-direction: column; align-items: flex-start; padding: 24px 28px;">
-    <p style="font-size: 13px; color: var(--muted); margin-bottom: 4px;"><strong style="color:var(--text);">Jane</strong> (Alejandro's analyst) works in parallel — she receives Dexter's data via Telegram and sends her own independent view to Chev. Think of her as a second opinion that Chev can factor in before deciding.</p>
-    <p style="font-size: 13px; color: var(--muted);">The <strong style="color:var(--text);">webapp</strong> (index.html) is purely visual — it reads the outputs and draws them. It never writes anything back into Dexter or engines.</p>
+  <div class="threshold-row" style="margin-top:8px;">
+    <div class="th-cell" style="border-color:var(--red)">
+      <div class="th-score" style="color:var(--red);font-size:18px;">BROKEN</div>
+      <div class="th-label">Level failed to hold</div>
+      <div class="th-action th-skip" style="background:rgba(255,92,92,0.1)">SL → breakeven, let it run</div>
+    </div>
+    <div class="th-cell" style="border-color:var(--yellow)">
+      <div class="th-score" style="color:var(--yellow);font-size:18px;">WEAKENING</div>
+      <div class="th-label">Losing structure, not broken yet</div>
+      <div class="th-action th-watch">Ask Chev, with the verdict in his prompt</div>
+    </div>
+    <div class="th-cell" style="border-color:var(--green)">
+      <div class="th-score" style="color:var(--green);font-size:18px;">HOLDING</div>
+      <div class="th-label">Strong, confirmed, likely to reject price</div>
+      <div class="th-action th-escalate">Close 50% mechanically, trail SL to entry</div>
+    </div>
   </div>
 </section>
 
-<!-- SECTION 2: MODULE CARDS -->
-<section>
-  <div class="section-label">02 — The Modules</div>
-  <h2>What each file actually does</h2>
-  <p class="section-intro">Think of each file as a department in a trading firm. Each has one job. Each has rules about who can touch it.</p>
+<!-- 09 CLOSING -->
+<section id="closing">
+  <div class="section-label">09 — The Learning Loop</div>
+  <h2>When a trade closes</h2>
+  <p class="section-intro">A close isn't the end of the data — it's the start of grading it. Three separate systems fire, none of which affect the trade itself anymore.</p>
 
   <div class="cards">
-
-    <div class="card green">
-      <div class="card-icon">⚙️</div>
-      <div class="card-title">engines.py</div>
-      <div class="card-role">The Calculator — ~3,000 lines</div>
-      <p>This is the pure mathematics of the system. It does not make decisions. It only measures. It receives raw candle data and outputs structured numbers that Dexter uses to build his analysis. If you break engines.py, Dexter stops working entirely.</p>
-      <div class="io-row">
-        <div class="io-box in">
-          <div class="io-label">Input</div>
-          <ul>
-            <li>OHLCV candles (price data)</li>
-            <li>Timeframe (1H, 4H, etc.)</li>
-          </ul>
-        </div>
-        <div class="io-box out">
-          <div class="io-label">Output</div>
-          <ul>
-            <li>Swing highs/lows</li>
-            <li>Leg strength scores</li>
-            <li>SR zone coordinates</li>
-            <li>Fibonacci anchors</li>
-            <li>Volume Profile bins</li>
-            <li>Pattern signals</li>
-          </ul>
-        </div>
-      </div>
-      <div class="touch-rule caution">⚠️ Alejandro: coordinate with Kev before editing</div>
-    </div>
-
-    <div class="card yellow">
-      <div class="card-icon">🔬</div>
-      <div class="card-title">dexter.py</div>
-      <div class="card-role">The Research Analyst — ~3,000 lines</div>
-      <p>Dexter runs on a 5-minute loop. He calls engines.py to get the maths, then scores each setup, counts confluences, and decides if Chev should hear about it. He writes everything to Google Sheets and builds the report that goes to Chev. He has no opinion — only measurements.</p>
-      <div class="io-row">
-        <div class="io-box in">
-          <div class="io-label">Input</div>
-          <ul>
-            <li>engines.py scores</li>
-            <li>Watchlist of pairs</li>
-            <li>Timeframe configs</li>
-          </ul>
-        </div>
-        <div class="io-box out">
-          <div class="io-label">Output</div>
-          <ul>
-            <li>Confluence count + list</li>
-            <li>Structured report for Chev</li>
-            <li>Google Sheets rows</li>
-            <li>Trade alerts via Telegram</li>
-          </ul>
-        </div>
-      </div>
-      <div class="touch-rule caution">⚠️ Alejandro: coordinate with Kev before editing</div>
-    </div>
-
     <div class="card blue">
-      <div class="card-icon">🧠</div>
-      <div class="card-title">Chev (LLM in Open WebUI)</div>
-      <div class="card-role">The Senior Trader — AI decision maker</div>
-      <p>Chev is a large language model (Claude) running inside Open WebUI with a detailed system prompt. He reads Dexter's structured report and decides: trade or skip? He has personality, strategy, and risk awareness baked into his system prompt. He posts trade ideas to Telegram and the webapp.</p>
-      <div class="io-row">
-        <div class="io-box in">
-          <div class="io-label">Input</div>
-          <ul>
-            <li>Dexter's analysis report</li>
-            <li>Jane's signals (optional)</li>
-            <li>His own system prompt</li>
-          </ul>
-        </div>
-        <div class="io-box out">
-          <div class="io-label">Output</div>
-          <ul>
-            <li>Trade idea (pair, direction, SL, TP)</li>
-            <li>Reasoning in plain English</li>
-            <li>Telegram message</li>
-          </ul>
-        </div>
-      </div>
-      <div class="touch-rule caution">⚠️ Both: agree on system prompt changes before making them</div>
+      <div class="card-icon">📝</div>
+      <div class="card-title">Chev's post-mortem</div>
+      <div class="card-role">Every closed trade</div>
+      <p>Chev is asked to grade his own call in a fixed structure: setup quality, what price actually did, one specific observation, and (if he made in-trade management calls) a review of those decisions. Ends with a VALIDATED / PARTIAL / INVALIDATED verdict.</p>
     </div>
-
-    <div class="card purple">
-      <div class="card-icon">🔮</div>
-      <div class="card-title">Jane (telegram_listener.py)</div>
-      <div class="card-role">The Second Analyst — Alejandro's domain</div>
-      <p>Jane is Alejandro's custom analyst. She has her own market view and communicates through Telegram. Her signals feed into the same Telegram channel where Chev operates, giving a second independent perspective before a trade is posted. This is Alejandro's zone — he owns this code.</p>
-      <div class="io-row">
-        <div class="io-box in">
-          <div class="io-label">Input</div>
-          <ul>
-            <li>Dexter data via Telegram</li>
-            <li>Her own logic/rules</li>
-          </ul>
-        </div>
-        <div class="io-box out">
-          <div class="io-label">Output</div>
-          <ul>
-            <li>Her signal via Telegram</li>
-            <li>Agree/disagree with Chev</li>
-          </ul>
-        </div>
-      </div>
-      <div class="touch-rule safe">✅ Alejandro: this is yours — build freely</div>
-    </div>
-
     <div class="card orange">
-      <div class="card-icon">📊</div>
-      <div class="card-title">webapp (index.html)</div>
-      <div class="card-role">The Trading Dashboard — Kev's domain</div>
-      <p>A single-page web app that shows everything visually: live charts with indicators, open trade ideas, Dexter's confluence results, and Chev's reasoning. It only reads data — it never changes Dexter, engines, or Chev. Kev owns this entirely.</p>
-      <div class="io-row">
-        <div class="io-box in">
-          <div class="io-label">Input</div>
-          <ul>
-            <li>Live market data (charts)</li>
-            <li>Dexter's API responses</li>
-            <li>Chev's trade ideas</li>
-          </ul>
-        </div>
-        <div class="io-box out">
-          <div class="io-label">Output</div>
-          <ul>
-            <li>Visual charts + indicators</li>
-            <li>Trade idea cards</li>
-            <li>Confluence overlays</li>
-          </ul>
-        </div>
-      </div>
-      <div class="touch-rule danger">🚫 Alejandro: hands off unless Kev specifically asks</div>
+      <div class="card-icon">🔬</div>
+      <div class="card-title">trade_forensics.py</div>
+      <div class="card-role">Mechanical, no opinion</div>
+      <p>Reconstructs MAE (max adverse excursion) and MFE (max favourable excursion) in R, whether an SL hit was a "wick" or a "close," whether price later reached the original TP after stopping out, and RSI at entry/exit. Feeds a statistics block into the learning session once ≥10 samples exist.</p>
     </div>
-
-    <div class="card red">
-      <div class="card-icon">📋</div>
-      <div class="card-title">Google Sheets</div>
-      <div class="card-role">The Trade Journal — permanent record</div>
-      <p>Every trade idea, every result, every confluence score gets written here by Dexter. The columns are fixed by index number — column 0, column 1, column 17. If you add or move a column without telling Kev, the entire system reads the wrong data. This is the most fragile part of the whole setup.</p>
-      <div class="io-row">
-        <div class="io-box in">
-          <div class="io-label">Writes</div>
-          <ul>
-            <li>Pair, direction, score</li>
-            <li>SL / TP levels</li>
-            <li>Confluences hit</li>
-            <li>Entry / exit times</li>
-          </ul>
-        </div>
-        <div class="io-box out">
-          <div class="io-label">Reads</div>
-          <ul>
-            <li>Performance stats</li>
-            <li>Win rate / drawdown</li>
-            <li>Historical trade log</li>
-          </ul>
-        </div>
-      </div>
-      <div class="touch-rule danger">🚫 Never add/move columns without telling Kev first</div>
+    <div class="card green">
+      <div class="card-icon">⚖️</div>
+      <div class="card-title">The Examiner (labeller.py)</div>
+      <div class="card-role">Every setup, not just Chev's trades</div>
+      <p>A shadow triple-barrier label gets built for <i>every</i> setup Dexter ever sees — POST, SKIP, or blocked before Chev even heard about it — so it's possible to measure whether Chev's judgment adds anything above the raw Dexter score, not just how the trades he took performed.</p>
     </div>
-
   </div>
+
+  <p style="font-size:13px;color:var(--muted);margin-top:20px;">Every 10 closed trades per asset type, a learning session rewrites that asset's playbook — extracting loss patterns, win/loss insight comparisons, and (once ≥10 forensics samples exist) a statistical block on wick-vs-close stop-outs and stopped-then-ran frequency. Every claim in that rewrite is required to state its sample size — no absolute language below n=20.</p>
 </section>
 
-<!-- SECTION 3: CONFLUENCES -->
-<section>
-  <div class="section-label">03 — The Scoring System</div>
-  <h2>How Dexter scores a setup</h2>
-  <p class="section-intro">This is the heart of the system. Dexter doesn't guess — he counts signals. The more signals that agree, the higher the score. When the score passes a threshold, Chev gets told about it. This is what you need to understand deeply before touching engines.py or dexter.py.</p>
+<!-- 10 SCENARIOS -->
+<section id="scenarios">
+  <div class="section-label">10 — Interactive</div>
+  <h2>Four real scenarios, start to finish</h2>
+  <p class="section-intro">Click a tab. Each one is a real path through the pipeline above, not a hypothetical.</p>
 
-  <div class="threshold-row">
-    <div class="th-cell">
-      <div class="th-score" style="color: var(--red);">1–2</div>
-      <div class="th-label">Confluences</div>
-      <div class="th-action th-skip">Skip — too weak</div>
+  <div class="tabs">
+    <div class="tab-buttons">
+      <button class="tab-btn active" data-tab="sc-post">Clean POST</button>
+      <button class="tab-btn" data-tab="sc-pregate">Killed before Chev sees it</button>
+      <button class="tab-btn" data-tab="sc-skip">Chev SKIPs</button>
+      <button class="tab-btn" data-tab="sc-breaker">Circuit breaker halts the day</button>
     </div>
-    <div class="th-cell">
-      <div class="th-score" style="color: var(--yellow);">2</div>
-      <div class="th-label">Confluences</div>
-      <div class="th-action th-watch">Watch list only</div>
-    </div>
-    <div class="th-cell" style="background: rgba(62,207,142,0.05);">
-      <div class="th-score" style="color: var(--green);">3+</div>
-      <div class="th-label">Confluences</div>
-      <div class="th-action th-escalate">Escalate to Chev</div>
-    </div>
-  </div>
 
-  <div class="conf-grid">
-
-    <div class="conf-card">
-      <div class="conf-header">
-        <div class="conf-dot" style="background:#6c8cff;"></div>
-        <div class="conf-name">Support / Resistance</div>
-        <div class="conf-code">SR</div>
-      </div>
-      <div class="conf-desc">Price previously bounced from this level. engines.py measures how many times it was tested and how strongly it held. A level tested 8 times is much stronger than one tested twice. This is the most common confluence in the system.</div>
-      <div class="conf-bar-wrap">
-        <span style="color:var(--muted);font-size:11px;">Weight</span>
-        <div class="conf-bar-track">
-          <div class="conf-bar-fill" style="width:90%;background:#6c8cff;"></div>
-        </div>
-        <span class="conf-strength" style="color:#6c8cff;">High</span>
+    <div class="tab-panel active" id="sc-post">
+      <div class="scenario-verdict post">✓ TRADE OPENED</div>
+      <div class="scenario-timeline">
+        <div class="tl-row"><div class="tl-dot" style="background:var(--accent)"></div><div class="tl-text"><b>ETHUSDT, 5m</b> scores 12.9 — Fib 50%, EMA55/21/13 resistance stack, bearish EMA crossover, Double Top pattern, forming bearish RSI divergence, BB near lower band, BB squeeze (0pt, context only).</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--green)"></div><div class="tl-text">Clears every gate: not on cooldown, no event block, regime isn't choppy, score (12.9) clears both the pre-check and the real crypto exploration threshold (7), has a structural anchor, is within distance, no directional conflict.</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--accent)"></div><div class="tl-text">Chev is asked. Replies <b>POST</b>: "Bearish confluence at resistance, RSI divergence forming, BB near lower band."</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--orange)"></div><div class="tl-text">risk_gauntlet passes all 14 checks. Position sized, leverage derived (not Chev's requested number), logged to Google Sheets.</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--purple)"></div><div class="tl-text">Managed candle-by-candle by honest_sim. Level-health checks the level ahead of the trade as price approaches it.</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--green)"></div><div class="tl-text">Closes. Chev writes a post-mortem, forensics runs, the Examiner labels it. Feeds the next learning session.</div></div>
       </div>
     </div>
 
-    <div class="conf-card">
-      <div class="conf-header">
-        <div class="conf-dot" style="background:#f5c842;"></div>
-        <div class="conf-name">Fibonacci Level</div>
-        <div class="conf-code">FIB</div>
-      </div>
-      <div class="conf-desc">Based on the first significant move (impulse leg) of the current trend. engines.py identifies where that move started and ended, then projects the standard ratios: 0.382, 0.5, 0.618, 0.786. Price respecting a Fib level is a confirmation of structure.</div>
-      <div class="conf-bar-wrap">
-        <span style="color:var(--muted);font-size:11px;">Weight</span>
-        <div class="conf-bar-track">
-          <div class="conf-bar-fill" style="width:75%;background:#f5c842;"></div>
-        </div>
-        <span class="conf-strength" style="color:#f5c842;">Med-High</span>
+    <div class="tab-panel" id="sc-pregate">
+      <div class="scenario-verdict blocked">✗ NEVER REACHED CHEV</div>
+      <div class="scenario-timeline">
+        <div class="tl-row"><div class="tl-dot" style="background:var(--accent)"></div><div class="tl-text"><b>ZECUSDT, 5m</b> scores 9.36 — Golden Pocket, Fib 50%, Hidden Bullish Divergence, EMA stack, Head &amp; Shoulders pattern, BB near lower band. Score clears the exploration threshold (7).</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--red)"></div><div class="tl-text">But <code class="inline">sr_score</code> and <code class="inline">vp_score</code> are both 0 — every point came from Fib/EMA/RSI/pattern, nothing structural underneath it.</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--red)"></div><div class="tl-text">The Tradeability Pre-Gate's <b>struct_pregate</b> check fires: no structural anchor. Rejected before Chev is ever asked.</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--muted)"></div><div class="tl-text">Shadow-logged to the Examiner as <code class="inline">NOT_ESCALATED / struct_pregate</code> — not lost, just never shown to Chev. No cooldown applied, so it re-checks on the very next scan cycle if the setup is still there.</div></div>
       </div>
     </div>
 
-    <div class="conf-card">
-      <div class="conf-header">
-        <div class="conf-dot" style="background:#3ecf8e;"></div>
-        <div class="conf-name">Volume Profile</div>
-        <div class="conf-code">VP</div>
-      </div>
-      <div class="conf-desc">A histogram of where the most trading volume happened over the current move. The highest volume bar is the Point of Control (POC) — the price level the market spent the most time at. When price returns to the POC, it often reacts strongly.</div>
-      <div class="conf-bar-wrap">
-        <span style="color:var(--muted);font-size:11px;">Weight</span>
-        <div class="conf-bar-track">
-          <div class="conf-bar-fill" style="width:70%;background:#3ecf8e;"></div>
-        </div>
-        <span class="conf-strength" style="color:#3ecf8e;">Medium</span>
+    <div class="tab-panel" id="sc-skip">
+      <div class="scenario-verdict skip">— CHEV DECLINED</div>
+      <div class="scenario-timeline">
+        <div class="tl-row"><div class="tl-dot" style="background:var(--accent)"></div><div class="tl-text"><b>XLMUSDT, 4h</b> scores 8.4 — Golden Pocket, Fib 50%, Double Top pattern, BB near upper band, VP VAH proximity. Clears every gate, escalates.</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--accent)"></div><div class="tl-text">Chev calls his tools, reviews structure, and replies <b>SKIP</b>: "Price is approaching but has not yet confirmed the golden pocket level."</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--green)"></div><div class="tl-text">Valid SKIP — it names a concrete missing element (no confirmation yet), not general caution or a bare letter grade.</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--muted)"></div><div class="tl-text">A 10-minute cooldown applies for that symbol/timeframe. Still shadow-logged by the Examiner as a real SKIP, with Chev's own reasoning attached — this is what eventually measures whether his judgment beats the raw score.</div></div>
       </div>
     </div>
 
-    <div class="conf-card">
-      <div class="conf-header">
-        <div class="conf-dot" style="background:#ff5c5c;"></div>
-        <div class="conf-name">RSI Divergence</div>
-        <div class="conf-code">RSI_DIV</div>
+    <div class="tab-panel" id="sc-breaker">
+      <div class="scenario-verdict blocked">🛑 NEW RISK PAUSED</div>
+      <div class="scenario-timeline">
+        <div class="tl-row"><div class="tl-dot" style="background:var(--red)"></div><div class="tl-text">A string of losses pushes today's accumulated realized R to <b>−3.1R</b>, past the −3.0R halt line.</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--red)"></div><div class="tl-text">Every subsequent setup that would otherwise escalate is instead logged <code class="inline">NOT_ESCALATED / circuit_breaker</code> and skipped — for the rest of the UTC day only.</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--yellow)"></div><div class="tl-text">One Telegram alert fires (not one per scan cycle) reporting the trip and the daily R figure.</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--green)"></div><div class="tl-text">Open trades are completely unaffected — they keep being managed, trailed, and closed normally. Only <i>new</i> escalations are paused.</div></div>
+        <div class="tl-row"><div class="tl-dot" style="background:var(--muted)"></div><div class="tl-text">At the next UTC midnight, the breaker resets to 0 automatically and normal escalation resumes.</div></div>
       </div>
-      <div class="conf-desc">Price makes a new high, but RSI makes a lower high (or vice versa for lows). This "divergence" means the move is losing momentum — the engine draws two trendlines to confirm it. When RSI diverges at a key structure level, it becomes a powerful signal.</div>
-      <div class="conf-bar-wrap">
-        <span style="color:var(--muted);font-size:11px;">Weight</span>
-        <div class="conf-bar-track">
-          <div class="conf-bar-fill" style="width:65%;background:#ff5c5c;"></div>
-        </div>
-        <span class="conf-strength" style="color:#ff5c5c;">Medium</span>
-      </div>
-    </div>
-
-    <div class="conf-card">
-      <div class="conf-header">
-        <div class="conf-dot" style="background:#b97cf3;"></div>
-        <div class="conf-name">Pattern Recognition</div>
-        <div class="conf-code">PATTERN</div>
-      </div>
-      <div class="conf-desc">engines.py and patterns.py scan for structured chart formations: compression zones (tight price range before breakout), bull/bear flags (pullback inside a trend), triangles, and channels. Each detected pattern contributes to the score.</div>
-      <div class="conf-bar-wrap">
-        <span style="color:var(--muted);font-size:11px;">Weight</span>
-        <div class="conf-bar-track">
-          <div class="conf-bar-fill" style="width:60%;background:#b97cf3;"></div>
-        </div>
-        <span class="conf-strength" style="color:#b97cf3;">Medium</span>
-      </div>
-    </div>
-
-    <div class="conf-card">
-      <div class="conf-header">
-        <div class="conf-dot" style="background:#ff9a3c;"></div>
-        <div class="conf-name">Swing / Leg Structure</div>
-        <div class="conf-code">SWING</div>
-      </div>
-      <div class="conf-desc">engines.py breaks price movement into "legs" — each discrete impulse or corrective move. It measures how strong each leg was (range × volume). When price is at the start of a fresh leg at a structure level, the swing context adds confirmation to the setup.</div>
-      <div class="conf-bar-wrap">
-        <span style="color:var(--muted);font-size:11px;">Weight</span>
-        <div class="conf-bar-track">
-          <div class="conf-bar-fill" style="width:55%;background:#ff9a3c;"></div>
-        </div>
-        <span class="conf-strength" style="color:#ff9a3c;">Supporting</span>
-      </div>
-    </div>
-
-  </div>
-</section>
-
-<!-- SECTION 4: ANNOTATED EXAMPLE -->
-<section>
-  <div class="section-label">04 — A Real Example</div>
-  <h2>What Dexter's report looks like</h2>
-  <p class="section-intro">This is the kind of structured data Dexter sends to Chev. Every field has a specific source. Understanding this stops you from accidentally breaking a field by changing the function that generates it.</p>
-
-  <div class="example-wrap">
-    <div class="example-header">
-      <div class="example-dot"></div>
-      Sample Dexter Analysis Report — BTC/USDT 1H
-    </div>
-    <div class="example-body">
-
-      <div class="anno-line">
-        <div class="anno-code" style="border-color: var(--accent);">pair: "BTCUSDT" | tf: "1H"</div>
-        <div class="anno-arrow">→</div>
-        <div class="anno-explain">The pair and timeframe being analysed. Dexter loops through the watchlist and runs this for each one.</div>
-      </div>
-
-      <div class="anno-line">
-        <div class="anno-code" style="border-color: var(--green);">confluences: 4 | score: 0.78</div>
-        <div class="anno-arrow">→</div>
-        <div class="anno-explain"><strong>This is the trigger.</strong> 4 signals agree on this level. Score of 0.78 out of 1.0. Because confluences ≥ 3, Dexter escalates this to Chev right now.</div>
-      </div>
-
-      <div class="anno-line">
-        <div class="anno-code" style="border-color: var(--accent);">confluence_list: ["SR", "FIB_0.618", "VP_POC", "RSI_DIV_T1"]</div>
-        <div class="anno-arrow">→</div>
-        <div class="anno-explain">Exactly which signals fired. SR level + Fibonacci 61.8% + Volume Profile point of control + RSI divergence trendline 1. The webapp uses this to draw each one on the chart.</div>
-      </div>
-
-      <div class="anno-line">
-        <div class="anno-code" style="border-color: var(--yellow);">direction: "LONG" | price: 67,450</div>
-        <div class="anno-arrow">→</div>
-        <div class="anno-explain">Dexter detected structure pointing up and price is sitting at a support confluence. Direction comes from the swing leg analysis in engines.py.</div>
-      </div>
-
-      <div class="anno-line">
-        <div class="anno-code" style="border-color: var(--red);">sl: 66,800 | tp1: 68,200 | tp2: 69,100</div>
-        <div class="anno-arrow">→</div>
-        <div class="anno-explain">Stop Loss is placed below the structure zone using ATR (Average True Range — a measure of how volatile price is). TP levels are the next SR zones above entry.</div>
-      </div>
-
-      <div class="anno-line">
-        <div class="anno-code" style="border-color: var(--purple);">leg_strength: 0.82 | auction_zone: [67200, 67650]</div>
-        <div class="anno-arrow">→</div>
-        <div class="anno-explain">The strength of the most recent impulse leg (0.82 = strong move, high volume, wide range). Auction zone is where the market balanced before the move — a high-value area according to the VP engine.</div>
-      </div>
-
     </div>
   </div>
 </section>
 
-<!-- SECTION 5: RULES -->
-<section>
-  <div class="section-label">05 — What You Can and Can't Touch</div>
-  <h2>Alejandro's rules of engagement</h2>
-  <p class="section-intro">This isn't about trust — it's about not accidentally breaking a live trading system. These rules exist because everything is connected. A change in engines.py can silently break Dexter's confluence count without throwing an error.</p>
+<!-- 11 TONIGHT -->
+<section id="tonight">
+  <div class="section-label">11 — Live Diagnosis</div>
+  <h2>Why has almost nothing posted tonight?</h2>
+  <p class="section-intro">This is the honest answer as of tonight, not a guess — pulled directly from <code class="inline">chev_decisions.jsonl</code> and <code class="inline">labels_open.jsonl</code>.</p>
 
-  <div class="example-wrap">
-    <table class="rules-table">
-      <thead>
-        <tr>
-          <th>File / Area</th>
-          <th>What You Can Do</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>telegram_listener.py<br><span style="color:var(--green);font-size:11px;">Your file</span></td>
-          <td><span class="pill ale">Free</span> Build, break, improve — this is yours entirely. Jane lives here.</td>
-        </tr>
-        <tr>
-          <td>Backtesting scripts<br><span style="color:var(--green);font-size:11px;">New files</span></td>
-          <td><span class="pill ale">Free</span> Create new .py files for backtesting. Never modify existing files to add testing hooks — write standalone scripts that import what they need.</td>
-        </tr>
-        <tr>
-          <td>engines.py<br><span style="color:var(--yellow);font-size:11px;">Shared — coordinate</span></td>
-          <td><span class="pill both">Coordinate</span> Tell Kev before you edit. Never rename or remove a function — dexter.py calls them by name. Add new functions rather than replacing old ones when improving logic.</td>
-        </tr>
-        <tr>
-          <td>dexter.py<br><span style="color:var(--yellow);font-size:11px;">Shared — coordinate</span></td>
-          <td><span class="pill both">Coordinate</span> Tell Kev first. Only edit when Kev confirms Dexter is not running a live session. Test on your local copy before pushing.</td>
-        </tr>
-        <tr>
-          <td>Google Sheets columns<br><span style="color:var(--red);font-size:11px;">Never without asking</span></td>
-          <td><span class="pill never">Never</span> Columns are read by index number throughout the code. Adding a column between existing ones will silently corrupt all historical data reads. Always ask first.</td>
-        </tr>
-        <tr>
-          <td>webapp/index.html<br><span style="color:var(--red);font-size:11px;">Kev's file</span></td>
-          <td><span class="pill kev">Kev only</span> Leave it alone unless Kev specifically pulls you in. It's a complex single-file app — small changes have cascading effects.</td>
-        </tr>
-        <tr>
-          <td>google_credentials.json<br><span style="color:var(--red);font-size:11px;">Never commit</span></td>
-          <td><span class="pill never">Never</span> This file must never appear in a git commit. It's in .gitignore but double-check before every push. It gives full Google Sheets access.</td>
-        </tr>
-      </tbody>
-    </table>
+  <div class="diag-panel">
+    <div class="diag-header">🔍 What the logs actually show</div>
+    <div class="diag-body">
+
+      <div class="diag-stat-row">
+        <div class="diag-stat"><div class="n" style="color:var(--accent)">692</div><div class="l">Chev SKIPs today</div></div>
+        <div class="diag-stat"><div class="n" style="color:var(--red)">19:35</div><div class="l">Last time Chev replied at all</div></div>
+        <div class="diag-stat"><div class="n" style="color:var(--red)">~30h</div><div class="l">Since the last actual POST</div></div>
+        <div class="diag-stat"><div class="n" style="color:var(--muted)">136</div><div class="l">"below_threshold" rejections today</div></div>
+        <div class="diag-stat"><div class="n" style="color:var(--muted)">21</div><div class="l">"struct_pregate" rejections today</div></div>
+        <div class="diag-stat"><div class="n" style="color:var(--muted)">19</div><div class="l">"below_trade_threshold" today</div></div>
+      </div>
+
+      <p style="font-size:13.5px;color:var(--muted);">Chev was genuinely active most of today — 692 SKIPs isn't a silent system. But the <b style="color:var(--text)">last</b> one was at 19:35, roughly four hours before this was written, and every scan since then that reached the escalation logic has been blocked by a pre-gate. The last actual <b style="color:var(--text)">POST</b> (a trade opened) was over a day ago now, well before tonight's silence started.</p>
+
+      <p style="font-size:13.5px;color:var(--muted);margin-top:10px;">Two real, separate things were found and fixed tonight while investigating this:</p>
+
+      <div class="fix-box">
+        <div class="fix-label">Found &amp; fixed — duplicate process</div>
+        <p><b style="color:var(--text)">Two independent dexter.py processes</b> were running at once, both launched at the same second (20:28:50) — not Flask's reloader (that's explicitly disabled), a genuine accidental double-launch. Two bots writing to the same Google Sheet and hitting Chev's API simultaneously risks rate-limit contention and cooldown-state desync between the two, since neither knows the other exists. <b style="color:var(--green)">Both were stopped</b> — restart a single instance manually.</p>
+      </div>
+
+      <div class="fix-box">
+        <div class="fix-label">Found &amp; fixed — inconsistent threshold</div>
+        <p>The first-pass "worth evaluating" filter used a flat, hardcoded per-timeframe table that never read Exploration Mode or asset type — a real violation of this codebase's own rule that every score check must route through one shared helper. <b style="color:var(--green)">Fixed</b> to scale off the real live threshold. <span style="color:var(--yellow)">Important nuance:</span> for crypto specifically, the old hardcoded numbers happened to already sit at or below the exploration threshold, so this fix is a correctness/consistency improvement, not a smoking gun that explains tonight's silence on its own.</p>
+      </div>
+
+      <p style="font-size:13.5px;color:var(--muted);margin-top:16px;">The more likely honest explanation for the last four hours specifically: it's Friday evening moving into Saturday UTC — forex and stock markets are already closed for the weekend (so only crypto is scanning at all right now), and crypto liquidity typically thins out into the weekend, which shows up exactly as "plenty of scans, none of them structurally convincing enough to clear the pre-gate." That's the gates working as designed on a quiet market, not a bug suppressing good setups. Worth watching over the next day: does escalation volume pick back up once weekday liquidity returns, now that the duplicate process is gone and the threshold fix is in? Neither of tonight's fixes is live yet — they're in dexter.py on disk, waiting for the manual restart you do yourself.</p>
+    </div>
   </div>
 </section>
 
-<!-- SECTION 6: ALEJANDRO'S TASK LIST -->
-<section>
-  <div class="section-label">06 — Alejandro's Task List</div>
-  <h2>What to build, in order</h2>
-  <p class="section-intro">These are Alejandro's tasks ranked by priority. Do them in order — the later ones depend on understanding you'll build from the earlier ones.</p>
+<!-- 12 GLOSSARY -->
+<section id="glossary">
+  <div class="section-label">12 — Quick Lookup</div>
+  <h2>Glossary</h2>
+  <p class="section-intro">Every term and reason code that shows up in the logs, in one place.</p>
 
-  <div class="example-wrap">
-    <table class="rules-table">
-      <thead>
-        <tr>
-          <th style="width:40px;">#</th>
-          <th>Task</th>
-          <th>Why It Matters</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td style="color:var(--green);font-weight:700;">1</td>
-          <td><strong>Set up local environment</strong><br><span style="font-size:12px;color:var(--muted);">Clone repo → pip install → get google_credentials.json from Kev → run python dexter.py</span></td>
-          <td style="color:var(--muted);">You can't test anything if you can't run it. Get the system running on your machine first.</td>
-        </tr>
-        <tr>
-          <td style="color:var(--green);font-weight:700;">2</td>
-          <td><strong>Backtesting framework</strong><br><span style="font-size:12px;color:var(--muted);">Run the full engine stack against 12 months of historical candle data. Would the strategy have made money?</span></td>
-          <td style="color:var(--muted);">Right now we're flying blind. Without historical validation, all improvements are guesses.</td>
-        </tr>
-        <tr>
-          <td style="color:var(--yellow);font-weight:700;">3</td>
-          <td><strong>Improve confluence scoring</strong><br><span style="font-size:12px;color:var(--muted);">An SR level tested 10 times is not the same as one tested 2 times. Make the weights reflect this.</span></td>
-          <td style="color:var(--muted);">The biggest signal quality improvement available without changing the strategy architecture.</td>
-        </tr>
-        <tr>
-          <td style="color:var(--yellow);font-weight:700;">4</td>
-          <td><strong>Multi-timeframe gate</strong><br><span style="font-size:12px;color:var(--muted);">Only escalate to Chev when 1H and 4H agree on direction. Dexter currently operates per-timeframe independently.</span></td>
-          <td style="color:var(--muted);">Removes a large number of false setups. The best trades always have both timeframes aligned.</td>
-        </tr>
-        <tr>
-          <td style="color:var(--accent);font-weight:700;">5</td>
-          <td><strong>Fix Fib anchor in engines.py</strong><br><span style="font-size:12px;color:var(--muted);">_impulse_anchors() should return the FIRST leg of the move, not the most recent swing. Look at _find_last_impulse().</span></td>
-          <td style="color:var(--muted);">Broken Fib levels mean the confluence is triggering at the wrong price. Both Kev and you are affected by this bug.</td>
-        </tr>
-        <tr>
-          <td style="color:var(--accent);font-weight:700;">6</td>
-          <td><strong>RSI Divergence → Google Sheets col 17</strong><br><span style="font-size:12px;color:var(--muted);">Make sure RSI_DIV_T1 and RSI_DIV_T2 are always written when RSI divergence is a confluence. Kev needs these to draw trendlines on the chart.</span></td>
-          <td style="color:var(--muted);">The webapp cannot draw RSI divergence trendlines until these values reliably appear in the sheet.</td>
-        </tr>
-        <tr>
-          <td style="color:var(--muted);font-weight:700;">7</td>
-          <td><strong>Stop Loss audit</strong><br><span style="font-size:12px;color:var(--muted);">Look at the last 20 losses. Was SL too tight (ATR multiplier too small), or were the trades genuinely wrong setups?</span></td>
-          <td style="color:var(--muted);">One of the fastest ways to improve win rate without changing the entry criteria at all.</td>
-        </tr>
-        <tr>
-          <td style="color:var(--muted);font-weight:700;">8</td>
-          <td><strong>Jane performance tracking</strong><br><span style="font-size:12px;color:var(--muted);">Jane is live but her win rate isn't tracked alongside Chev's. Add Jane's calls to the performance log.</span></td>
-          <td style="color:var(--muted);">We can't compare Chev vs Jane or see if the disagreement flag would be useful without the data.</td>
-        </tr>
-      </tbody>
-    </table>
+  <div class="glossary">
+    <div class="g-item"><div class="g-term">EXPLORATION_MODE</div><div class="g-def">One boolean in dexter.py. Lowers entry thresholds so the learning loop gets enough data; every downstream safety gate (sizing, SL sanity, circuit breaker) is untouched by it.</div></div>
+    <div class="g-item"><div class="g-term">NOT_ESCALATED</div><div class="g-def">Shadow-logged decision meaning Chev was never asked — a gate stopped it first. Always has a reason code attached.</div></div>
+    <div class="g-item"><div class="g-term">below_threshold / below_trade_threshold</div><div class="g-def">The old flat per-TF pre-check vs. the newer, real per-asset trade threshold. Now both route through the same helper.</div></div>
+    <div class="g-item"><div class="g-term">struct_pregate</div><div class="g-def">Rejected for having no structural anchor — SR score and VP score both below 2.</div></div>
+    <div class="g-item"><div class="g-term">too_far_from_level / conflicting_signals</div><div class="g-def">Price isn't close enough to the confluence zone yet, or the bullish/bearish points genuinely contradict each other.</div></div>
+    <div class="g-item"><div class="g-term">STRUCT_REJECT</div><div class="g-def">A second, legacy structural check that still fires <i>after</i> Chev replies — redundant with struct_pregate on purpose, both measured separately.</div></div>
+    <div class="g-item"><div class="g-term">SIP (Stop In Profit)</div><div class="g-def">SL has been trailed past entry into profit territory — the trade can no longer lose money.</div></div>
+    <div class="g-item"><div class="g-term">HOLDING / WEAKENING / BROKEN</div><div class="g-def">Level-health verdict on the zone ahead of a running trade — confirmed &amp; strong, losing structure, or already failed.</div></div>
+    <div class="g-item"><div class="g-term">R-multiple</div><div class="g-def">PnL expressed as a multiple of the dollar risk taken on the trade. +2R = twice the amount risked, gained.</div></div>
+    <div class="g-item"><div class="g-term">MAE / MFE</div><div class="g-def">Max Adverse / Favourable Excursion — how far a trade moved against or in favour of the position in R, at any point before exit.</div></div>
+    <div class="g-item"><div class="g-term">Circuit breaker</div><div class="g-def">Halts new escalations for the rest of the UTC day once realized R hits −3.0. Never affects open trades.</div></div>
+    <div class="g-item"><div class="g-term">The Examiner</div><div class="g-def">labeller.py — builds a shadow triple-barrier label for every setup Dexter ever sees, POST/SKIP/blocked alike, to measure whether Chev's judgment adds real value.</div></div>
+    <div class="g-item"><div class="g-term">Jane</div><div class="g-def">A second, parallel paper-trading account tracking Kev's own manual trades (via Telegram), which Chev also gives an advisory verdict on for comparison.</div></div>
   </div>
 </section>
 
 <!-- FOOTER -->
 <div class="footer">
-  <p>Built by <strong>Kev</strong> with Claude Code &nbsp;·&nbsp; System: <strong>Chev Trading System</strong> &nbsp;·&nbsp; Questions? Message Kev or open an issue on GitHub.</p>
-  <p style="margin-top:8px;">github.com/ChevCheliosLLM/chev-trading-system</p>
+  <p>Built by <strong>Kev</strong> with Claude Code &nbsp;·&nbsp; System: <strong>Chev Trading System</strong></p>
+  <p style="margin-top:8px;">This page is a snapshot verified against the running code — dexter.py changes fast. If a number here looks wrong, it's this page that's stale, not the code. Re-check before trusting it blindly.</p>
 </div>
+
+<script>
+document.querySelectorAll('.tabs').forEach(function(group) {
+  group.querySelectorAll('.tab-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      group.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('active'); });
+      group.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+      btn.classList.add('active');
+      group.querySelector('#' + btn.dataset.tab).classList.add('active');
+    });
+  });
+});
+</script>
 
 </body>
 </html>

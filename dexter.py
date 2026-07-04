@@ -12,7 +12,12 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import yfinance as yf
 import engines
+import labeller
+import derivs
+import trade_forensics
 import patterns
+import risk_gauntlet
+import honest_sim
 
 flask_app = Flask(__name__, static_folder=None)
 WEBAPP_FOLDER = r"C:\ChevTools\webapp"
@@ -114,10 +119,15 @@ def api_close_trade():
         if price is None:
             price = data.get("exit_price") or target.get("sl") or target.get("entry", 0)
 
-        is_long = target["direction"] == "long"
-        move_pct = (price - target["entry"]) / target["entry"] if is_long else (target["entry"] - price) / target["entry"]
-        exit_pnl = round(target.get("position_size_usd", 0) * move_pct, 2)
-        outcome  = "WIN" if exit_pnl >= 0 else "LOSS"
+        is_long      = target["direction"] == "long"
+        move_pct     = (price - target["entry"]) / target["entry"] if is_long else (target["entry"] - price) / target["entry"]
+        _gross_pnl   = round(target.get("position_size_usd", 0) * move_pct, 2)
+        exit_pnl, _trade_cost = honest_sim.apply_costs(target, _gross_pnl, 1.0)
+        outcome      = "WIN" if exit_pnl >= 0 else "LOSS"
+        try:
+            honest_sim.record_close_R(target, round(exit_pnl + target.get("partial_net_pnl", 0.0), 2))
+        except Exception as _rr_e:
+            print(f"[honest_sim] record_close_R failed for {symbol}: {_rr_e}")
 
         balance = get_balance(dashboard_ws)
         margin  = target.get("margin_reserved", 0)
@@ -145,7 +155,7 @@ def api_close_trade():
                 print(f"[Journal] Duplicate detected for {_sym} (entry={_entry} SL={_sl} TP={_tp}) — skipping write.")
             else:
                 journal.append({
-                    "ts":               datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "ts":               datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
                     "symbol":           _sym,
                     "asset_type":       target.get("asset_type", "crypto"),
                     "direction":        target["direction"],
@@ -1123,6 +1133,7 @@ GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
 SHEET_ID = "1V1b2aU3SJu_R7VjFKGp9J6uFwucGSamhRWyq6jgCbFs"
 TRADE_LOG_TAB         = "Trade Log"
 JANE_TAB              = "Jane"
+SKIP_LOG_TAB          = "Skip Log"   # every non-POST Chev decision — see _log_chev_decision
 
 # Paper trading starting balance
 STARTING_BALANCE      = 10000.0
@@ -1174,6 +1185,21 @@ CONFLUENCE_SCORES = {
 }
 CONFLUENCE_THRESHOLD_CRYPTO = 10   # minimum score to open a trade on crypto
 CONFLUENCE_THRESHOLD_FOREX  = 8    # raised from 7 — SR reweighting means 7 was too lenient
+CONFLUENCE_THRESHOLD_STOCK  = 8    # stocks previously fell into the crypto branch (10) by accident
+ESCALATION_MAX_DIST_PCT     = 0.75 # don't escalate setups further than this % from the confluence level
+CONFLICT_DOMINANCE_RATIO    = 2.0  # dominant directional score must be ≥ this × the opposing side
+
+# ── EXPLORATION MODE ─────────────────────────────────────────────────────────
+# Temporary paper-trading data-collection phase: lower the entry bar so small
+# graded trades flow and the learning loops (playbooks, the Examiner) get data
+# to learn from. Flip EXPLORATION_MODE to False to restore normal thresholds
+# everywhere at once — every gate reads these through _active_thresholds().
+# Hygiene gates (STRUCT PRE-GATE, CONFLICT gate, risk_gauntlet) are unaffected.
+EXPLORATION_MODE            = True
+EXPLORATION_THRESHOLD_CRYPTO = 7
+EXPLORATION_THRESHOLD_FOREX  = 6
+EXPLORATION_THRESHOLD_STOCK  = 6
+EXPLORATION_MAX_DIST_PCT     = 1.5
 
 VALID_TAGS = list(CONFLUENCE_SCORES.keys())
 
@@ -1204,9 +1230,6 @@ WATCHLIST = [
     {"symbol": "PEPEUSDT", "type": "crypto"},
     {"symbol": "ZECUSDT",  "type": "crypto"},
     {"symbol": "UNIUSDT",  "type": "crypto"},
-    {"symbol": "HYPEUSDT", "type": "crypto"},  # Hyperliquid — verify on Binance
-    {"symbol": "RAINUSDT", "type": "crypto"},  # Rain — verify on Binance
-    {"symbol": "LEOUSDT",  "type": "crypto"},  # LEO (Bitfinex) — verify on Binance
     # ── Forex (Twelve Data) ───────────────────────────────────────────
     {"symbol": "EUR/USD", "type": "forex"},
     {"symbol": "GBP/USD", "type": "forex"},
@@ -1242,7 +1265,6 @@ WATCHLIST = [
     {"symbol": "POET",  "type": "stock"},
     {"symbol": "TE",    "type": "stock"},
     {"symbol": "NVTS",  "type": "stock"},
-    {"symbol": "QUBY",  "type": "stock"},  # verify ticker
 ]
 
 # Crypto gets the full 4-timeframe validated model (Binance is free).
@@ -1258,7 +1280,14 @@ TIMEFRAMES_TWELVE = {"15m": "15min", "30m": "30min", "1h": "1h", "4h": "4h", "1d
 # Smaller TF = scalp, larger = swing. Cooldowns scale with TF duration.
 TF_SECONDS        = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400}
 TF_TRADE_TYPE     = {"5m": "scalp", "15m": "scalp", "30m": "day", "1h": "day", "4h": "swing"}
-TF_MIN_CONFLUENCE = {"5m": 5, "15m": 5, "30m": 6, "1h": 6, "4h": 7}
+TF_MIN_CONFLUENCE_DISCOUNT = {"5m": 5, "15m": 5, "30m": 4, "1h": 4, "4h": 3}
+# Points BELOW the active per-asset trade threshold (_active_thresholds) required just to
+# be worth fully evaluating -- a cheap first-pass filter, not the real gate. Previously this
+# was a flat absolute table (5/5/6/6/7) that never read EXPLORATION_MODE or asset_type at
+# all, which violated the rule (see _active_thresholds' docstring) that every score/distance
+# check must route through that helper. Calibrated so normal-mode crypto (threshold=10)
+# reproduces the original absolute numbers exactly; forex/stock and EXPLORATION_MODE now
+# scale off their own real threshold instead of inheriting crypto's old flat numbers.
 TF_SKIP_COOLDOWN  = {"5m": 300, "15m": 600, "30m": 1800, "1h": 3600, "4h": 14400}
 TF_POST_COOLDOWN  = {"5m": 7200, "15m": 7200, "30m": 14400, "1h": 28800, "4h": 86400}
 SCAN_TFS_CRYPTO   = ["5m", "15m", "30m", "1h", "4h"]
@@ -1312,9 +1341,6 @@ COINGECKO_IDS = {
     "PEPEUSDT": "pepe",
     "ZECUSDT":  "zcash",
     "UNIUSDT":  "uniswap",
-    "HYPEUSDT": "hyperliquid",
-    "RAINUSDT": "rain",
-    "LEOUSDT":  "bitfinex-leo",
 }
 
 
@@ -1419,7 +1445,7 @@ def _push_to_firebase():
                 "wins":         _firebase_win_stats["wins"],
                 "losses":       _firebase_win_stats["losses"],
                 "playbook":     playbook,
-                "updated":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "updated":      datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
                 "jane_trades":    jane_snapshot,
                 "jane_closed":   jane_journal[-20:],
                 "jane_balance":  jane_balance,
@@ -1489,7 +1515,7 @@ def _log_chev_decision(symbol, primary_tf, dexter_score, dexter_reasons, decisio
     """Append one JSON-line to the Chev decision log for post-session review."""
     import json as _json
     entry = {
-        "ts":             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "ts":             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "symbol":         symbol,
         "tf":             primary_tf,
         "dexter_score":   round(float(dexter_score), 1),
@@ -1503,6 +1529,20 @@ def _log_chev_decision(symbol, primary_tf, dexter_score, dexter_reasons, decisio
             _f.write(_json.dumps(entry) + "\n")
     except Exception as _e:
         print(f"[Dexter] Decision log write failed: {_e}")
+
+    # Mirror every non-POST decision into the Skip Log sheet tab, human-readable —
+    # POST already gets its own row in Trade Log, so it's excluded here to avoid
+    # duplication. Never allowed to block anything: any failure just logs one line.
+    if decision != "POST" and skip_log_ws is not None:
+        try:
+            _reasons_str = "; ".join(dexter_reasons) if isinstance(dexter_reasons, list) else str(dexter_reasons)
+            skip_log_ws.append_row([
+                entry["ts"], symbol, primary_tf, decision,
+                entry["dexter_score"], regime_4h or "",
+                str(reason)[:500], _reasons_str[:500],
+            ])
+        except Exception as _e:
+            print(f"[Dexter] Skip Log sheet write failed: {_e}")
 
 
 def _call_chev(messages, timeout=120):
@@ -1683,6 +1723,55 @@ def _run_cross_analysis():
         print(f"[Cross-analysis] Failed: {e}")
 
 
+def _preserve_critical_section(existing_text, generated_text):
+    """Protect TRENDING MARKET BEHAVIOUR — CRITICAL from the learning session's full
+    playbook overwrite, mechanically rather than by asking the model nicely.
+    Extracts the section verbatim (heading line to next heading line) from the
+    EXISTING playbook file and re-inserts it into the freshly GENERATED text,
+    replacing whatever the model produced there or inserting it in the same
+    position if the model omitted it. Supports both heading styles used across
+    the playbook files: '### TRENDING...' and '**TRENDING...**'.
+    Returns generated_text unchanged if the existing file has no such section
+    (e.g. a fresh file) — nothing to preserve yet.
+    """
+    import re as _re
+    _heading_re = _re.compile(r'^(?:#{1,6}\s*.+|\*\*[^\n]+\*\*)\s*$')
+
+    def _extract(text):
+        lines = text.splitlines()
+        start = None
+        for i, line in enumerate(lines):
+            if "TRENDING MARKET BEHAVIOUR" in line and "CRITICAL" in line:
+                start = i
+                break
+        if start is None:
+            return None, None, lines
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            if _heading_re.match(lines[j].strip()):
+                end = j
+                break
+        return start, end, lines
+
+    e_start, e_end, e_lines = _extract(existing_text)
+    if e_start is None:
+        return generated_text
+
+    critical_block = e_lines[e_start:e_end]
+    while critical_block and not critical_block[-1].strip():
+        critical_block.pop()
+
+    g_start, g_end, g_lines = _extract(generated_text)
+    if g_start is not None:
+        new_lines = g_lines[:g_start] + critical_block + [""] + g_lines[g_end:]
+    else:
+        # Model omitted the section entirely — insert at the same relative
+        # position it held in the existing file.
+        insert_at = min(e_start, len(g_lines))
+        new_lines = g_lines[:insert_at] + critical_block + [""] + g_lines[insert_at:]
+    return "\n".join(new_lines)
+
+
 def _run_learning_session(journal, jane_journal=None, asset_type=None):
     """Every 10 closed trades, Chev reads his journal for this asset class and rewrites the playbook.
 
@@ -1781,6 +1870,39 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
             grade_lines.append(f"  {g}: {st['w']}W/{st['l']}L ({wr}% WR)")
     grade_accuracy = "\n".join(grade_lines) if grade_lines else "  No grade data yet."
 
+    # Trade Path Forensics aggregation — input to the learning session only,
+    # not a new playbook section. Appended only once enough samples exist.
+    _fx_entries = [e for e in asset_journal if e.get("forensics")]
+    forensics_block = ""
+    if len(_fx_entries) >= 10:
+        import statistics as _fx_stats
+        _fx_sl_losses = [e for e in _fx_entries if e.get("close_type") == "SL_HIT"]
+        _fx_wick_pct = (round(sum(1 for e in _fx_sl_losses if e["forensics"].get("exit_type_detail") == "wick")
+                              / len(_fx_sl_losses) * 100) if _fx_sl_losses else None)
+        _fx_ran_pct  = (round(sum(1 for e in _fx_sl_losses if e["forensics"].get("stopped_then_ran") is True)
+                              / len(_fx_sl_losses) * 100) if _fx_sl_losses else None)
+        _fx_loss_mfe = [e["forensics"]["mfe_r"] for e in _fx_entries
+                        if e.get("outcome") == "LOSS" and e["forensics"].get("mfe_r") is not None]
+        _fx_win_mae  = [e["forensics"]["mae_r"] for e in _fx_entries
+                        if e.get("outcome") == "WIN" and e["forensics"].get("mae_r") is not None]
+        _fx_med_loss_mfe = round(_fx_stats.median(_fx_loss_mfe), 2) if _fx_loss_mfe else None
+        _fx_med_win_mae  = round(_fx_stats.median(_fx_win_mae), 2) if _fx_win_mae else None
+        _fx_bars_win  = [e["forensics"]["bars_held"] for e in _fx_entries
+                         if e.get("outcome") == "WIN" and e["forensics"].get("bars_held") is not None]
+        _fx_bars_loss = [e["forensics"]["bars_held"] for e in _fx_entries
+                         if e.get("outcome") == "LOSS" and e["forensics"].get("bars_held") is not None]
+        _fx_avg_bars_win  = round(sum(_fx_bars_win) / len(_fx_bars_win), 1) if _fx_bars_win else None
+        _fx_avg_bars_loss = round(sum(_fx_bars_loss) / len(_fx_bars_loss), 1) if _fx_bars_loss else None
+        forensics_block = (
+            f"TRADE PATH FORENSICS (n={len(_fx_entries)}):\n"
+            f"  SL losses classified 'wick' (stopped then recovered): {_fx_wick_pct if _fx_wick_pct is not None else 'n/a'}%\n"
+            f"  SL losses where price later reached original TP anyway: {_fx_ran_pct if _fx_ran_pct is not None else 'n/a'}%\n"
+            f"  Median MFE of losing trades: {_fx_med_loss_mfe if _fx_med_loss_mfe is not None else 'n/a'}R\n"
+            f"  Median MAE of winning trades: {_fx_med_win_mae if _fx_med_win_mae is not None else 'n/a'}R\n"
+            f"  Average bars held — wins: {_fx_avg_bars_win if _fx_avg_bars_win is not None else 'n/a'} | "
+            f"losses: {_fx_avg_bars_loss if _fx_avg_bars_loss is not None else 'n/a'}\n\n"
+        )
+
     jane_text = ""
     if jane_recent:
         jane_lines = "\n".join([
@@ -1808,6 +1930,13 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
         f"{quality_summary}\n\n"
         f"SETUP GRADE ACCURACY (last 30 trades):\n"
         f"{grade_accuracy}\n\n"
+        f"{forensics_block}"
+        f"STATISTICAL HONESTY (hard rule for everything you write below):\n"
+        f"  State every win-rate or performance claim with its sample size in parentheses, e.g. '3/3 (n=3)'.\n"
+        f"  No absolute language ('always', 'never', '100% win rate', 'guaranteed') unless n ≥ 20.\n"
+        f"  Patterns with fewer than 10 supporting trades: label them tentative.\n"
+        f"  Only reference tag codes that actually appear in the journal data above — never invent shorthand.\n"
+        f"  TRENDING MARKET BEHAVIOUR — CRITICAL is maintained by the system — do not attempt to rewrite it.\n\n"
         f"Rewrite your playbook under these exact headings:\n\n"
         f"CONFLUENCE CONDITIONS\n"
         f"Based on the combo win-rate data above, which combinations are producing results and which are not? "
@@ -1843,8 +1972,14 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
         if not new_playbook:
             raise Exception("No response from Chev")
         _pb_path = PLAYBOOK_PATHS.get(asset_type, PLAYBOOK_PATH) if asset_type else PLAYBOOK_PATH
+        try:
+            with open(_pb_path, "r", encoding="utf-8") as _epf:
+                _existing_pb_text = _epf.read()
+            new_playbook = _preserve_critical_section(_existing_pb_text, new_playbook)
+        except Exception as _pres_e:
+            print(f"[Playbook] CRITICAL-section preservation failed for {_asset_label}, writing generated text as-is: {_pres_e}")
         header = (f"CHEV TRADING PLAYBOOK — {_asset_label}\n"
-                  f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                  f"Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} "
                   f"| Based on {len(asset_journal)} {_asset_label} trades\n{'='*40}\n\n")
         with open(_pb_path, "w", encoding="utf-8") as f:
             f.write(header + new_playbook)
@@ -1928,8 +2063,8 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
     duration = "unknown"
     if trade.get("opened_at"):
         try:
-            opened = datetime.strptime(trade["opened_at"], "%Y-%m-%d %H:%M:%S")
-            delta  = datetime.now() - opened
+            opened = datetime.strptime(trade["opened_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            delta  = datetime.now(timezone.utc) - opened
             h = int(delta.total_seconds() // 3600)
             m = int((delta.total_seconds() % 3600) // 60)
             duration = f"{h}h {m}m" if h > 0 else f"{m}m"
@@ -1967,6 +2102,32 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
     _risk_usd  = trade.get("risk_amount_usd", 0)
     _r_mult    = round(pnl / _risk_usd, 2) if _risk_usd > 0 else None
     _r_str     = f" | R-MULTIPLE: {_r_mult:+.2f}R" if _r_mult is not None else ""
+
+    # Circuit breaker: every full close funnels through this function (except the
+    # force-close API endpoint, which records its own), so this is the one place that
+    # needs to sum any prior partial closes into the trade's total realized R.
+    try:
+        honest_sim.record_close_R(trade, round(pnl + trade.get("partial_net_pnl", 0.0), 2))
+    except Exception as _rr_e:
+        print(f"[honest_sim] record_close_R failed for {trade.get('symbol','?')}: {_rr_e}")
+
+    # Trade forensics: reconstruct MAE/MFE/RSI path attribution for the learning session.
+    # Never allowed to block the close/journal path — any failure just logs and moves on.
+    _forensics = None
+    try:
+        _fx_tf_map  = {"scalp": "5m", "day": "15m", "swing": "1h"}
+        _fx_tf      = _fx_tf_map.get(trade.get("trade_type", "day"), "15m")
+        _fx_tf_secs = {"5m": 300, "15m": 900, "1h": 3600}[_fx_tf]
+        if trade.get("opened_at"):
+            _fx_opened_epoch = int(
+                datetime.strptime(trade["opened_at"], "%Y-%m-%d %H:%M:%S")
+                .replace(tzinfo=timezone.utc).timestamp()
+            )
+            _fx_since_epoch = _fx_opened_epoch - 30 * _fx_tf_secs   # buffer for RSI warm-up
+            _fx_candles = _fetch_candles_for_labeller(trade["symbol"], _fx_tf, _fx_since_epoch)
+            _forensics  = trade_forensics.compute_forensics(trade, _fx_candles)
+    except Exception as _fx_e:
+        print(f"[Forensics] compute_forensics failed for {trade.get('symbol','?')}: {_fx_e}")
     _str_4h    = trade.get("structure_4h", "")
     _str_inv   = trade.get("invalidation", "")
     _str_conf  = trade.get("confirmation", "")
@@ -2021,7 +2182,7 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
     reasoning_quality = quality_match.group(1).upper() if quality_match else "UNKNOWN"
 
     entry = {
-        "ts":               datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "ts":               datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "symbol":           trade["symbol"],
         "asset_type":       trade.get("asset_type", "crypto"),
         "direction":        trade["direction"],
@@ -2049,6 +2210,7 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
         "leverage":         trade.get("leverage", 1),
         "chev_moves":       trade.get("chev_moves", []),
         "open_ts":          trade.get("open_ts", ""),
+        "forensics":        _forensics,
     }
     try:
         journal = _load_journal()
@@ -2291,6 +2453,31 @@ def fetch_candles(symbol, asset_type, timeframe, limit=700):
     with _candle_cache_lock:
         _candle_cache[key] = (df, time.time())
     return df
+
+
+def _fetch_candles_for_labeller(symbol: str, tf: str, since_epoch: int) -> list:
+    """
+    Wrapper: translates labeller's (symbol, tf, since_epoch) call into fetch_candles().
+    Returns list of {"t": int_epoch, "o", "h", "l", "c"} dicts for candles after since_epoch.
+    Determines asset_type from symbol heuristic (USDT→crypto, "/"→forex, else stock).
+    """
+    if symbol.endswith("USDT") or symbol.endswith("BTC") or symbol.endswith("ETH"):
+        asset_type = "crypto"
+    elif "/" in symbol:
+        asset_type = "forex"
+    else:
+        asset_type = "stock"
+    df = fetch_candles(symbol, asset_type, tf, limit=700)
+    if df is None or df.empty:
+        return []
+    out = []
+    for idx, row in df.iterrows():
+        # Index is tz-naive UTC from the exchange fetch functions — interpret as UTC
+        t = int(idx.to_pydatetime().replace(tzinfo=timezone.utc).timestamp())
+        if t >= since_epoch:
+            out.append({"t": t, "o": float(row["open"]), "h": float(row["high"]),
+                        "l": float(row["low"]), "c": float(row["close"])})
+    return out
 
 
 def get_current_price(symbol, asset_type):
@@ -2789,7 +2976,23 @@ def is_ny_market_hours():
     from datetime import datetime, timezone, timedelta
     ny_offset = timedelta(hours=-4)
     ny_time = datetime.now(timezone.utc) + ny_offset
+    if ny_time.weekday() >= 5:   # Sat=5, Sun=6 — market closed
+        return False
     return 9 <= ny_time.hour < 18
+
+
+def is_forex_market_open():
+    """Forex is closed from Friday 22:00 UTC to Sunday 22:00 UTC."""
+    from datetime import datetime, timezone
+    now_utc = datetime.now(timezone.utc)
+    wd = now_utc.weekday()          # Mon=0 ... Sun=6
+    if wd == 5:
+        return False                 # all of Saturday
+    if wd == 4 and now_utc.hour >= 22:
+        return False                 # Friday after close
+    if wd == 6 and now_utc.hour < 22:
+        return False                 # Sunday before open
+    return True
 
 
 # ============================================================
@@ -3388,6 +3591,136 @@ def _validate_anchor(df, anchor):
     return anchor
 
 
+def _score_level_health(symbol, asset_type, tf, level_price, level_kind, df=None):
+    """Grade whether an SR/TP level ahead of a running trade is still likely to hold.
+
+    Reuses _validate_anchor (built for auction-anchor entry validation) against a
+    synthetic anchor built from the level's own price — same confirmed/active math,
+    applied to trade management instead of entry validation.
+    Returns {verdict, confirmed, active, confidence, invalidation_reason} or None if
+    the level isn't represented in recent candles.
+    """
+    if df is None:
+        try:
+            df = fetch_candles(symbol, asset_type, tf, limit=200)
+        except Exception as e:
+            print(f"[LEVEL HEALTH] candle fetch failed for {symbol} {tf}: {e}")
+            return None
+
+    if df is None or len(df) == 0:
+        return None
+
+    closes   = df["close"].values
+    n        = len(closes)
+    lookback = min(100, n)
+
+    best_idx, best_dist = None, None
+    for i in range(n - 1, n - 1 - lookback, -1):
+        dist = abs(float(closes[i]) - level_price)
+        if best_dist is None or dist < best_dist:
+            best_dist, best_idx = dist, i
+
+    if best_idx is None or abs(float(closes[best_idx]) - level_price) / level_price * 100 > 3.0:
+        return None
+
+    anchor = {
+        "idx":         best_idx,
+        "price":       level_price,
+        "anchor_type": "swing_high" if level_kind == "resistance" else "swing_low",
+        "confidence":  50,
+    }
+    _validate_anchor(df, anchor)
+
+    if not anchor["active"]:
+        verdict = "BROKEN"
+    elif anchor["confirmed"] and anchor["confidence"] >= 60:
+        verdict = "HOLDING"
+    else:
+        verdict = "WEAKENING"
+
+    return {
+        "verdict":             verdict,
+        "confirmed":           anchor["confirmed"],
+        "active":              anchor["active"],
+        "confidence":          anchor["confidence"],
+        "invalidation_reason": anchor["invalidation_reason"],
+    }
+
+
+def _check_level_proximity(trade, current_price):
+    """Is current_price inside the 1.5% proximity band of a level ahead of this trade
+    (TP itself, or a validated SR zone between entry and TP)? Returns the nearest
+    qualifying level with its health score, or None."""
+    is_long = trade["direction"] == "long"
+
+    candidates = [{"price": trade["tp"], "kind": "resistance" if is_long else "support", "label": "TP"}]
+
+    res_levels, sup_levels = _get_levels_for_management(trade["symbol"], trade["asset_type"], trade["primary_tf"])
+
+    for zone in (res_levels if is_long else sup_levels):
+        between_price_and_tp = (
+            (trade["entry"] < zone["price"] < trade["tp"]) if is_long
+            else (trade["tp"] < zone["price"] < trade["entry"])
+        )
+        if between_price_and_tp:
+            candidates.append({"price": zone["price"], "kind": zone["kind"],
+                                "instances": zone.get("instances", 1), "label": "SR"})
+
+    best = None
+    for level in candidates:
+        within_band = abs(current_price - level["price"]) / level["price"] * 100 <= 1.5
+        if not within_band:
+            continue
+        health = _score_level_health(trade["symbol"], trade["asset_type"], trade["primary_tf"],
+                                      level["price"], level["kind"])
+        if health is None:
+            continue
+        dist_pct = abs(current_price - level["price"]) / level["price"] * 100
+        if best is None or dist_pct < best["dist_pct"]:
+            best = {"level_price": level["price"], "label": level["label"],
+                    "health": health, "dist_pct": dist_pct}
+
+    return best
+
+
+def _get_levels_for_management(symbol, asset_type, tf):
+    """Multi-TF validated SR zones for trade management — mirrors scan_pair_tf's SR
+    block (same _ca_get_timed_touches/_ca_build_validated_levels pattern), since
+    _ca_build_validated_levels only returns zones when touch data spans the full
+    min_touches_map of timeframes, not just one. Returns (res_levels, sup_levels);
+    ([], []) on any failure."""
+    try:
+        all_sr_tfs = ["15m", "30m", "1h", "4h"]
+        if tf == "5m":
+            all_sr_tfs = ["5m", "15m", "30m", "1h"]
+        fetch_tfs = list({tf} | set(all_sr_tfs))
+
+        min_touches_map = ({"5m": 8, "15m": 5, "30m": 3, "1h": 2, "4h": 2}
+                           if asset_type == "crypto" else {"15m": 6, "30m": 4, "1h": 2, "4h": 2})
+
+        tf_data = {}
+        for t in fetch_tfs:
+            df = fetch_candles(symbol, asset_type, t, limit=200)
+            if df is not None:
+                tf_data[t] = df
+
+        res_touches_by_tf, sup_touches_by_tf = {}, {}
+        for t in all_sr_tfs:
+            df = tf_data.get(t)
+            if df is None:
+                continue
+            touches = _ca_get_timed_touches(df)
+            res_touches_by_tf[t] = [(ts, p) for ts, p, k in touches if k == "resistance"]
+            sup_touches_by_tf[t] = [(ts, p) for ts, p, k in touches if k == "support"]
+
+        res_levels = _ca_build_validated_levels(res_touches_by_tf, "resistance", min_touches_map=min_touches_map)
+        sup_levels = _ca_build_validated_levels(sup_touches_by_tf, "support",    min_touches_map=min_touches_map)
+        return res_levels, sup_levels
+    except Exception as e:
+        print(f"[LEVEL HEALTH] _get_levels_for_management failed for {symbol}: {e}")
+        return [], []
+
+
 def _detect_auction_anchor(df, max_lookback=200, pivot_bars=5):
     """Frankenstein auction anchor — single source of truth for where a move started.
 
@@ -3691,16 +4024,29 @@ def _get_previous_day_hl(symbol, asset_type):
 
 
 def _get_session_context():
-    """Identify current trading session and volatility expectation."""
+    """Identify current trading session and volatility expectation.
+
+    Also returns session_start_ts: the UTC timestamp of the most recently opened
+    currently-active main session (Asian/London/NY), or None if none is active right
+    now (the dead zone / transition window). This is the single source of truth for
+    "when did the current session open" -- opening-range logic reads this rather than
+    re-deriving session boundaries independently. When London and NY overlap (13-16
+    UTC), NY's later start wins -- it's the fresher, more relevant open.
+    """
     now = datetime.now(timezone.utc)
     h   = now.hour
+    today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     sessions = []
+    _session_starts = []   # (start_ts, label) for each currently-active main session
     if 0 <= h < 8:
         sessions.append("Asian (00:00-08:00 UTC) — low volatility, range-bound, watch for fakeouts")
+        _session_starts.append((today_midnight, "Asian"))
     if 8 <= h < 16:
         sessions.append("London (08:00-16:00 UTC) — high volatility, trends form here")
+        _session_starts.append((today_midnight.replace(hour=8), "London"))
     if 13 <= h < 21:
         sessions.append("New York (13:00-21:00 UTC) — second high-volatility window")
+        _session_starts.append((today_midnight.replace(hour=13), "New York"))
     if 13 <= h < 16:
         sessions.append("⚡ London/NY Overlap (13:00-16:00 UTC) — PEAK VOLUME, strongest and most reliable moves of the day")
     if 8 <= h < 9:
@@ -3711,7 +4057,42 @@ def _get_session_context():
         sessions.append("Dead zone (21:00-00:00 UTC) — avoid new positions, very low liquidity")
     if not sessions:
         sessions.append("Pre-market / transition period")
-    return {"lines": sessions, "utc": now.strftime("%H:%M UTC")}
+    session_start_ts = max(_session_starts, key=lambda x: x[0])[0] if _session_starts else None
+    return {"lines": sessions, "utc": now.strftime("%H:%M UTC"), "session_start_ts": session_start_ts}
+
+
+def _get_opening_range(df, session_start_ts, num_candles=4):
+    """First `num_candles` candles of `df` at/after `session_start_ts` -> {"or_high", "or_low"}.
+
+    Returns None if no session is currently active (session_start_ts is None -- the
+    dead zone/transition window) or if `df` doesn't reach back far enough to cover that
+    session's open (never falls back to a stale/older range -- degrades cleanly instead).
+
+    num_candles default=4: on the fast TFs Dexter actually scans (15m), 4 candles is
+    the first hour after open -- a reasonable "opening range" window. Callers on a
+    different primary TF should pass a count sized for that TF (see the
+    _or_candles_by_tf map at the scan_pair_tf call site) rather than relying on this
+    default, since a sensible window width scales with candle duration.
+    """
+    if session_start_ts is None or df is None or len(df) == 0:
+        return None
+    try:
+        first_idx = None
+        for i in range(len(df)):
+            ts = df.index[i]
+            if ts.tzinfo is None:
+                ts = ts.tz_localize(timezone.utc)
+            if ts >= session_start_ts:
+                first_idx = i
+                break
+        if first_idx is None:
+            return None  # session hasn't opened within the fetched window
+        window = df.iloc[first_idx: first_idx + num_candles]
+        if window.empty:
+            return None
+        return {"or_high": float(window["high"].max()), "or_low": float(window["low"].min())}
+    except Exception:
+        return None
 
 
 def _get_adr(symbol, asset_type, lookback=14):
@@ -3828,6 +4209,105 @@ def _bos_choch_label(df, window=3):
                 "warning": "wait for a clear BOS before committing to a directional bias"}
     except Exception:
         return None
+
+
+def _macro_trend_context(df_4h):
+    """
+    Compute multi-day 4H swing structure and return a formatted text block + verdict string.
+    Verdict: STRONG_UPTREND | UPTREND | RANGING | DOWNTREND | STRONG_DOWNTREND
+    """
+    try:
+        if df_4h is None or len(df_4h) < 7:
+            return "", "UNKNOWN"
+
+        candles = df_4h.tail(18)  # ~3 days of 4H candles
+        opens   = candles["open"].values.tolist()
+        highs   = candles["high"].values.tolist()
+        lows    = candles["low"].values.tolist()
+        closes  = candles["close"].values.tolist()
+        volumes = candles["volume"].values.tolist() if "volume" in candles.columns else []
+
+        # Bull/bear count
+        bull_count = sum(1 for o, c in zip(opens, closes) if c > o)
+        bear_count = len(closes) - bull_count
+        net_pct    = round((closes[-1] - opens[0]) / opens[0] * 100, 2) if opens[0] else 0
+
+        # Detect HH/HL (uptrend) or LH/LL (downtrend) from last 6 pivots using swing highs/lows
+        # Use last 6 candles for pivot detection (each candle's high/low as a pivot)
+        n = min(6, len(highs))
+        recent_highs = highs[-n:]
+        recent_lows  = lows[-n:]
+
+        hh_count = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i] > recent_highs[i-1])
+        hl_count = sum(1 for i in range(1, len(recent_lows))  if recent_lows[i]  > recent_lows[i-1])
+        lh_count = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i] < recent_highs[i-1])
+        ll_count = sum(1 for i in range(1, len(recent_lows))  if recent_lows[i]  < recent_lows[i-1])
+
+        total_swings = n - 1
+        up_score   = hh_count + hl_count
+        down_score = lh_count + ll_count
+
+        # Volume analysis — is trending volume above average?
+        vol_note = ""
+        if volumes and len(volumes) >= 6:
+            avg_vol  = sum(volumes) / len(volumes)
+            bull_vols = [v for o, c, v in zip(opens, closes, volumes) if c > o]
+            bear_vols = [v for o, c, v in zip(opens, closes, volumes) if c < o]
+            if bull_vols and bear_vols:
+                avg_bull = sum(bull_vols) / len(bull_vols)
+                avg_bear = sum(bear_vols) / len(bear_vols)
+                if avg_bull > avg_bear * 1.2:
+                    vol_note = "  Volume profile: BUY volume dominates on up-candles — trend has institutional backing."
+                elif avg_bear > avg_bull * 1.2:
+                    vol_note = "  Volume profile: SELL volume dominates on down-candles — trend has institutional backing."
+                else:
+                    vol_note = "  Volume profile: balanced — no strong institutional directional commitment."
+
+        # Verdict
+        if net_pct >= 5 and up_score >= total_swings * 0.7:
+            verdict = "STRONG_UPTREND"
+            summary = f"STRONG UPTREND — {net_pct:+.1f}% over last {len(closes)} × 4H candles. {hh_count}/{total_swings} higher highs, {hl_count}/{total_swings} higher lows."
+        elif net_pct >= 2 and up_score > down_score:
+            verdict = "UPTREND"
+            summary = f"UPTREND — {net_pct:+.1f}% over last {len(closes)} × 4H candles. {hh_count}/{total_swings} higher highs, {hl_count}/{total_swings} higher lows."
+        elif net_pct <= -5 and down_score >= total_swings * 0.7:
+            verdict = "STRONG_DOWNTREND"
+            summary = f"STRONG DOWNTREND — {net_pct:+.1f}% over last {len(closes)} × 4H candles. {lh_count}/{total_swings} lower highs, {ll_count}/{total_swings} lower lows."
+        elif net_pct <= -2 and down_score > up_score:
+            verdict = "DOWNTREND"
+            summary = f"DOWNTREND — {net_pct:+.1f}% over last {len(closes)} × 4H candles. {lh_count}/{total_swings} lower highs, {ll_count}/{total_swings} lower lows."
+        else:
+            verdict = "RANGING"
+            summary = f"RANGING — {net_pct:+.1f}% net over last {len(closes)} × 4H candles. Mixed HH/LL structure, no dominant direction."
+
+        candle_summary = f"  Last {len(closes)} candles: {bull_count} bullish / {bear_count} bearish"
+
+        if verdict in ("STRONG_UPTREND", "UPTREND"):
+            implication = (
+                "  ⚠ TREND IMPLICATION: In an uptrend, RESISTANCE levels are CONTINUATION ZONES, not reversal zones.\n"
+                "    Price breaking resistance = trend continuation. Shorts at resistance are counter-trend and low probability.\n"
+                "    Only short if there is an explicit 4H BOS (break of structure) or CHoCH (change of character) confirming trend reversal."
+            )
+        elif verdict in ("STRONG_DOWNTREND", "DOWNTREND"):
+            implication = (
+                "  ⚠ TREND IMPLICATION: In a downtrend, SUPPORT levels are CONTINUATION ZONES, not reversal zones.\n"
+                "    Price breaking support = trend continuation. Longs at support are counter-trend and low probability.\n"
+                "    Only long if there is an explicit 4H BOS or CHoCH confirming trend reversal."
+            )
+        else:
+            implication = "  Both directions valid. Mean-reversion (long at support / short at resistance) is the primary strategy."
+
+        block = (
+            f"\n--- 4H Macro Trend Context (last ~3 days) ---\n"
+            f"  Verdict    : {summary}\n"
+            f"{candle_summary}\n"
+            f"{vol_note}\n"
+            f"{implication}\n"
+        )
+        return block, verdict
+
+    except Exception as e:
+        return "", "UNKNOWN"
 
 
 def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zone=None):
@@ -4004,6 +4484,10 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zon
             f"  BB squeeze  : {bb_squeeze}",
         ]
 
+        _macro_block, _macro_verdict = _macro_trend_context(df_4h)
+        if _macro_block:
+            lines.append(_macro_block)
+
         lines.append(f"\n--- Fibonacci ({fib_direction}) ---")
         for name, price in fib_levels.items():
             lines.append(f"  {name}: {price:.5f}")
@@ -4107,17 +4591,24 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zon
                     for w in agg["multi_exchange_ask_walls"]:
                         lines.append(f"      {w['price']:.5f}  on: {', '.join(w['exchanges'])}")
 
-            futures_data = _fetch_binance_futures_data(symbol)
-            if futures_data:
-                fr = futures_data["funding_rate"] * 100
-                oi = futures_data["open_interest"]
+            _dv_brief = derivs.get_derivs(symbol)
+            if _dv_brief:
+                fr = _dv_brief["funding_rate"] * 100
+                oi = _dv_brief["open_interest"]
                 fr_label = ("crowded longs — squeeze risk for buyers" if fr > 0.05
                             else "crowded shorts — squeeze risk for sellers" if fr < -0.05
                             else "neutral")
+                _oi6  = _dv_brief.get("oi_chg_6h_pct")
+                _oi24 = _dv_brief.get("oi_chg_24h_pct")
+                _oi6_s  = f"{_oi6:+.2f}%" if _oi6 is not None else "n/a"
+                _oi24_s = f"{_oi24:+.2f}%" if _oi24 is not None else "n/a"
                 lines += [
                     "\n--- Futures (Binance perpetual) ---",
-                    f"  Open Interest : {oi:,.2f} contracts",
+                    f"  Open Interest : {oi:,.2f} contracts  (6h: {_oi6_s} | 24h: {_oi24_s})",
                     f"  Funding Rate  : {fr:+.4f}%  ({fr_label})",
+                    "  How to read: price up + OI up = real participation (trend healthy). "
+                    "Price up + OI down = weak rally (bearish divergence). Mirror logic for downmoves.",
+                    "  Extreme funding = the crowded side pays to stay in — fuel for a squeeze against them.",
                 ]
 
         # ── Context summaries for non-primary TFs (no raw candles) ──────────
@@ -5182,14 +5673,21 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         top_s = sup_below[0] if sup_below else None
 
         # S/R confluence score: multi-TF validated zone is worth 2pts, single-TF is 1pt
+        # Only the nearer side scores when both R and S are in range — price sandwiched
+        # mid-range is an argument against trading, not two arguments for it.
         sr_score = 0
         sr_reasons = []
+        _sr_candidates = []
         for zone, label in [(top_r, "Resistance"), (top_s, "Support")]:
             if zone and abs(zone["price"] - current_price) / current_price * 100 <= 1.5:
-                instances = zone.get("instances", 1)
-                pts = 3 if instances >= 3 else 2
-                sr_score += pts
-                sr_reasons.append(f"{label}({instances}x,{pts}pt)")
+                _dist_pct = abs(zone["price"] - current_price) / current_price * 100
+                _sr_candidates.append((_dist_pct, zone, label))
+        if _sr_candidates:
+            _, zone, label = min(_sr_candidates, key=lambda c: c[0])
+            instances = zone.get("instances", 1)
+            pts = 3 if instances >= 3 else 2
+            sr_score += pts
+            sr_reasons.append(f"{label}({instances}x,{pts}pt)")
 
         # ── Fibonacci + golden pocket ──────────────────────────────────────────
         fib_levels, fib_direction = _ca_fib_from_real_impulse(primary_df)
@@ -5249,18 +5747,28 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                     pass
 
         # ── RSI divergence (regular + hidden) ────────────────────────────────
-        reg_divs    = _ca_detect_rsi_divergence(primary_df) + _ca_detect_rsi_divergence_forming(primary_df)
+        reg_divs    = _ca_detect_rsi_divergence(primary_df)
         hidden_divs = _detect_hidden_divergence(primary_df)
         all_divs    = reg_divs + hidden_divs
         for d in all_divs:
             d["tf"] = primary_tf
         div_score   = 0
         div_reasons = []
+        _div_candidates = []
         for d in all_divs[:2]:
             d_price = d.get("price", d.get("price_t2", current_price))
             if abs(d_price - current_price) / current_price * 100 <= 2.0:
                 pts = _div_strength_score(d, primary_tf, confirmed=True)
                 if pts >= 0.3:
+                    _div_candidates.append((pts, d))
+        if _div_candidates:
+            _div_candidates.sort(key=lambda c: c[0], reverse=True)
+            _dom_pts, _dom_d = _div_candidates[0]
+            div_score += _dom_pts
+            div_reasons.append(f"{_dom_d['type']} (str={_dom_pts}pt)")
+            _dom_bias = _dom_d.get("bias")
+            for pts, d in _div_candidates[1:]:
+                if d.get("bias") == _dom_bias:
                     div_score += pts
                     div_reasons.append(f"{d['type']} (str={pts}pt)")
 
@@ -5398,8 +5906,9 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                 bb_reasons.append(f"BB mid {_side} (%B={_pct_b:.2f}, 1pt)")
 
             if _bbw < 1.5:
-                bb_score += 1.5
-                bb_reasons.append(f"BB squeeze (width {_bbw:.2f}%, 1.5pt)")
+                # Context only, like RSI 50-cross — the playbooks all say do NOT enter
+                # during a squeeze, so it must not argue for entry via the score.
+                bb_reasons.append(f"BB squeeze (width {_bbw:.2f}%, context, 0pt)")
         except Exception:
             pass
 
@@ -5425,6 +5934,9 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                 _anc = _detect_auction_anchor(_dfv)
                 if not _anc:
                     continue
+                if not _anc.get("active", True):
+                    continue
+                _anc_confirmed = _anc.get("confirmed", True)
                 _vp = _ca_volume_profile(_dfv, _anc["idx"], len(_dfv) - 1)
                 if not _vp:
                     continue
@@ -5433,8 +5945,10 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                                          ("VAL", _vp["val"], _vp_base - 1)]:
                     _dist = abs(current_price - _px) / current_price * 100
                     if _dist <= _vp_prox:
-                        vp_score += _pts
-                        vp_reasons.append(f"VP {_lbl} {_vp_tf} ({_dist:.2f}% away ≤{_vp_prox:.2f}% prox, {_pts}pt)")
+                        _pts_awarded = round(_pts / 2, 1) if not _anc_confirmed else _pts
+                        _unconf_note = "unconfirmed-anchor, " if not _anc_confirmed else ""
+                        vp_score += _pts_awarded
+                        vp_reasons.append(f"VP {_lbl} {_vp_tf} ({_dist:.2f}% away ≤{_vp_prox:.2f}% prox, {_unconf_note}{_pts_awarded}pt)")
         except Exception:
             pass
 
@@ -5444,6 +5958,48 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         if top_r: all_candidates.append(top_r["price"])
         if top_s: all_candidates.append(top_s["price"])
         for _, p in fib_levels.items(): all_candidates.append(p)
+
+        # ── Fast intraday structural anchors: prior day H/L + opening range ────
+        # Multi-touch SR/VP needs repeated historical touches to validate -- on thin
+        # or quiet sessions almost nothing clears sr_score/vp_score even though real
+        # intraday reference points still exist. These two need only yesterday's
+        # candle or today's session open, not repeated touches. They fold into the
+        # same candidate list as SR/Fib above (so dist_from_level/nearest_level
+        # already account for them correctly, no separate exemption needed) and set
+        # fast_anchor_pass, which only unlocks the struct pre-gate/STRUCT_REJECT --
+        # they never add points to sr_score/vp_score/total_score.
+        fast_anchor_reasons = []
+        fast_anchor_pass    = False
+        try:
+            _pdhl = _get_previous_day_hl(symbol, asset_type)
+        except Exception:
+            _pdhl = None
+        try:
+            _sess_ctx      = _get_session_context()
+            _session_start = _sess_ctx.get("session_start_ts")
+            # First ~1 hour after session open on whatever TF is being scanned --
+            # 4h has no sub-hour granularity available so it degrades to one candle.
+            _or_candles_by_tf = {"5m": 12, "15m": 4, "30m": 2, "1h": 1, "4h": 1}
+            _or_range = _get_opening_range(primary_df, _session_start,
+                                           num_candles=_or_candles_by_tf.get(primary_tf, 4))
+        except Exception:
+            _or_range = None
+
+        _fast_anchor_candidates = [
+            ("PDH proximity",       _pdhl.get("pdh")    if _pdhl     else None),
+            ("PDL proximity",       _pdhl.get("pdl")    if _pdhl     else None),
+            ("Opening range high",  _or_range.get("or_high") if _or_range else None),
+            ("Opening range low",   _or_range.get("or_low")  if _or_range else None),
+        ]
+        for _fa_label, _fa_price in _fast_anchor_candidates:
+            if _fa_price is None or _fa_price <= 0:
+                continue
+            _fa_dist = abs(current_price - _fa_price) / _fa_price * 100
+            if _fa_dist <= 1.5:
+                all_candidates.append(_fa_price)
+                fast_anchor_pass = True
+                fast_anchor_reasons.append(f"{_fa_label} ({_fa_dist:.2f}% away, 0pt, context)")
+
         nearest_level = min(all_candidates, key=lambda p: abs(p - current_price)) if all_candidates else None
         dist_from_level = abs(current_price - nearest_level) / current_price * 100 if nearest_level else None
         at_level = dist_from_level is not None and dist_from_level <= 0.3
@@ -5454,7 +6010,25 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         # closed yet).  Letting it count toward the entry threshold would cause Chev to
         # fire on unconfirmed setups.  It remains visible in all_reasons so Chev knows
         # it is developing — he just cannot use it as the primary entry trigger.
-        total_score = sr_score + fib_score + div_score + ema_score + sweep_score + pattern_score + rsi_level_score + bb_score + vp_score
+        # ── Derivatives context (crypto perps only): funding + OI trend ──────
+        deriv_score   = 0.0
+        deriv_reasons = []
+        if asset_type == "crypto":
+            try:
+                _price_chg_6h = None
+                _df1h_d = tf_data.get("1h")
+                if _df1h_d is not None and len(_df1h_d) >= 7:
+                    _p_then = float(_df1h_d["close"].iloc[-7])
+                    if _p_then > 0:
+                        _price_chg_6h = (current_price - _p_then) / _p_then * 100
+                _dv = derivs.get_derivs(symbol)
+                if _dv:
+                    deriv_reasons, deriv_score = derivs.classify_derivs(
+                        _dv["funding_rate"], _dv.get("oi_chg_6h_pct"), _price_chg_6h)
+            except Exception:
+                deriv_score, deriv_reasons = 0.0, []
+
+        total_score = sr_score + fib_score + div_score + ema_score + sweep_score + pattern_score + rsi_level_score + bb_score + vp_score + deriv_score
 
         # GP × SR deadly combo bonus — multiplicative, not additive.
         # When price is at a confirmed multi-TF SR zone AND inside the golden pocket,
@@ -5477,8 +6051,9 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         all_reasons = (_combo_reasons
                        + sr_reasons + fib_reasons + div_reasons + ema_reasons
                        + sweep_reasons + pattern_reasons + rsi_level_reasons
-                       + bb_reasons + vp_reasons
-                       + _form_reasons_labelled + _gp_approach_labelled)
+                       + bb_reasons + vp_reasons + deriv_reasons
+                       + _form_reasons_labelled + _gp_approach_labelled
+                       + fast_anchor_reasons)
 
         sma50 = float(primary_df["close"].rolling(50).mean().iloc[-1]) if len(primary_df) >= 50 else None
         trend = "uptrend" if (sma50 and current_price > sma50) else ("downtrend" if sma50 else "unknown")
@@ -5548,6 +6123,7 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
             "atr":             float(primary_df["ATR"].iloc[-1]) if "ATR" in primary_df.columns else None,
             "sr_score":        sr_score,
             "vp_score":        vp_score,
+            "fast_anchor_pass": fast_anchor_pass,
             "tf_mult":         _tf_mult,
             "approaching_gp":  len(gp_approach_reasons) > 0,
             "gp_zone":         (min(fib50, fib618), max(fib50, fib618)) if fib50 and fib618 else None,
@@ -5629,7 +6205,9 @@ def _session_grade(asset_type):
 
 def _setup_grade(result, asset_type):
     """Return (grade, suggested_risk_pct) based on confluence score, regime, session."""
-    min_score = 10 if asset_type == "crypto" else (8 if asset_type == "forex" else 7)
+    min_score = (CONFLUENCE_THRESHOLD_CRYPTO if asset_type == "crypto"
+                 else CONFLUENCE_THRESHOLD_FOREX if asset_type == "forex"
+                 else CONFLUENCE_THRESHOLD_STOCK)
     score     = result.get("count", 0)
     regime    = (result.get("regime_4h") or {}).get("regime", "UNKNOWN")
     _, session_quality = _session_grade(asset_type)
@@ -5723,7 +6301,19 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
 
     # Build playbook + journal context to prepend to the prompt
     asset_type     = next((w["type"] for w in WATCHLIST if w["symbol"] == symbol), "crypto")
-    min_score      = 10 if asset_type == "crypto" else 7
+    min_score, _   = _active_thresholds(asset_type)
+    _exploration_note = ""
+    if EXPLORATION_MODE:
+        _exploration_note = (
+            "EXPLORATION MODE — DATA-COLLECTION PHASE (paper account):\n"
+            "  This is a deliberate data-collection phase. Losses are tuition here — silence teaches nothing.\n"
+            "  If this setup has a nameable entry, a structural stop, and a target, your DEFAULT is POST at the\n"
+            "  suggested grade-based risk above. SKIP is still allowed, but must name ONE concrete broken element:\n"
+            "  no invalidation level available, direction fights the 4H trend without meeting the counter-trend\n"
+            "  requirements, or price nowhere near the zone. Never SKIP on general caution, 'not enough confluence',\n"
+            "  a letter grade alone, or maturity/participation figures alone — those are sizing inputs in this phase,\n"
+            "  not vetoes.\n\n"
+        )
     session_label, session_quality = _session_grade(asset_type)
     grade, suggested_risk          = _setup_grade(result, asset_type)
     heat_context                   = _portfolio_heat_context(asset_type, symbol)
@@ -5859,15 +6449,41 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
                       (_bias_short and _r4_regime == "TRENDING_UP")
         if _is_counter:
             _bias_dir = "LONG" if _bias_long else "SHORT"
+            if _r4_regime == "TRENDING_UP":
+                _ct_structure = (
+                    "You are proposing a SHORT near a RESISTANCE level in a confirmed UPTREND.\n"
+                    "KEY FACT: In an uptrend, resistance levels are CONTINUATION ZONES — price is expected to\n"
+                    "break them, not reverse from them. The 4H has been making higher highs and higher lows.\n"
+                    "Every resistance that held in a downtrend becomes a launchpad in an uptrend.\n"
+                    "Historical data from this session: shorts at resistance in uptrends fail ~85% of the time.\n"
+                    "The market doesn't care that the level 'looks like resistance' — it will walk straight through it."
+                )
+            else:
+                _ct_structure = (
+                    "You are proposing a LONG near a SUPPORT level in a confirmed DOWNTREND.\n"
+                    "KEY FACT: In a downtrend, support levels are CONTINUATION ZONES — price is expected to\n"
+                    "break them, not bounce from them. The 4H has been making lower highs and lower lows.\n"
+                    "Every support that held in an uptrend becomes a ceiling in a downtrend.\n"
+                    "Historical data from this session: longs at support in downtrends fail ~85% of the time.\n"
+                    "The market doesn't care that the level 'looks like support' — it will walk straight through it."
+                )
+            _ct_req_score = 1.5 * (CONFLUENCE_THRESHOLD_CRYPTO if asset_type == "crypto"
+                                    else CONFLUENCE_THRESHOLD_FOREX if asset_type == "forex"
+                                    else CONFLUENCE_THRESHOLD_STOCK)
             counter_trend_warning = (
-                f"⚠️  COUNTER-TREND ALERT: Dexter's confluence bias is {_bias_dir}, "
-                f"but the 4H regime is {_r4_regime}.\n"
-                f"Counter-trend trades have lower win-rate and require all of the following:\n"
-                f"  1. Score ≥ 13 (A+ grade — no exceptions)\n"
-                f"  2. Confirmed RSI divergence on 1H or 4H (not just forming)\n"
-                f"  3. SL behind a clear 4H structural level\n"
-                f"  4. This is a SCALP only — tight SL, reduced size, no swing hold\n"
-                f"If any of those are missing → SKIP.\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⚠️  COUNTER-TREND ALERT — READ BEFORE POSTING\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{_ct_structure}\n\n"
+                f"See the '4H Macro Trend Context' section in the market brief above for the exact HH/HL count and % move.\n\n"
+                f"To TAKE this trade you MUST satisfy ALL of the following — no exceptions:\n"
+                f"  1. Score ≥ {_ct_req_score:.0f} (A+ grade)\n"
+                f"  2. Confirmed RSI divergence on 1H or 4H (not 'forming' — must be confirmed with two pivots)\n"
+                f"  3. A clear 4H BOS (Break of Structure) or CHoCH (Change of Character) proving trend reversal\n"
+                f"  4. SL placed behind a 4H structural level — not a pip beyond a local candle wick\n"
+                f"  5. SCALP only — max 1× risk, no swing hold\n"
+                f"If you cannot clearly articulate points 2–3 from the candle data above → SKIP.\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             )
 
     # ── Forming divergence + RSI level context ────────────────────────────
@@ -6005,6 +6621,15 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"  Do NOT enter just because confluence exists — require price action confirmation:\n"
         f"    a bullish candle close ABOVE the level (for longs), or bearish close BELOW (for shorts).\n"
         f"    Touching a level is not confirmation. A candle close through it is.\n\n"
+        f"ENTRY MODES — every POST must use exactly one, and say which in CONFIRMATION:\n"
+        f"  MODE A (confirmation entry): price is AT the zone NOW and the current or last candle\n"
+        f"    confirms (close through the level, or clear rejection wick). entry = current price area.\n"
+        f"  MODE B (pending limit at the zone): the structure is valid but price hasn't tagged the\n"
+        f"    zone or printed confirmation yet. Set entry = the zone price. Dexter parks it as a\n"
+        f"    PENDING order that only fills if price touches it, and expires per trade_type.\n"
+        f"  If the ONLY thing missing is the touch or the confirmation candle, use MODE B —\n"
+        f"    do NOT skip. Pending orders exist precisely for that case. SL must still sit at the\n"
+        f"    structural invalidation level beyond the zone.\n\n"
         f"SIP — Stop in Profit (trade management concept):\n"
         f"  When Dexter asks you to manage an open trade, you may trail your SL above your entry (for LONG)\n"
         f"  or below your entry (for SHORT). Once SL crosses entry, it is NO LONGER an SL — it is a SIP.\n"
@@ -6013,28 +6638,14 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"    LONG SIP: can only move higher. SHORT SIP: can only move lower. Never backwards.\n"
         f"  When Dexter sends a checkpoint with SIP active, use TRAIL_SIP: [price] instead of TRAIL_SL.\n"
         f"  Once SIP is active, you no longer need to fear a stop out — focus on maximising profit.\n\n"
-        f"CONFLUENCE SCORING — your trade must reach the minimum score or Dexter will REJECT it:\n"
-        f"  Threshold: {'10' if asset_type == 'crypto' else '7'} points ({'crypto' if asset_type == 'crypto' else 'forex/stock'})\n\n"
-        f"  Timeframe-weighted tools — always append the timeframe suffix to these tags:\n"
-        f"    sr_4h=4  sr_1h=3  sr_30m=2  sr_15m=1\n"
-        f"    fib_4h=3  fib_1h=2  fib_30m=2  fib_15m=1\n"
-        f"    rsi_4h=4  rsi_1h=4  rsi_30m=3  rsi_15m=2   (confirmed RSI divergence)\n"
-        f"    rsi_form_4h=2  rsi_form_1h=1.5  rsi_form_30m=1  rsi_form_15m=1   (forming divergence — Dexter reports score in context)\n"
-        f"    ema_55=3  ema_21=2  ema_13=1   (tag by EMA period — EMA55 is structurally strongest)\n"
-        f"    bb_4h=3  bb_1h=2  bb_30m=2  bb_15m=1   (Bollinger Band signal — see BB rules below)\n"
-        f"    tri_4h=3  tri_1h=2  tri_30m=1  tri_15m=1\n\n"
-        f"  Timeframe-agnostic tools (no suffix needed):\n"
-        f"    gp=4  (Golden Pocket 0.618-0.65)\n"
-        f"    vp=3  (Volume Profile POC/VAH/VAL)\n"
-        f"    vw=3  (VWAP)\n"
-        f"    dv=3  (Divergence, non-RSI)\n"
-        f"    cp=1  (Candle Pattern — confirmation only)\n"
-        f"    rsi_ob=0.5  (RSI >80 overbought)  rsi_os=0.5  (RSI <20 oversold)\n"
-        f"    rsi_50=0.5  (RSI crossed 50 within last 3 bars — momentum shift)\n\n"
-        f"  Example: tags=sr_4h,rsi_1h,fib_1h scores 4+4+2=10 — valid for crypto.\n"
-        f"  Example: tags=sr_15m,fib_15m,ema_15m scores 1+1+1=3 — REJECTED.\n"
-        f"  Count your score before writing POST:. If below threshold, write SKIP: instead.\n"
-        f"  Always check 4H structure first — a 4H SR or Fib in your stack is worth much more than a 15m one.\n\n"
+        f"CONFLUENCE SCORE — computed by Dexter, authoritative:\n"
+        f"  Dexter has already computed this setup's score with its calibrated weights.\n"
+        f"  This setup has ALREADY PASSED the minimum-score gate for its asset class.\n"
+        f"  Do NOT re-count, re-score, or SKIP on score grounds — Dexter's arithmetic is final.\n"
+        f"  Your job is judgment, not arithmetic: 4H structure, trend alignment, contradictions\n"
+        f"  between signals, invalidation quality, and timing. Judge those. Nothing else.\n"
+        f"  Still tag your confluences on the TRADE: line (tags=sr_4h,fib_1h,rsi_1h etc.) —\n"
+        f"  tags drive the chart anchors and the learning system, they are not a score.\n\n"
         f"BOLLINGER BAND RULES — how to read and use the BB data in the market brief:\n"
         f"  The brief shows: BB upper / mid / lower, band width %, %B position, and squeeze status.\n"
         f"  %B is a universal position reading — 1.0 = at upper band, 0.5 = at mid line, 0.0 = at lower band.\n"
@@ -6093,6 +6704,7 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"Crypto leverage max 10x (swing: 5x). Forex/stock max 5x (swing: 2x). "
         f"Only push leverage on A+ setups in peak session. "
         f"trade_type = scalp (~2h expiry), day (~6h), swing (~48h).\n"
+        f"{_exploration_note}"
         f"Reminder: first word of your reply = POST or SKIP. No exceptions."
     )
     messages = [{"role": "user", "content": context_prefix + msg}]
@@ -6177,8 +6789,8 @@ def parse_chev_reply(text):
                     "sl": _clean_numeric(fields["sl"]),
                     "tp": _clean_numeric(fields["tp"]),
                     "risk_pct": _clean_numeric(fields["risk_pct"]),
-                    "leverage": _clean_numeric(fields["leverage"]),
-                    "position_size_usd": _clean_numeric(fields["position_size_usd"]),
+                    "leverage": _clean_numeric(fields["leverage"]) if fields.get("leverage") else 1.0,
+                    "position_size_usd": _clean_numeric(fields["position_size_usd"]) if fields.get("position_size_usd") else 0.0,
                     "tags": fields.get("tags", "").lower(),
                     "trade_type": trade_type,
                     # Visual anchors — Chev's specific chart reference points
@@ -6338,8 +6950,8 @@ def _build_management_brief(symbol, asset_type, primary_tf, direction, entry, tp
 def _trade_duration_str(trade):
     """Return human-readable time elapsed since trade opened, e.g. '3h 12m'."""
     try:
-        opened = datetime.strptime(trade.get("opened_at", ""), "%Y-%m-%d %H:%M:%S")
-        secs   = int((datetime.now() - opened).total_seconds())
+        opened = datetime.strptime(trade.get("opened_at", ""), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        secs   = int((datetime.now(timezone.utc) - opened).total_seconds())
         h, m   = secs // 3600, (secs % 3600) // 60
         return f"{h}h {m}m" if h > 0 else f"{m}m"
     except Exception:
@@ -6387,6 +6999,236 @@ def _maybe_send_bos_alert(trade, current_price):
         print(f"[BOS Alert] Error for {trade.get('symbol','?')}: {e}")
 
 
+# Binance Futures taker: 0.05% per side × 2 = 0.10% round-trip on notional
+# Slippage: ~0.02% per side on liquid Binance pairs = 0.04% round-trip
+# Forex: FXPro avg ~1 pip spread on major pairs + slippage (~0.01% per side = 0.02% RT)
+# Stocks: typical retail 0.01% per side = 0.02% RT + slippage
+# Funding: 0.01% per 8h (Binance standard interval: 00:00 / 08:00 / 16:00 UTC)
+_TRADE_COST_RATES = {
+    "crypto": {"fee_rt": 0.0010, "slip_rt": 0.0004},  # 0.10% Binance taker + 0.04% slip
+    "forex":  {"fee_rt": 0.0002, "slip_rt": 0.0002},  # FXPro ~1 pip avg + slippage = 0.04%
+    "stock":  {"fee_rt": 0.0002, "slip_rt": 0.0002},  # retail broker + slippage = 0.04%
+}
+_FUNDING_RATE_8H = 0.0001  # 0.01% per 8-hour Binance funding period
+
+
+def _sim_trading_cost(notional_usd, asset_type, trade_type="day", open_ts=None):
+    """Return simulated cost to deduct from PnL when closing `notional_usd` of a position.
+    Includes: round-trip fees + slippage + Binance funding for crypto swings."""
+    rates = _TRADE_COST_RATES.get(asset_type, _TRADE_COST_RATES["crypto"])
+    cost  = notional_usd * (rates["fee_rt"] + rates["slip_rt"])
+
+    # Funding: crypto perpetuals only, counted in whole 8h Binance settlement periods
+    if asset_type == "crypto" and trade_type == "swing" and open_ts:
+        try:
+            opened = datetime.fromisoformat(open_ts.replace("Z", "+00:00"))
+            if opened.tzinfo is None:
+                opened = opened.replace(tzinfo=timezone.utc)
+            hours_held      = (datetime.now(timezone.utc) - opened).total_seconds() / 3600
+            funding_periods = int(hours_held / 8)
+            cost += notional_usd * _FUNDING_RATE_8H * funding_periods
+        except Exception:
+            pass
+
+    return round(max(0.0, cost), 2)
+
+
+def _execute_partial_close(trade, price, fraction, close_type, r_at_milestone):
+    """Close `fraction` of a running trade at current price (0.25 = TAKE25, 0.50 = TAKE50).
+    Updates balance, shrinks position, logs a PARTIAL journal entry."""
+    global _cached_balance
+    symbol    = trade["symbol"]
+    direction = trade["direction"]
+    is_long   = direction == "long"
+    move_pct        = ((price - trade["entry"]) / trade["entry"]
+                       if is_long else (trade["entry"] - price) / trade["entry"])
+    _notional_closed = round(trade["position_size_usd"] * fraction, 2)
+    _gross_pnl       = round(_notional_closed * move_pct, 2)
+    partial_pnl, _cost = honest_sim.apply_costs(trade, _gross_pnl, fraction)
+
+    balance     = get_balance(dashboard_ws)
+    new_balance = round(balance + partial_pnl, 2)
+    set_balance(dashboard_ws, new_balance)
+    _cached_balance = new_balance
+
+    trade["position_size_usd"] = round(trade["position_size_usd"] * (1 - fraction), 2)
+    trade["partial_done"]      = True
+    trade["partial_net_pnl"]   = round(trade.get("partial_net_pnl", 0.0) + partial_pnl, 2)
+
+    pct_label = int(fraction * 100)
+    print(
+        f"[PARTIAL TP] {symbol} {direction.upper()} — {close_type}: "
+        f"{pct_label}% closed at ${partial_pnl:+.2f} gross ${_gross_pnl:+.2f} fees ${_cost:.2f} "
+        f"(+{r_at_milestone:.2f}R) | Balance: ${balance:.2f} → ${new_balance:.2f} | "
+        f"Remaining {100 - pct_label}% continues"
+    )
+
+    _risk_usd = trade.get("risk_amount_usd", 0)
+    _entry = {
+        "ts":               datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "symbol":           symbol,
+        "asset_type":       trade.get("asset_type", "crypto"),
+        "direction":        direction,
+        "entry":            trade["entry"],
+        "sl":               trade["sl"],
+        "tp":               trade["tp"],
+        "exit_price":       price,
+        "pnl":              partial_pnl,
+        "outcome":          "PARTIAL_TP",
+        "close_type":       close_type,
+        "tags":             trade.get("tags", ""),
+        "duration":         "partial",
+        "reasoning":        trade.get("reasoning", ""),
+        "analysis":         (
+            f"Chev milestone {close_type}: {pct_label}% of {symbol} closed at "
+            f"${partial_pnl:+.2f} net (gross ${_gross_pnl:+.2f}, fees ${_cost:.2f}, {r_at_milestone:.2f}R). "
+            f"Remaining {100 - pct_label}% continues with current SL/TP."
+        ),
+        "trading_cost":     _cost,
+        "r_multiple":       round(r_at_milestone * fraction, 3),
+        "risk_amount_usd":  _risk_usd,
+        "position_size_usd": trade["position_size_usd"],
+        "leverage":         trade.get("leverage", 1),
+        "setup_grade":      trade.get("setup_grade", ""),
+        "session_quality":  trade.get("session_quality", ""),
+        "heat_at_entry":    trade.get("heat_at_entry", 0),
+        "chev_moves":       [],
+        "open_ts":          trade.get("open_ts", ""),
+    }
+    try:
+        _j = _load_journal()
+        _j.append(_entry)
+        with open(JOURNAL_PATH, "w", encoding="utf-8") as _f:
+            json.dump(_j, _f, indent=2)
+    except Exception as _pe:
+        print(f"[PARTIAL TP] Journal write failed: {_pe}")
+
+
+def _ask_chev_partial_tp(trade, current_price, price_r, level_verdict=None, level_label=None, level_price=None):
+    """Send Chev a milestone prompt at the trade-type R threshold.
+    Chev replies HOLD / TAKE25 / TAKE50 / TRAIL_SL and Dexter executes."""
+    symbol     = trade["symbol"]
+    direction  = trade["direction"]
+    is_long    = direction == "long"
+    trade_type = trade.get("trade_type", "day")
+    primary_tf = trade.get("primary_tf", "1h")
+    asset_type = next((w["type"] for w in WATCHLIST if w["symbol"] == symbol), "crypto")
+
+    _live_pnl  = trade.get("live_pnl", 0)
+    _pos_size  = trade.get("position_size_usd", 0)
+    _duration  = _trade_duration_str(trade)
+    _opened_at = trade.get("opened_at", "?")
+    _last_dec  = trade.get("last_chev_decision", "")
+    _last_px   = trade.get("last_decision_price", "")
+    _last_when = trade.get("last_decision_time", "")
+
+    market_brief  = _build_management_brief(symbol, asset_type, primary_tf, direction, trade["entry"], trade["tp"])
+    playbook_text = _load_playbook(asset_type)
+
+    milestone_block = (
+        f"══════════════════════════════════════════════════\n"
+        f"PARTIAL TP MILESTONE — {symbol} {direction.upper()}\n"
+        f"══════════════════════════════════════════════════\n"
+        f"Trade type: {trade_type.upper()}  |  Opened: {_opened_at}  |  Running: {_duration}\n\n"
+        f"Price has reached +{price_r:.2f}R — the milestone check for a {trade_type} trade.\n"
+        f"This is NOT an automated close. You are making the call.\n\n"
+        f"ENTRY CONTEXT (your original words):\n"
+        f"  Entry:        {trade['entry']}\n"
+        f"  Stop Loss:    {trade['sl']}\n"
+        f"  TP target:    {trade['tp']}\n"
+        f"  Tags:         {trade.get('tags', 'n/a')}\n"
+        f"  POST:         {(trade.get('reasoning') or 'not recorded')[:150]}\n"
+        f"  4H STRUCTURE: {trade.get('structure_4h') or 'not recorded'}\n"
+        f"  INVALIDATION: {trade.get('invalidation') or 'not recorded'}\n\n"
+    )
+    if level_verdict is not None:
+        milestone_block += (
+            f"\n--- LEVEL HEALTH CONTEXT ---\n"
+            f"Price is within 1.5% of {level_label or 'a known level'} at {level_price or 'N/A'}.\n"
+            f"Dexter's structural verdict: {level_verdict}\n"
+            f"  HOLDING  = strong touches, confirmed, likely to reject price\n"
+            f"  WEAKENING = losing structure, could hold or break\n"
+            f"  BROKEN   = price accepted through — Dexter already moved SL to breakeven\n\n"
+            f"If WEAKENING: weigh whether to take profit here or trail and let it push through.\n"
+            f"----------------------------\n\n"
+        )
+    if _last_dec:
+        milestone_block += f"YOUR LAST DECISION: {_last_dec} (price was {_last_px} at {_last_when})\n\n"
+
+    milestone_block += (
+        f"CURRENT STATUS:\n"
+        f"  Current price : {current_price:.5f}\n"
+        f"  Live PnL      : ${_live_pnl:+.2f}  (+{price_r:.2f}R)\n"
+        f"  Position size : ${_pos_size:.0f} USD (this is what you are deciding about)\n\n"
+    )
+
+    tool_block = (
+        f"TOOLS — use at least one before deciding:\n"
+        f"  get_support_resistance(\"{symbol}\", \"{primary_tf}\")\n"
+        f"    → Is there a resistance wall {'above' if is_long else 'below'} current price?\n"
+        f"      If yes — is price likely to stall or reverse there?\n"
+        f"  get_volume_profile(\"{symbol}\", \"{primary_tf}\")\n"
+        f"    → Is volume increasing (continuation) or fading (exhaustion)?\n"
+        f"  detect_rsi_divergence(\"{symbol}\", \"{primary_tf}\")\n"
+        f"    → Bearish divergence = take profit now. Hidden bullish divergence = let it run.\n\n"
+    )
+
+    decision_block = (
+        f"YOUR FOUR OPTIONS — reply with exactly one:\n\n"
+        f"  HOLD     — thesis intact, no overhead resistance, let the full position run to TP\n"
+        f"  TAKE25   — lock 25% profit now, let 75% breathe to full TP\n"
+        f"  TAKE50   — lock 50% profit now, let 50% run free with no pressure\n"
+        f"  TRAIL_SL — move SL to entry ({trade['entry']}), hold full size, guarantee breakeven\n\n"
+        f"How to decide:\n"
+        f"  HOLD     when: clean air above, RSI has room, volume rising, original TP still valid\n"
+        f"  TAKE25   when: approaching a minor wall, but the bigger target is still reachable\n"
+        f"  TAKE50   when: hitting a major resistance, volume fading, or RSI showing reversal signs\n"
+        f"  TRAIL_SL when: momentum is good but you want to remove the risk entirely\n\n"
+        f"No other reply is valid. Do not explain your choice — just reply with the one word (or TRAIL_SL).\n"
+    )
+
+    content = (
+        (f"=== YOUR TRADING PLAYBOOK ===\n{playbook_text}\n\n" if playbook_text else "")
+        + milestone_block
+        + market_brief + "\n\n"
+        + tool_block
+        + decision_block
+    )
+
+    print(f"[PARTIAL MILESTONE] {symbol} {direction.upper()} +{price_r:.1f}R — asking Chev HOLD/TAKE25/TAKE50/TRAIL_SL")
+    reply = _call_chev([{"role": "user", "content": content}], timeout=90)
+    reply_upper = (reply or "").strip().upper()
+
+    if reply:
+        trade["last_chev_decision"]  = f"MILESTONE +{price_r:.1f}R: {reply.strip()[:60]}"
+        trade["last_decision_price"] = round(current_price, 5)
+        trade["last_decision_time"]  = datetime.now(timezone.utc).strftime("%H:%M")
+
+    if reply_upper.startswith("TAKE25"):
+        _execute_partial_close(trade, current_price, fraction=0.25, close_type="PARTIAL_25", r_at_milestone=price_r)
+    elif reply_upper.startswith("TAKE50"):
+        _execute_partial_close(trade, current_price, fraction=0.50, close_type="PARTIAL_1R", r_at_milestone=price_r)
+    elif reply_upper.startswith("TRAIL_SL"):
+        entry = trade["entry"]
+        valid = (entry < current_price) if is_long else (entry > current_price)
+        if valid and trade["sl"] != entry:
+            old_sl = trade["sl"]
+            trade["sl"] = entry
+            try:
+                worksheet.update_cell(trade["row"], 4, entry)
+            except Exception as _e:
+                print(f"[PARTIAL MILESTONE] Sheet SL update failed: {_e}")
+            sl_entry = f"BE {old_sl} → {entry} @ {datetime.now(timezone.utc).strftime('%H:%M')} (milestone TRAIL_SL)"
+            trade.setdefault("chev_moves", []).append(sl_entry)
+            print(f"[PARTIAL MILESTONE] {symbol} SL → entry {entry} (breakeven protected)")
+        else:
+            print(f"[PARTIAL MILESTONE] {symbol} TRAIL_SL — SL already at entry or invalid, no change")
+    elif reply_upper.startswith("HOLD"):
+        print(f"[PARTIAL MILESTONE] {symbol} Chev says HOLD — full position continues to TP")
+    else:
+        print(f"[PARTIAL MILESTONE] {symbol} unexpected reply '{(reply or '').strip()[:50]}' — treating as HOLD")
+
+
 def ask_chev_manage_trade(trade, current_price, bos_paragraph=None):
     """Ask Chev to manage an open trade — trail SL/SIP, close, or hold."""
 
@@ -6411,7 +7253,7 @@ def ask_chev_manage_trade(trade, current_price, bos_paragraph=None):
     # ── Build "then vs now" context block ─────────────────────────────
     _opened_at  = trade.get("opened_at", "?")
     _duration   = _trade_duration_str(trade)
-    _now_str    = datetime.now().strftime("%Y-%m-%d %H:%M")
+    _now_str    = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     _snap       = trade.get("entry_brief_snapshot", "")
     _snap_time  = trade.get("entry_snapshot_time", _opened_at)
     _last_dec   = trade.get("last_chev_decision", "")
@@ -6556,7 +7398,7 @@ def ask_chev_manage_trade(trade, current_price, bos_paragraph=None):
     if reply:
         trade["last_chev_decision"]  = reply.strip()[:80]
         trade["last_decision_price"] = round(current_price, 5)
-        trade["last_decision_time"]  = datetime.now().strftime("%H:%M")
+        trade["last_decision_time"]  = datetime.now(timezone.utc).strftime("%H:%M")
     return reply
 
 
@@ -6712,6 +7554,52 @@ def _active_sessions():
     if 13 <= h < 22:        sessions.append("New York")
     return sessions or ["Asian"]
 
+def _active_thresholds(asset_type):
+    """Single source of truth for 'is this score/distance good enough right now'.
+    Every gate that checks a confluence score or escalation distance must call
+    this — never read CONFLUENCE_THRESHOLD_*/ESCALATION_MAX_DIST_PCT directly —
+    so EXPLORATION_MODE can never be half-applied across gates.
+    Returns (score_threshold, max_dist_pct) for the given asset_type.
+    """
+    if EXPLORATION_MODE:
+        _score = (EXPLORATION_THRESHOLD_CRYPTO if asset_type == "crypto"
+                  else EXPLORATION_THRESHOLD_FOREX if asset_type == "forex"
+                  else EXPLORATION_THRESHOLD_STOCK)
+        return _score, EXPLORATION_MAX_DIST_PCT
+    _score = (CONFLUENCE_THRESHOLD_CRYPTO if asset_type == "crypto"
+              else CONFLUENCE_THRESHOLD_FOREX if asset_type == "forex"
+              else CONFLUENCE_THRESHOLD_STOCK)
+    return _score, ESCALATION_MAX_DIST_PCT
+
+
+def _directional_split(reasons):
+    """Split a scan's reason strings into (bull_points, bear_points).
+    Neutral/location signals (Fib, GP, VP, BB squeeze/mid, ranges, WATCH items)
+    contribute to neither side. Weight = the number before 'pt)' in the string,
+    default 1.0 when absent. Used to block escalation of contradictory setups."""
+    import re as _re
+    bull, bear = 0.0, 0.0
+    for s in reasons:
+        sl = s.lower()
+        # Neutral / location-only signals — skip
+        if ("[watch" in sl or "golden pocket" in sl or sl.startswith("fib")
+                or "vp " in sl or sl.startswith("vp") or "squeeze" in sl
+                or "bb mid" in sl or "(neutral" in sl):
+            continue
+        m = _re.search(r'([\d.]+)\s*pt\)', s)
+        w = float(m.group(1)) if m else 1.0
+        if "bearish" in sl or "sell_side" in sl or "overbought" in sl:
+            bear += w
+        elif "bullish" in sl or "buy_side" in sl or "oversold" in sl:
+            bull += w
+        elif "resistance" in sl:
+            bear += w
+        elif "support" in sl:
+            bull += w
+        # anything unclassified stays neutral
+    return bull, bear
+
+
 def _session_confluence_bonus(asset_type):
     """
     Returns an int added to the minimum confluence threshold.
@@ -6750,7 +7638,16 @@ def connect_to_sheet():
             "Conf Prices", "Trigger Above",
         ])
         print("[Jane] Created 'Jane' worksheet in Google Sheet.")
-    return trade_log_ws, dashboard_ws, jane_ws
+    try:
+        skip_ws = sheet.worksheet(SKIP_LOG_TAB)
+    except gspread.exceptions.WorksheetNotFound:
+        skip_ws = sheet.add_worksheet(title=SKIP_LOG_TAB, rows=2000, cols=10)
+        skip_ws.append_row([
+            "Timestamp UTC", "Pair", "TF", "Decision", "Score", "Regime",
+            "Reason", "Confluences Seen",
+        ])
+        print("[Dexter] Created 'Skip Log' worksheet in Google Sheet.")
+    return trade_log_ws, dashboard_ws, jane_ws, skip_ws
 
 def get_balance(dashboard_ws):
     try:
@@ -6852,7 +7749,7 @@ def load_state_from_sheet(worksheet):
                     trade_entry["sip_price"]  = _sl_val
                     print(f"[SIP] {pair} loaded with SIP at {_sl_val} — trade cannot lose.")
                 if status_clean == "PENDING":
-                    trade_entry["expiry_at"] = row[16] if len(row) > 16 else (datetime.now() + pd.Timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
+                    trade_entry["expiry_at"] = row[16] if len(row) > 16 else (datetime.now(timezone.utc) + pd.Timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
                     if len(row) > 18 and row[18] in ("True", "False"):
                         # Stored at order creation — safe across restarts
                         trade_entry["entry_trigger_above"] = row[18] == "True"
@@ -6947,7 +7844,7 @@ def load_jane_trades_from_sheet():
                     "trade_type":       row[15].lower() if len(row) > 15 and row[15] else "day",
                 }
                 if status_clean == "PENDING":
-                    t["expiry_at"] = row[16] if len(row) > 16 else (datetime.now() + pd.Timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
+                    t["expiry_at"] = row[16] if len(row) > 16 else (datetime.now(timezone.utc) + pd.Timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
                     if len(row) > 18 and row[18] in ("True", "False"):
                         t["entry_trigger_above"] = row[18] == "True"
                     else:
@@ -6982,9 +7879,9 @@ def log_jane_trade(symbol, asset_type, trade, current_price_at_creation):
         position_size_usd = round(jane_balance * leverage, 2)
         margin_used_usd   = jane_balance
 
-    timestamp  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp  = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     expiry_hrs = TRADE_TYPE_EXPIRY_HOURS.get(trade_type, 6)
-    expiry_at  = (datetime.now() + pd.Timedelta(hours=expiry_hrs)).strftime("%Y-%m-%d %H:%M:%S")
+    expiry_at  = (datetime.now(timezone.utc) + pd.Timedelta(hours=expiry_hrs)).strftime("%Y-%m-%d %H:%M:%S")
     entry_trigger_above = entry > current_price_at_creation
 
     row_values = [
@@ -7041,8 +7938,8 @@ def check_and_update_jane_trades():
                     pass
                 print(f"[Jane] {trade['symbol']} PENDING -> OPEN | Margin: ${margin:.2f} | Balance: ${jane_balance:.2f}")
             else:
-                expiry_time = datetime.strptime(trade["expiry_at"], "%Y-%m-%d %H:%M:%S")
-                if datetime.now() > expiry_time:
+                expiry_time = datetime.strptime(trade["expiry_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > expiry_time:
                     try:
                         jane_worksheet.update_cell(trade["row"], 13, "EXPIRED")
                     except Exception:
@@ -7062,8 +7959,8 @@ def check_and_update_jane_trades():
         except Exception:
             pass
 
-        hit_tp = (price >= trade["tp"]) if is_long else (price <= trade["tp"])
-        hit_sl = (price <= trade["sl"]) if is_long else (price >= trade["sl"])
+        hit_tp, hit_sl = _detect_sl_tp_hit(trade, price)
+        trade["last_wick_check_ms"] = int(time.time() * 1000)
 
         if hit_tp or hit_sl:
             exit_price = trade["tp"] if hit_tp else trade["sl"]
@@ -7108,7 +8005,7 @@ def check_and_update_jane_trades():
                 print(f"[Jane journal] Duplicate detected for {trade['symbol']} — skipping write.")
             else:
                 jane_journal.append({
-                    "ts":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "ts":        datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
                     "symbol":    trade["symbol"],
                     "direction": trade["direction"],
                     "entry":     trade["entry"],
@@ -7165,9 +8062,9 @@ def log_new_trade(worksheet, dashboard_ws, symbol, asset_type, trade, current_pr
         margin_used_usd = balance
         print(f"[{datetime.now()}] {symbol}: Chev's position size exceeded available margin - capped to fit ${balance:.2f} balance.")
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     expiry_hours = TRADE_TYPE_EXPIRY_HOURS[trade_type]
-    expiry_at = (datetime.now() + pd.Timedelta(hours=expiry_hours)).strftime("%Y-%m-%d %H:%M:%S")
+    expiry_at = (datetime.now(timezone.utc) + pd.Timedelta(hours=expiry_hours)).strftime("%Y-%m-%d %H:%M:%S")
     entry_trigger_above = entry > current_price_at_creation
 
     conf_json = json.dumps(confluence_prices) if confluence_prices else ""
@@ -7202,6 +8099,82 @@ def log_new_trade(worksheet, dashboard_ws, symbol, asset_type, trade, current_pr
     }
 
 
+def _fetch_1m_wicks_since(symbol, since_ms):
+    """Return list of (low, high) floats from 1-minute Binance candles since since_ms.
+    Used to detect SL/TP wicks that occurred between monitoring polls."""
+    try:
+        params = {
+            "symbol":    symbol,
+            "interval":  "1m",
+            "startTime": int(since_ms),
+            "endTime":   int(time.time() * 1000),
+            "limit":     25,  # covers up to 25 minutes — more than any poll interval
+        }
+        resp = requests.get("https://api.binance.com/api/v3/klines", params=params, timeout=10)
+        raw  = resp.json()
+        if not isinstance(raw, list):
+            return []
+        # kline row: [open_time, open, high, low, close, volume, ...]
+        return [(float(c[3]), float(c[2])) for c in raw]  # (low, high)
+    except Exception:
+        return []
+
+
+def _honest_sim_last_check_ts(trade):
+    """Epoch of the last candle already processed for this trade's exit checks.
+    Falls back to the trade's creation time, then a 5-minute lookback, when absent
+    (legacy trades loaded before this deploy never had this field)."""
+    if trade.get("last_exit_check_ts"):
+        return trade["last_exit_check_ts"]
+    opened_at = trade.get("opened_at")
+    if opened_at:
+        try:
+            return int(datetime.strptime(opened_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
+        except Exception:
+            pass
+    return int(time.time() - 300)
+
+
+def _detect_sl_tp_hit(trade, current_price):
+    """
+    Returns (hit_tp, hit_sl) for an open trade at current_price.
+    For crypto: fetches 1-minute Binance candles since the last poll and inspects
+    highs/lows so wicks that reversed before the next check are not invisible.
+    When a single candle covers both SL and TP, SL is assumed to have hit first
+    (pessimistic — keeps simulation honest).
+    For forex/stocks: current price only (Twelve Data 1m costs API credits).
+    """
+    is_long = trade["direction"] == "long"
+    sl, tp  = trade["sl"], trade["tp"]
+
+    if is_long:
+        spot_sl = current_price <= sl
+        spot_tp = current_price >= tp
+    else:
+        spot_sl = current_price >= sl
+        spot_tp = current_price <= tp
+
+    if spot_sl:
+        return False, True  # SL already visible at current price — done
+
+    asset_type = trade.get("asset_type", "crypto")
+    if asset_type == "crypto":
+        since_ms = trade.get("last_wick_check_ms", (time.time() - 300) * 1000)
+        for candle_low, candle_high in _fetch_1m_wicks_since(trade["symbol"], since_ms):
+            if is_long:
+                sl_wick = candle_low  <= sl
+                tp_wick = candle_high >= tp
+            else:
+                sl_wick = candle_high >= sl
+                tp_wick = candle_low  <= tp
+            if sl_wick:
+                return False, True   # SL first (also covers ambiguous candle)
+            if tp_wick:
+                return True, False
+
+    return spot_tp, spot_sl
+
+
 def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
     global open_trades, _cached_balance
     still_open = []
@@ -7225,31 +8198,130 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
             except Exception as e:
                 print(f"[{datetime.now()}] Live price update failed for pending {trade['symbol']}: {e}")
 
-            triggered = (price >= trade["entry"]) if trade["entry_trigger_above"] else (price <= trade["entry"])
-            if triggered:
-                trade["status"] = "OPEN"
-                trade["original_sl"] = trade.get("original_sl", trade["sl"])
-                trade["original_tp"] = trade.get("original_tp", trade["tp"])
-                margin = round(trade.get("position_size_usd", 0) / max(trade.get("leverage", 1), 1), 2)
-                trade["margin_reserved"] = margin
-                balance = get_balance(dashboard_ws)
-                new_balance = round(balance - margin, 2)
-                set_balance(dashboard_ws, new_balance)
-                _cached_balance = new_balance
-                try:
-                    worksheet.update_cell(trade["row"], 13, "OPEN")
-                except Exception as e:
-                    print(f"[{datetime.now()}] Status flip failed for {trade['symbol']}: {e}")
-                print(f"[{datetime.now()}] {trade['symbol']} PENDING -> OPEN | Margin reserved: ${margin:.2f} | Balance: ${balance:.2f} -> ${new_balance:.2f}")
+            since_epoch  = _honest_sim_last_check_ts(trade)
+            exit_candles = honest_sim.get_exit_candles(trade["symbol"], trade["asset_type"], since_epoch, fetch_candles)
+
+            if exit_candles is None:
+                print(f"[{datetime.now()}] {trade['symbol']} candle fetch failed — falling back to spot check for pending fill this cycle.")
+                triggered = (price >= trade["entry"]) if trade["entry_trigger_above"] else (price <= trade["entry"])
+                fill = {"fill_price": trade["entry"], "candle_ts": int(time.time()), "immediate_exit": None} if triggered else None
             else:
-                expiry_time = datetime.strptime(trade["expiry_at"], "%Y-%m-%d %H:%M:%S")
-                if datetime.now() > expiry_time:
+                if exit_candles:
+                    trade["last_exit_check_ts"] = exit_candles[-1]["t"] + 1
+                fill = honest_sim.check_pending_fill(trade, exit_candles) if exit_candles else None
+
+            if fill is None:
+                expiry_time = datetime.strptime(trade["expiry_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > expiry_time:
                     try:
                         worksheet.update_cell(trade["row"], 13, "EXPIRED")
                     except Exception as e:
                         print(f"[{datetime.now()}] Expiry update failed for {trade['symbol']}: {e}")
                     print(f"[{datetime.now()}] {trade['symbol']} PENDING order expired - never filled, dropped.")
                     continue
+                still_open.append(trade)
+                continue
+
+            trade["status"] = "OPEN"
+            trade["entry"]  = fill["fill_price"]
+            trade["original_sl"] = trade.get("original_sl", trade["sl"])
+            trade["original_tp"] = trade.get("original_tp", trade["tp"])
+            margin = round(trade.get("position_size_usd", 0) / max(trade.get("leverage", 1), 1), 2)
+            trade["margin_reserved"] = margin
+            balance = get_balance(dashboard_ws)
+            new_balance = round(balance - margin, 2)
+            set_balance(dashboard_ws, new_balance)
+            _cached_balance = new_balance
+            try:
+                worksheet.update_cell(trade["row"], 13, "OPEN")
+                worksheet.update_cell(trade["row"], 3, trade["entry"])  # fill price can differ from quoted entry on a stop-style gap
+            except Exception as e:
+                print(f"[{datetime.now()}] Status flip failed for {trade['symbol']}: {e}")
+            print(f"[{datetime.now()}] {trade['symbol']} PENDING -> OPEN @ {trade['entry']} | Margin reserved: ${margin:.2f} | Balance: ${balance:.2f} -> ${new_balance:.2f}")
+
+            imm = fill["immediate_exit"]
+
+            # Book the 1R house partial from the fill candle FIRST (if one fired), so the
+            # exit block below books on the halved position — mirrors the OPEN branch.
+            if imm is not None and imm["partial"] is not None:
+                _p = imm["partial"]
+                is_long_p = trade["direction"] == "long"
+                _partial_move = ((_p["price"] - trade["entry"]) / trade["entry"]) if is_long_p else ((trade["entry"] - _p["price"]) / trade["entry"])
+                if _partial_move <= 0:
+                    trade["partial_done"] = True
+                    print(f"[PARTIAL TP] {trade['symbol']} fill gapped at/beyond 1R — no partial to take, flag set")
+                else:
+                    _gross_partial = round(trade["position_size_usd"] * 0.5 * _partial_move, 2)
+                    partial_pnl, _partial_cost = honest_sim.apply_costs(trade, _gross_partial, 0.5)
+                    balance     = get_balance(dashboard_ws)
+                    new_balance = round(balance + partial_pnl, 2)
+                    set_balance(dashboard_ws, new_balance)
+                    _cached_balance = new_balance
+                    trade["position_size_usd"] = round(trade["position_size_usd"] * 0.5, 2)
+                    trade["partial_done"]      = True
+                    trade["partial_net_pnl"]   = round(trade.get("partial_net_pnl", 0.0) + partial_pnl, 2)
+                    print(f"[PARTIAL TP] {trade['symbol']} {trade['direction'].upper()} — 1R hit (candle-true, fill-candle @ {_p['price']}), 50% closed at ${partial_pnl:+.2f} (gross ${_gross_partial:+.2f} fees ${_partial_cost:.2f}) | Balance: ${balance:.2f} -> ${new_balance:.2f}")
+                    _partial_entry = {
+                        "ts":               datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                        "symbol":           trade["symbol"],
+                        "asset_type":       trade.get("asset_type", "crypto"),
+                        "direction":        trade["direction"],
+                        "entry":            trade["entry"],
+                        "sl":               trade["sl"],
+                        "tp":               trade["tp"],
+                        "exit_price":       _p["price"],
+                        "pnl":              partial_pnl,
+                        "outcome":          "PARTIAL_TP",
+                        "close_type":       "PARTIAL_1R",
+                        "tags":             trade.get("tags", ""),
+                        "duration":         "partial",
+                        "reasoning":        trade.get("reasoning", ""),
+                        "analysis":         f"Candle-true partial close (fill-candle): 50% of {trade['symbol']} locked at 1R (${partial_pnl:+.2f} net, fees ${_partial_cost:.2f}). Remaining 50% continues.",
+                        "trading_cost":     _partial_cost,
+                        "r_multiple":       1.0,
+                        "risk_amount_usd":  trade.get("risk_amount_usd", 0),
+                        "position_size_usd": trade["position_size_usd"],
+                        "leverage":         trade.get("leverage", 1),
+                        "setup_grade":      trade.get("setup_grade", ""),
+                        "session_quality":  trade.get("session_quality", ""),
+                        "heat_at_entry":    trade.get("heat_at_entry", 0),
+                        "chev_moves":       [],
+                        "open_ts":          trade.get("open_ts", ""),
+                    }
+                    try:
+                        _j = _load_journal()
+                        _j.append(_partial_entry)
+                        with open(JOURNAL_PATH, "w", encoding="utf-8") as _f:
+                            json.dump(_j, _f, indent=2)
+                    except Exception as _pe:
+                        print(f"[PARTIAL TP] Journal write failed: {_pe}")
+
+            if imm is not None and imm["exit_price"] is not None:
+                is_long_p  = trade["direction"] == "long"
+                exit_price = imm["exit_price"]
+                close_type = imm["close_type"]
+                exit_move  = ((exit_price - trade["entry"]) / trade["entry"]) if is_long_p else ((trade["entry"] - exit_price) / trade["entry"])
+                _gross_pnl  = round(trade["position_size_usd"] * exit_move, 2)
+                net_pnl, _fill_cost = honest_sim.apply_costs(trade, _gross_pnl, 1.0)
+                outcome    = "WIN" if net_pnl >= 0 else "LOSS"
+                if close_type == "SL_HIT":
+                    _record_loss_for_cooldown(trade)  # flag for confluence re-entry check
+                balance = get_balance(dashboard_ws)
+                new_balance = round(balance + margin + net_pnl, 2)
+                set_balance(dashboard_ws, new_balance)
+                _cached_balance = new_balance
+                try:
+                    worksheet.update(values=[[exit_price, net_pnl, outcome, net_pnl]], range_name=f"K{trade['row']}:N{trade['row']}")
+                except Exception as e:
+                    print(f"[{datetime.now()}] Sheet update failed for {trade['symbol']}: {e}")
+                print(f"[{datetime.now()}] {trade['symbol']} filled and immediately {close_type} in the same candle | ${net_pnl:+.2f} (gross ${_gross_pnl:+.2f} fees ${_fill_cost:.2f}) | Balance: ${balance:.2f} -> ${new_balance:.2f}")
+                trade_copy = dict(trade)
+                trade_copy["close_type"]   = close_type
+                trade_copy["trading_cost"] = _fill_cost
+                threading.Thread(target=_do_postmortem,
+                                 args=(trade_copy, outcome, net_pnl, exit_price),
+                                 daemon=True).start()
+                continue
 
             still_open.append(trade)
             continue
@@ -7266,38 +8338,127 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
         except Exception as e:
             print(f"[{datetime.now()}] Live price/PnL update failed for {trade['symbol']}: {e}")
 
-        hit_tp = (price >= trade["tp"]) if is_long else (price <= trade["tp"])
-        hit_sl = (price <= trade["sl"]) if is_long else (price >= trade["sl"])
+        since_epoch  = _honest_sim_last_check_ts(trade)
+        exit_candles = honest_sim.get_exit_candles(trade["symbol"], trade["asset_type"], since_epoch, fetch_candles)
 
-        if hit_tp or hit_sl:
-            exit_price = trade["tp"] if hit_tp else trade["sl"]
-            exit_move  = ((exit_price - trade["entry"]) / trade["entry"]) if is_long else ((trade["entry"] - exit_price) / trade["entry"])
-            exit_pnl   = round(trade["position_size_usd"] * exit_move, 2)
-            outcome    = "WIN" if exit_pnl >= 0 else "LOSS"
-            if hit_tp:
-                close_type = "TP_HIT"
-            elif trade.get("sip_active"):
-                close_type = "SIP_HIT"
-            else:
-                close_type = "SL_HIT"
-                _record_loss_for_cooldown(trade)  # flag for confluence re-entry check
-            balance = get_balance(dashboard_ws)
-            margin_to_return = trade.get("margin_reserved", 0)
-            new_balance = round(balance + margin_to_return + exit_pnl, 2)
-            set_balance(dashboard_ws, new_balance)
-            _cached_balance = new_balance
-            try:
-                worksheet.update(values=[[exit_price, exit_pnl, outcome, exit_pnl]], range_name=f"K{trade['row']}:N{trade['row']}")
-            except Exception as e:
-                print(f"[{datetime.now()}] Sheet update failed for {trade['symbol']}: {e}")
-            arrow = "+" if hit_tp else ("-" if close_type == "SL_HIT" else "~")
-            print(f"[{datetime.now()}] {arrow} {trade['symbol']} {close_type}  ${exit_pnl:+.2f}  |  Piggy bank: ${balance:.2f} -> ${new_balance:.2f}")
-            trade_copy = dict(trade)
-            trade_copy["close_type"] = close_type
-            threading.Thread(target=_do_postmortem,
-                             args=(trade_copy, outcome, exit_pnl, exit_price),
-                             daemon=True).start()
-            continue
+        if exit_candles is None:
+            print(f"[{datetime.now()}] {trade['symbol']} candle fetch failed — falling back to spot check this cycle.")
+            hit_tp, hit_sl = _detect_sl_tp_hit(trade, price)
+            trade["last_wick_check_ms"] = int(time.time() * 1000)
+
+            if hit_tp or hit_sl:
+                exit_price   = trade["tp"] if hit_tp else trade["sl"]
+                exit_move    = ((exit_price - trade["entry"]) / trade["entry"]) if is_long else ((trade["entry"] - exit_price) / trade["entry"])
+                _gross_pnl   = round(trade["position_size_usd"] * exit_move, 2)
+                exit_pnl, _trade_cost = honest_sim.apply_costs(trade, _gross_pnl, 1.0)
+                outcome      = "WIN" if exit_pnl >= 0 else "LOSS"
+                if hit_tp:
+                    close_type = "TP_HIT"
+                elif trade.get("sip_active"):
+                    close_type = "SIP_HIT"
+                else:
+                    close_type = "SL_HIT"
+                    _record_loss_for_cooldown(trade)  # flag for confluence re-entry check
+                balance = get_balance(dashboard_ws)
+                margin_to_return = trade.get("margin_reserved", 0)
+                new_balance = round(balance + margin_to_return + exit_pnl, 2)
+                set_balance(dashboard_ws, new_balance)
+                _cached_balance = new_balance
+                try:
+                    worksheet.update(values=[[exit_price, exit_pnl, outcome, exit_pnl]], range_name=f"K{trade['row']}:N{trade['row']}")
+                except Exception as e:
+                    print(f"[{datetime.now()}] Sheet update failed for {trade['symbol']}: {e}")
+                arrow = "+" if hit_tp else ("-" if close_type == "SL_HIT" else "~")
+                print(f"[{datetime.now()}] {arrow} {trade['symbol']} {close_type}  ${exit_pnl:+.2f} (gross ${_gross_pnl:+.2f} fees ${_trade_cost:.2f})  |  Piggy bank: ${balance:.2f} -> ${new_balance:.2f}")
+                trade_copy = dict(trade)
+                trade_copy["close_type"]   = close_type
+                trade_copy["trading_cost"] = _trade_cost
+                threading.Thread(target=_do_postmortem,
+                                 args=(trade_copy, outcome, exit_pnl, exit_price),
+                                 daemon=True).start()
+                continue
+        else:
+            if exit_candles:
+                trade["last_exit_check_ts"] = exit_candles[-1]["t"] + 1
+            trade.setdefault("original_sl", trade["sl"])
+            trade.setdefault("original_tp", trade["tp"])
+            exit_result = honest_sim.check_exit(trade, exit_candles) if exit_candles else None
+
+            if exit_result is not None and exit_result["partial"] is not None:
+                _p = exit_result["partial"]
+                _partial_move  = ((_p["price"] - trade["entry"]) / trade["entry"]) if is_long else ((trade["entry"] - _p["price"]) / trade["entry"])
+                _gross_partial = round(trade["position_size_usd"] * 0.5 * _partial_move, 2)
+                partial_pnl, _partial_cost = honest_sim.apply_costs(trade, _gross_partial, 0.5)
+                balance     = get_balance(dashboard_ws)
+                new_balance = round(balance + partial_pnl, 2)
+                set_balance(dashboard_ws, new_balance)
+                _cached_balance = new_balance
+                trade["position_size_usd"] = round(trade["position_size_usd"] * 0.5, 2)
+                trade["partial_done"]      = True
+                trade["partial_net_pnl"]   = round(trade.get("partial_net_pnl", 0.0) + partial_pnl, 2)
+                print(f"[PARTIAL TP] {trade['symbol']} {trade['direction'].upper()} — 1R hit (candle-true @ {_p['price']}), 50% closed at ${partial_pnl:+.2f} (gross ${_gross_partial:+.2f} fees ${_partial_cost:.2f}) | Balance: ${balance:.2f} -> ${new_balance:.2f}")
+                _partial_entry = {
+                    "ts":               datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                    "symbol":           trade["symbol"],
+                    "asset_type":       trade.get("asset_type", "crypto"),
+                    "direction":        trade["direction"],
+                    "entry":            trade["entry"],
+                    "sl":               trade["sl"],
+                    "tp":               trade["tp"],
+                    "exit_price":       _p["price"],
+                    "pnl":              partial_pnl,
+                    "outcome":          "PARTIAL_TP",
+                    "close_type":       "PARTIAL_1R",
+                    "tags":             trade.get("tags", ""),
+                    "duration":         "partial",
+                    "reasoning":        trade.get("reasoning", ""),
+                    "analysis":         f"Candle-true partial close: 50% of {trade['symbol']} locked at 1R (${partial_pnl:+.2f} net, fees ${_partial_cost:.2f}). Remaining 50% continues.",
+                    "trading_cost":     _partial_cost,
+                    "r_multiple":       1.0,
+                    "risk_amount_usd":  trade.get("risk_amount_usd", 0),
+                    "position_size_usd": trade["position_size_usd"],
+                    "leverage":         trade.get("leverage", 1),
+                    "setup_grade":      trade.get("setup_grade", ""),
+                    "session_quality":  trade.get("session_quality", ""),
+                    "heat_at_entry":    trade.get("heat_at_entry", 0),
+                    "chev_moves":       [],
+                    "open_ts":          trade.get("open_ts", ""),
+                }
+                try:
+                    _j = _load_journal()
+                    _j.append(_partial_entry)
+                    with open(JOURNAL_PATH, "w", encoding="utf-8") as _f:
+                        json.dump(_j, _f, indent=2)
+                except Exception as _pe:
+                    print(f"[PARTIAL TP] Journal write failed: {_pe}")
+
+            if exit_result is not None and exit_result["exit_price"] is not None:
+                exit_price = exit_result["exit_price"]
+                close_type = exit_result["close_type"]
+                exit_move  = ((exit_price - trade["entry"]) / trade["entry"]) if is_long else ((trade["entry"] - exit_price) / trade["entry"])
+                _gross_pnl  = round(trade["position_size_usd"] * exit_move, 2)
+                exit_pnl, _trade_cost = honest_sim.apply_costs(trade, _gross_pnl, 1.0)
+                outcome     = "WIN" if exit_pnl >= 0 else "LOSS"
+                if close_type == "SL_HIT":
+                    _record_loss_for_cooldown(trade)  # flag for confluence re-entry check
+                balance = get_balance(dashboard_ws)
+                margin_to_return = trade.get("margin_reserved", 0)
+                new_balance = round(balance + margin_to_return + exit_pnl, 2)
+                set_balance(dashboard_ws, new_balance)
+                _cached_balance = new_balance
+                try:
+                    worksheet.update(values=[[exit_price, exit_pnl, outcome, exit_pnl]], range_name=f"K{trade['row']}:N{trade['row']}")
+                except Exception as e:
+                    print(f"[{datetime.now()}] Sheet update failed for {trade['symbol']}: {e}")
+                arrow = "+" if close_type == "TP_HIT" else ("-" if close_type == "SL_HIT" else "~")
+                print(f"[{datetime.now()}] {arrow} {trade['symbol']} {close_type} (candle-true)  ${exit_pnl:+.2f} (gross ${_gross_pnl:+.2f} fees ${_trade_cost:.2f})  |  Piggy bank: ${balance:.2f} -> ${new_balance:.2f}")
+                trade_copy = dict(trade)
+                trade_copy["close_type"]   = close_type
+                trade_copy["trading_cost"] = _trade_cost
+                threading.Thread(target=_do_postmortem,
+                                 args=(trade_copy, outcome, exit_pnl, exit_price),
+                                 daemon=True).start()
+                continue
 
         # Store original SL once (before any trailing modifies it)
         if "original_sl" not in trade:
@@ -7313,29 +8474,109 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
             trade["sip_price"]  = trade["sl"]
             print(f"[SIP] {trade['symbol']} SL {trade['sl']} crossed entry {trade['entry']} — SIP active, trade cannot lose.")
 
-        # ── Partial TP at 1R: auto-close 50% when live PnL reaches original risk amount ───
+        # ── Chev milestone partial TP — thresholds still power the spot-fallback block below ──
         _risk_usd   = trade.get("risk_amount_usd", 0)
         _orig_tp    = trade.get("original_tp", trade["tp"])
         _orig_tp_rr = abs(_orig_tp - trade["entry"]) / orig_risk if orig_risk > 0 else 0
+
+        # ── Level-health management (replaces R-distance milestone trigger) ────
+        # R-distance alone doesn't distinguish a trade grinding into a wall from one
+        # about to punch through — this keys off whether the level actually ahead of
+        # the trade (TP or an SR zone) is HOLDING, WEAKENING, or BROKEN instead.
         if (
-            _risk_usd > 0
+            not trade.get("partial_milestone_done")
+            and not trade.get("sip_active")
+            and move_pct > 0          # trade is in profit
+            and orig_risk > 0
+            and _risk_usd > 0
+        ):
+            _near_level = _check_level_proximity(trade, price)
+            if _near_level is not None:
+                trade["partial_milestone_done"] = True
+                verdict = _near_level["health"]["verdict"]
+                label   = _near_level["label"]
+                lp      = _near_level["level_price"]
+                dpct    = _near_level["dist_pct"]
+                _price_r = abs(price - trade["entry"]) / orig_risk
+
+                print(f"[LEVEL HEALTH] {trade['symbol']} {trade['direction'].upper()} "
+                      f"— price within {dpct:.2f}% of {label} @ {lp} | verdict={verdict} | {_price_r:.2f}R in profit")
+
+                if verdict == "BROKEN":
+                    # Level ahead is broken — price is likely to push through to next target.
+                    # Action: move SL to breakeven, let trade run. Do not take profit.
+                    if not trade.get("sip_active"):
+                        _new_sl = trade["entry"]
+                        _is_long_lh = trade["direction"] == "long"
+                        _sl_valid = (_new_sl < price) if _is_long_lh else (_new_sl > price)
+                        if _sl_valid and trade["sl"] != _new_sl:
+                            old_sl = trade["sl"]
+                            trade["sl"] = _new_sl
+                            trade["sip_active"] = True
+                            trade["sip_price"]  = _new_sl
+                            try:
+                                worksheet.update_cell(trade["row"], 4, _new_sl)
+                            except Exception as _e:
+                                print(f"[LEVEL HEALTH] Sheet SL update failed: {_e}")
+                            print(f"[LEVEL HEALTH] {trade['symbol']} BROKEN level ahead — SL moved to breakeven "
+                                  f"({old_sl} → {_new_sl}). Trade running free.")
+
+                elif verdict == "WEAKENING":
+                    # Level ahead is softening but not broken.
+                    # Action: ask Chev with context. Pass the verdict so Chev can weigh in.
+                    # partial_done is NOT set here — Chev's reply decides whether to close anything.
+                    threading.Thread(
+                        target=lambda t=trade, p=price, r=round(_price_r, 2), v=verdict, lbl=label, lpr=lp:
+                            _ask_chev_partial_tp(t, p, r, level_verdict=v, level_label=lbl, level_price=lpr),
+                        daemon=True
+                    ).start()
+
+                elif verdict == "HOLDING":
+                    # Level ahead is strong and likely to reject.
+                    # Action: close 50% mechanically, trail SL to breakeven on the runner.
+                    if not trade.get("partial_done") and _orig_tp_rr > 1.05:
+                        _execute_partial_close(trade, price, fraction=0.50,
+                                               close_type="PARTIAL_1R", r_at_milestone=round(_price_r, 2))
+                    if not trade.get("sip_active"):
+                        _new_sl = trade["entry"]
+                        _is_long_lh = trade["direction"] == "long"
+                        _sl_valid = (_new_sl < price) if _is_long_lh else (_new_sl > price)
+                        if _sl_valid and trade["sl"] != _new_sl:
+                            old_sl = trade["sl"]
+                            trade["sl"] = _new_sl
+                            trade["sip_active"] = True
+                            trade["sip_price"]  = _new_sl
+                            try:
+                                worksheet.update_cell(trade["row"], 4, _new_sl)
+                            except Exception as _e:
+                                print(f"[LEVEL HEALTH] Sheet SL update failed: {_e}")
+                            print(f"[LEVEL HEALTH] {trade['symbol']} HOLDING level ahead — 50% closed, "
+                                  f"SL trailed to BE ({old_sl} → {_new_sl}).")
+
+        # ── Partial TP at 1R: auto-close 50% swing fallback (scalp/day use Chev milestone) ───
+        # Spot-fallback path only -- when candles are available the candle-true partial
+        # above (inside the `else: exit_candles` branch) already handles this.
+        if (
+            exit_candles is None
+            and _risk_usd > 0
             and orig_risk > 0
             and not trade.get("partial_done")       # only once
             and not trade.get("sip_active")         # SIP = risk already managed structurally
             and _orig_tp_rr > 1.05                  # skip if Chev set a tight TP (scalp <1R)
             and live_pnl_dollars >= _risk_usd       # price moved 1R in our favour
         ):
-            partial_pnl = round(live_pnl_dollars * 0.5, 2)
-            balance     = get_balance(dashboard_ws)
-            new_balance = round(balance + partial_pnl, 2)
+            _gross_partial  = round(live_pnl_dollars * 0.5, 2)
+            partial_pnl, _partial_cost = honest_sim.apply_costs(trade, _gross_partial, 0.5)
+            balance         = get_balance(dashboard_ws)
+            new_balance     = round(balance + partial_pnl, 2)
             set_balance(dashboard_ws, new_balance)
             _cached_balance = new_balance
             trade["position_size_usd"] = round(trade["position_size_usd"] * 0.5, 2)
             trade["partial_done"]      = True
-            trade["partial_pnl"]       = partial_pnl
-            print(f"[PARTIAL TP] {trade['symbol']} {trade['direction'].upper()} — 1R hit, 50% closed at ${partial_pnl:+.2f} | Piggy bank: ${balance:.2f} → ${new_balance:.2f} | Remaining 50% now running")
+            trade["partial_net_pnl"]   = round(trade.get("partial_net_pnl", 0.0) + partial_pnl, 2)
+            print(f"[PARTIAL TP] {trade['symbol']} {trade['direction'].upper()} — 1R hit, 50% closed at ${partial_pnl:+.2f} (gross ${_gross_partial:+.2f} fees ${_partial_cost:.2f}) | Balance: ${balance:.2f} → ${new_balance:.2f}")
             _partial_entry = {
-                "ts":               datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "ts":               datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
                 "symbol":           trade["symbol"],
                 "asset_type":       trade.get("asset_type", "crypto"),
                 "direction":        trade["direction"],
@@ -7349,7 +8590,8 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
                 "tags":             trade.get("tags", ""),
                 "duration":         "partial",
                 "reasoning":        trade.get("reasoning", ""),
-                "analysis":         f"Auto partial close: 50% of {trade['symbol']} locked at 1R (${partial_pnl:+.2f}). Remaining 50% continues with current SL/TP.",
+                "analysis":         f"Auto partial close: 50% of {trade['symbol']} locked at 1R (${partial_pnl:+.2f} net, fees ${_partial_cost:.2f}). Remaining 50% continues.",
+                "trading_cost":     _partial_cost,
                 "r_multiple":       1.0,
                 "risk_amount_usd":  _risk_usd,
                 "position_size_usd": trade["position_size_usd"],
@@ -7411,23 +8653,25 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
             reply_upper = (reply or "").strip().upper()
 
             if reply_upper.startswith("CLOSE"):
-                outcome = "WIN" if live_pnl_dollars > 0 else "LOSS"
-                close_type = "CHEV_CLOSE"
+                close_type   = "CHEV_CLOSE"
+                adj_pnl, _trade_cost = honest_sim.apply_costs(trade, live_pnl_dollars, 1.0)
+                outcome      = "WIN" if adj_pnl > 0 else "LOSS"
                 if outcome == "LOSS":
                     _record_loss_for_cooldown(trade)  # flag for confluence re-entry check
                 balance = get_balance(dashboard_ws)
                 margin_to_return = trade.get("margin_reserved", 0)
-                new_balance = round(balance + margin_to_return + live_pnl_dollars, 2)
+                new_balance = round(balance + margin_to_return + adj_pnl, 2)
                 set_balance(dashboard_ws, new_balance)
                 _cached_balance = new_balance
                 try:
-                    worksheet.update(values=[[price, live_pnl_dollars, f"CLOSED ({outcome})", live_pnl_dollars]], range_name=f"K{trade['row']}:N{trade['row']}")
+                    worksheet.update(values=[[price, adj_pnl, f"CLOSED ({outcome})", adj_pnl]], range_name=f"K{trade['row']}:N{trade['row']}")
                 except Exception as e:
                     print(f"[{datetime.now()}] Sheet update failed on Chev close: {e}")
-                print(f"[{datetime.now()}] Chev CLOSE {trade['symbol']} at {price} | ${live_pnl_dollars:+.2f} | Balance: ${new_balance:.2f}")
+                print(f"[{datetime.now()}] Chev CLOSE {trade['symbol']} at {price} | ${adj_pnl:+.2f} (gross ${live_pnl_dollars:+.2f} fees ${_trade_cost:.2f}) | Balance: ${new_balance:.2f}")
                 trade_copy = dict(trade)
-                trade_copy["close_type"] = close_type
-                threading.Thread(target=_do_postmortem, args=(trade_copy, f"CLOSED ({outcome})", live_pnl_dollars, price), daemon=True).start()
+                trade_copy["close_type"]   = close_type
+                trade_copy["trading_cost"] = _trade_cost
+                threading.Thread(target=_do_postmortem, args=(trade_copy, f"CLOSED ({outcome})", adj_pnl, price), daemon=True).start()
                 continue
 
             elif reply_upper.startswith("TRAIL_SL") or reply_upper.startswith("TRAIL_SIP"):
@@ -7466,7 +8710,7 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
                                 print(f"[SIP] {trade['symbol']} SL {old_sl} -> SIP {new_sl} — trade locked in profit, cannot lose.")
 
                             label = "SIP" if trade.get("sip_active") else "SL"
-                            sl_entry = f"{label} {old_sl} → {new_sl} @ {datetime.now().strftime('%H:%M')}"
+                            sl_entry = f"{label} {old_sl} → {new_sl} @ {datetime.now(timezone.utc).strftime('%H:%M')}"
                             trade.setdefault("chev_moves", []).append(sl_entry)
                             print(f"[{datetime.now()}] {trade['symbol']} {label} trailed to {new_sl}")
                             # Notify Telegram — one line, 15-min cooldown per symbol to avoid spam
@@ -7482,7 +8726,7 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
                         old_tp = trade["tp"]
                         trade["tp"] = new_tp
                         worksheet.update_cell(trade["row"], 5, new_tp)
-                        tp_entry = f"TP {old_tp} → {new_tp} @ {datetime.now().strftime('%H:%M')}"
+                        tp_entry = f"TP {old_tp} → {new_tp} @ {datetime.now(timezone.utc).strftime('%H:%M')}"
                         if move_reason:
                             tp_entry += f" — {move_reason}"
                         trade.setdefault("chev_moves", []).append(tp_entry)
@@ -7510,12 +8754,20 @@ threading.Thread(target=run_web_server, daemon=True).start()
 threading.Thread(target=_fast_price_update, daemon=True).start()
 threading.Thread(target=_push_ngrok_url, daemon=True).start()
 print(f"[{datetime.now()}] Web terminal running at http://localhost:8080")
+labeller.start_resolver_daemon(_fetch_candles_for_labeller)
+if EXPLORATION_MODE:
+    print(f"[{datetime.now()}] EXPLORATION MODE ACTIVE — thresholds crypto={EXPLORATION_THRESHOLD_CRYPTO} "
+          f"forex={EXPLORATION_THRESHOLD_FOREX} stock={EXPLORATION_THRESHOLD_STOCK} | max_dist={EXPLORATION_MAX_DIST_PCT}%")
+else:
+    print(f"[{datetime.now()}] EXPLORATION MODE OFF — normal thresholds in force "
+          f"crypto={CONFLUENCE_THRESHOLD_CRYPTO} forex={CONFLUENCE_THRESHOLD_FOREX} stock={CONFLUENCE_THRESHOLD_STOCK} "
+          f"| max_dist={ESCALATION_MAX_DIST_PCT}%")
 
 # Connect to Google Sheets with retry — timeout added to client so it fails fast
-worksheet = dashboard_ws = jane_worksheet = None
+worksheet = dashboard_ws = jane_worksheet = skip_log_ws = None
 for _attempt in range(3):
     try:
-        worksheet, dashboard_ws, jane_worksheet = connect_to_sheet()
+        worksheet, dashboard_ws, jane_worksheet, skip_log_ws = connect_to_sheet()
         print(f"[{datetime.now()}] Google Sheets connected.")
         break
     except Exception as _e:
@@ -7561,7 +8813,8 @@ def _startup_sl_audit():
         exit_price = price
         exit_move  = ((exit_price - trade["entry"]) / trade["entry"]) if is_long \
                      else ((trade["entry"] - exit_price) / trade["entry"])
-        exit_pnl   = round(trade["position_size_usd"] * exit_move, 2)
+        _gross_pnl = round(trade["position_size_usd"] * exit_move, 2)
+        exit_pnl, _trade_cost = honest_sim.apply_costs(trade, _gross_pnl, 1.0)
         outcome    = "WIN" if exit_pnl >= 0 else "LOSS"
 
         balance          = get_balance(dashboard_ws)
@@ -7579,13 +8832,14 @@ def _startup_sl_audit():
             print(f"[Startup SL audit] Sheet update failed for {trade['symbol']}: {e}")
 
         print(f"[Startup SL audit] {trade['symbol']} SL already breached (price={price} vs SL={trade['sl']}) "
-              f"— closing at {exit_price} | PnL ${exit_pnl:+.2f} | Balance ${balance:.2f} -> ${new_balance:.2f}")
+              f"— closing at {exit_price} | PnL ${exit_pnl:+.2f} (gross ${_gross_pnl:+.2f} fees ${_trade_cost:.2f}) | Balance ${balance:.2f} -> ${new_balance:.2f}")
         send_telegram_alert(
             f"⚠️ STARTUP AUDIT: {trade['symbol']} SL breached while offline — closed at {exit_price} | PnL ${exit_pnl:+.2f}"
         )
 
-        trade_copy             = dict(trade)
-        trade_copy["close_type"] = "SL_HIT"
+        trade_copy               = dict(trade)
+        trade_copy["close_type"]   = "SL_HIT"
+        trade_copy["trading_cost"] = _trade_cost
         threading.Thread(
             target=_do_postmortem,
             args=(trade_copy, outcome, exit_pnl, exit_price),
@@ -7606,6 +8860,7 @@ last_stock_scan        = 0
 last_forex_trade_check = 0
 last_stock_trade_check = 0
 _tf_last_scan: dict    = {}  # (symbol, tf) → unix timestamp of last scan initiation
+_breaker_alert_sent_date = ""  # UTC date string; caps the circuit-breaker Telegram alert to once/day
 
 while True:
     now = time.time()
@@ -7626,7 +8881,7 @@ while True:
         pass
 
     # Confluence scans — crypto+forex every cycle (unlimited sources), stocks on Twelve Data budget
-    scan_forex_this_round  = (now - last_forex_scan)  >= FOREX_SCAN_INTERVAL
+    scan_forex_this_round  = (now - last_forex_scan)  >= FOREX_SCAN_INTERVAL and is_forex_market_open()
     scan_stocks_this_round = (now - last_stock_scan)  >= STOCK_SCAN_INTERVAL and is_ny_market_hours()
     # Trade checks (fill detection, SL/TP, management) — fast cadence so pending orders don't miss their price
     check_forex_trades  = (now - last_forex_trade_check) >= FOREX_TRADE_CHECK_INTERVAL
@@ -7688,11 +8943,35 @@ while True:
         primary_tf  = result.get("primary_tf", "1h")
         esc_key     = (result["symbol"], primary_tf)
         asset_type  = item.get("type", "crypto")
-        min_conf    = TF_MIN_CONFLUENCE.get(primary_tf, 3) + _session_confluence_bonus(asset_type)
+        _active_thr = _active_thresholds(asset_type)[0]
+        min_conf    = max(1, _active_thr - TF_MIN_CONFLUENCE_DISCOUNT.get(primary_tf, 3)) + _session_confluence_bonus(asset_type)
         skip_cool   = TF_SKIP_COOLDOWN.get(primary_tf, _ESCALATION_COOLDOWN)
         post_cool   = TF_POST_COOLDOWN.get(primary_tf, _POST_COOLDOWN)
 
         if result and result["count"] >= min_conf:
+            # Circuit breaker: halts NEW escalations only for the rest of the UTC day.
+            # Open trades keep managing normally — see monitor_open_trades, untouched.
+            _breaker = honest_sim.breaker_status()
+            if _breaker["halted"]:
+                print(f"[{datetime.now()}] CIRCUIT BREAKER — {result['symbol']}/{primary_tf}: "
+                      f"daily R={_breaker['daily_R']:+.2f} <= {honest_sim.DAILY_R_HALT} — not escalating.")
+                try:
+                    labeller.record_setup(result, asset_type, "NOT_ESCALATED",
+                                         chev_meta={"reason": "circuit_breaker"})
+                except Exception as _le:
+                    print(f"[labeller] record_setup error (circuit_breaker): {_le}")
+                if _breaker_alert_sent_date != _breaker["date"]:
+                    _breaker_alert_sent_date = _breaker["date"]
+                    try:
+                        send_telegram_alert(
+                            f"🛑 CIRCUIT BREAKER TRIPPED: daily R = {_breaker['daily_R']:+.2f} "
+                            f"(halt threshold {honest_sim.DAILY_R_HALT}). No new trades will be escalated "
+                            f"for the rest of the UTC day. Open positions continue to be managed normally."
+                        )
+                    except Exception as _te:
+                        print(f"[Circuit Breaker] Telegram alert failed: {_te}")
+                continue
+
             # If Chev is rate-limited, skip until cooldown expires
             rl_remaining = _chev_rate_limit_until - time.time()
             if rl_remaining > 0:
@@ -7717,6 +8996,11 @@ while True:
             cooldown_left = unblock - now_esc
             if cooldown_left > 0:
                 print(f"[{datetime.now()}] {result['symbol']}/{primary_tf}: cooldown active ({int(cooldown_left)}s remaining) — skipping.")
+                try:
+                    labeller.record_setup(result, asset_type, "NOT_ESCALATED",
+                                         chev_meta={"reason": "cooldown"})
+                except Exception as _le:
+                    print(f"[labeller] record_setup error (cooldown): {_le}")
                 continue
 
             # Hard forex event block: no new trades within 30min of a high-impact release
@@ -7724,6 +9008,11 @@ while True:
             if _blocked:
                 print(f"[{datetime.now()}] EVENT BLOCK — {result['symbol']}/{primary_tf}: {_block_reason} — no new trades within 30min window.")
                 _last_escalated[esc_key] = time.time() + 1800  # re-check in 30min
+                try:
+                    labeller.record_setup(result, asset_type, "NOT_ESCALATED",
+                                         chev_meta={"reason": "event_block"})
+                except Exception as _le:
+                    print(f"[labeller] record_setup error (event_block): {_le}")
                 continue
 
             # Regime filter: skip CHOPPY markets — ADX<15 means random noise, no edge
@@ -7731,7 +9020,70 @@ while True:
             if _r4h.get("regime") == "CHOPPY":
                 print(f"[{datetime.now()}] REGIME BLOCK — {result['symbol']}/{primary_tf}: 4H CHOPPY (ADX={_r4h.get('adx')}) — no directional edge, skipping.")
                 _last_escalated[esc_key] = time.time() + 1800
+                try:
+                    labeller.record_setup(result, asset_type, "NOT_ESCALATED",
+                                         chev_meta={"reason": "choppy_regime"})
+                except Exception as _le:
+                    print(f"[labeller] record_setup error (choppy_regime): {_le}")
                 continue
+
+            # ── TRADEABILITY PRE-GATE ──────────────────────────────────────
+            # Only escalate setups Chev is actually allowed to approve.
+            # Everything blocked here is still shadow-logged so the Examiner
+            # can measure whether these gates help or hurt.
+            _trade_thr, _trade_max_dist = _active_thresholds(asset_type)
+            # REMINDER: weekend crypto threshold bump disabled while this is a paper account
+            # (thin weekend books/sweeps only matter once real money + real slippage are on
+            # the line). Once a live Binance API key + real funds are wired in, restore:
+            #   if not EXPLORATION_MODE and asset_type == "crypto" and time.gmtime().tm_wday >= 5:
+            #       _trade_thr += 2   # weekend crypto: thin books, sweep-prone — raise the bar
+
+            if result["count"] < _trade_thr:
+                print(f"[{datetime.now()}] TRADEABILITY — {result['symbol']}/{primary_tf}: "
+                      f"score={result['count']:.1f} < trade threshold {_trade_thr} — not escalated (shadow-logged).")
+                try:
+                    labeller.record_setup(result, asset_type, "NOT_ESCALATED",
+                                         chev_meta={"reason": "below_trade_threshold"})
+                except Exception as _le:
+                    print(f"[labeller] record_setup error (below_trade_threshold): {_le}")
+                continue
+
+            _sr_pre = result.get("sr_score", 0) or 0
+            _vp_pre = result.get("vp_score", 0) or 0
+            if _sr_pre < 2 and _vp_pre < 2 and not result.get("fast_anchor_pass"):
+                print(f"[{datetime.now()}] STRUCT PRE-GATE — {result['symbol']}/{primary_tf}: "
+                      f"sr={_sr_pre:.1f} vp={_vp_pre:.1f} — no structural anchor, not escalated.")
+                try:
+                    labeller.record_setup(result, asset_type, "NOT_ESCALATED",
+                                         chev_meta={"reason": "struct_pregate"})
+                except Exception as _le:
+                    print(f"[labeller] record_setup error (struct_pregate): {_le}")
+                continue
+
+            _dist_pre = result.get("dist_from_level")
+            if _dist_pre is not None and _dist_pre > _trade_max_dist and _vp_pre < 2:
+                print(f"[{datetime.now()}] DISTANCE — {result['symbol']}/{primary_tf}: "
+                      f"{_dist_pre:.2f}% from level (max {_trade_max_dist}%) — waiting for price to reach zone. (vp={_vp_pre:.1f})")
+                try:
+                    labeller.record_setup(result, asset_type, "NOT_ESCALATED",
+                                         chev_meta={"reason": "too_far_from_level"})
+                except Exception as _le:
+                    print(f"[labeller] record_setup error (too_far_from_level): {_le}")
+                continue
+
+            _bull_pts, _bear_pts = _directional_split(result["reasons"])
+            _dominant = max(_bull_pts, _bear_pts)
+            _minor    = min(_bull_pts, _bear_pts)
+            if _minor >= 2.0 and _dominant < CONFLICT_DOMINANCE_RATIO * _minor:
+                print(f"[{datetime.now()}] CONFLICT — {result['symbol']}/{primary_tf}: "
+                      f"bull={_bull_pts:.1f} bear={_bear_pts:.1f} — contradictory signals, not escalated.")
+                try:
+                    labeller.record_setup(result, asset_type, "NOT_ESCALATED",
+                                         chev_meta={"reason": "conflicting_signals"})
+                except Exception as _le:
+                    print(f"[labeller] record_setup error (conflicting_signals): {_le}")
+                continue
+            # ── END TRADEABILITY PRE-GATE ──────────────────────────────────
 
             if result.get("dist_from_level") is not None:
                 _d = result["dist_from_level"]
@@ -7752,7 +9104,7 @@ while True:
             if parsed and parsed.get("trade"):
                 _dexter_score = result["count"]
                 _tags_str     = parsed["trade"].get("tags", "")
-                _threshold    = CONFLUENCE_THRESHOLD_FOREX if item["type"] == "forex" else CONFLUENCE_THRESHOLD_CRYPTO
+                _threshold, _   = _active_thresholds(item["type"])
                 if _dexter_score < _threshold:
                     _gate_reason = f"Dexter score={_dexter_score} < threshold={_threshold} ({item['type']}) | Chev tags={_tags_str}"
                     print(f"[{datetime.now()}] SCORE GATE — {result['symbol']} rejected: {_gate_reason}")
@@ -7769,7 +9121,7 @@ while True:
             if parsed and parsed.get("trade"):
                 _sr_pts = result.get("sr_score", 0)
                 _vp_pts = result.get("vp_score", 0)
-                if _sr_pts < 2 and _vp_pts < 2:
+                if _sr_pts < 2 and _vp_pts < 2 and not result.get("fast_anchor_pass"):
                     _struct_msg = (f"No structural anchor — sr_score={_sr_pts:.1f}, vp_score={_vp_pts:.1f}. "
                                    f"Need sr≥2 (confirmed multi-TF SR level) OR vp≥2 (VP POC/VAH/VAL within 0.4%). "
                                    f"Price is mid-range, not at a real level.")
@@ -7868,7 +9220,7 @@ while True:
                         )
 
                 # Position size cap — max margin = balance × grade_max_risk_pct
-                if _pos_size > 0:
+                if _pos_size > 0 and balance > 0:
                     _implied_margin = _pos_size / _lev
                     _max_margin     = balance * (_max_risk_pct / 100)
                     if _implied_margin > _max_margin * 1.25:   # 25% tolerance
@@ -7933,6 +9285,79 @@ while True:
                         )
                         parsed["trade"] = None
 
+            # ── Risk Gauntlet — deterministic sizing + portfolio checks ──────────
+            # Runs after all existing gates. On PASS: overwrites Chev's size/leverage/risk_pct
+            # with equity-based computed values. On REJECT: logs decision and continues.
+            _g_res = None
+            if parsed and parsed.get("trade"):
+                _g_grade, _ = _setup_grade(result, asset_type)
+                _g_live     = result.get("current_price") or 0
+                _g_res = risk_gauntlet.run_gauntlet(
+                    parsed["trade"], result, balance, _g_live,
+                    asset_type, open_trades, _CRYPTO_CORR_SYMBOLS, _g_grade
+                )
+                if _g_res["verdict"] == "REJECT":
+                    _g_rc = _g_res["reject_code"]
+                    _g_rr = _g_res["reject_reason"]
+                    print(f"[{datetime.now()}] GAUNTLET {_g_rc} -- {result['symbol']}: {_g_rr}")
+                    if _g_res.get("fixable"):
+                        # One retry in the same thread — same pattern as the geometry review
+                        _g_fix_msg = (
+                            f"RISK GAUNTLET REJECT ({_g_rc}): {_g_rr}\n\n"
+                            f"Revise your SL/TP and resend the full POST: block, "
+                            f"or reply SKIP: <reason> if the setup no longer qualifies."
+                        )
+                        _chev_messages.append({"role": "assistant", "content": chev_response})
+                        _chev_messages.append({"role": "user",      "content": _g_fix_msg})
+                        _g_revised  = _call_chev(_chev_messages, timeout=180)
+                        _g_accepted = False
+                        if _g_revised:
+                            _g_rp = parse_chev_reply(_g_revised)
+                            if _g_rp and _g_rp.get("trade"):
+                                _g_res2 = risk_gauntlet.run_gauntlet(
+                                    _g_rp["trade"], result, balance, _g_live,
+                                    asset_type, open_trades, _CRYPTO_CORR_SYMBOLS, _g_grade
+                                )
+                                if _g_res2["verdict"] == "PASS":
+                                    chev_response = _g_revised
+                                    parsed        = _g_rp
+                                    _g_res        = _g_res2
+                                    _g_accepted   = True
+                                    print(f"[{datetime.now()}] GAUNTLET RETRY -- {result['symbol']}: revision accepted.")
+                            elif _g_rp and not _g_rp.get("post"):
+                                # Chev chose to SKIP on the retry — let normal flow handle cooldown
+                                chev_response = _g_revised
+                                parsed        = _g_rp
+                                _g_accepted   = True
+                                print(f"[{datetime.now()}] GAUNTLET RETRY -- {result['symbol']}: Chev chose SKIP on revision.")
+                        if not _g_accepted:
+                            _log_chev_decision(
+                                result["symbol"], primary_tf, result["count"], result["reasons"],
+                                "REJECT", _g_rr, (result.get("regime_4h") or {}).get("regime")
+                            )
+                            _last_escalated[esc_key] = time.time() + skip_cool
+                            continue
+                    else:
+                        _log_chev_decision(
+                            result["symbol"], primary_tf, result["count"], result["reasons"],
+                            "REJECT", _g_rr, (result.get("regime_4h") or {}).get("regime")
+                        )
+                        _last_escalated[esc_key] = time.time() + skip_cool
+                        continue
+
+                if _g_res["verdict"] == "PASS":
+                    _sz            = _g_res["sized"]
+                    _chev_sz_was   = parsed["trade"].get("position_size_usd", 0)
+                    _chev_lev_was  = parsed["trade"].get("leverage", 1)
+                    _chev_risk_was = parsed["trade"].get("risk_pct", 0)
+                    parsed["trade"]["position_size_usd"] = _sz["position_size_usd"]
+                    parsed["trade"]["leverage"]           = _sz["leverage"]
+                    parsed["trade"]["risk_pct"]           = round(_sz["risk_pct"], 4)
+                    print(f"[{datetime.now()}] GAUNTLET PASS -- {result['symbol']}: "
+                          f"size ${_chev_sz_was}->${_sz['position_size_usd']} | "
+                          f"lev {_chev_lev_was}x->{_sz['leverage']}x | "
+                          f"risk {_chev_risk_was}%->{_sz['risk_pct']}%")
+
             if parsed is None:
                 _last_escalated[esc_key] = time.time() + skip_cool
                 if chev_response is not None:
@@ -7996,13 +9421,23 @@ while True:
                     new_trade["structure_4h"]  = parsed.get("structure_4h", "")
                     new_trade["invalidation"]  = parsed.get("invalidation", "")
                     new_trade["confirmation"]  = parsed.get("confirmation", "")
-                    new_trade["opened_at"]     = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    new_trade["opened_at"]     = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                     new_trade["original_sl"]   = new_trade.get("sl", 0)
                     new_trade["original_tp"]   = new_trade.get("tp", 0)
+                    new_trade["sl_original"]   = new_trade.get("sl", 0)
+                    new_trade["tp_original"]   = new_trade.get("tp", 0)
                     new_trade["primary_tf"]    = primary_tf
-                    # risk_amount_usd: dollars at risk based on balance at time of entry
-                    _bal_at_open = get_balance(dashboard_ws) or balance
-                    new_trade["risk_amount_usd"] = round(new_trade.get("risk_pct", 1.0) / 100 * _bal_at_open, 2)
+                    # risk_amount_usd: use gauntlet's equity-based value when available
+                    # (makes the 1R partial-TP trigger exact); fallback for any edge path.
+                    if _g_res and _g_res["verdict"] == "PASS":
+                        _sz = _g_res["sized"]
+                        new_trade["risk_amount_usd"]      = _sz["risk_amount_usd"]
+                        new_trade["chev_wanted_size"]     = _sz["chev_wanted_size"]
+                        new_trade["chev_wanted_leverage"] = _sz["chev_wanted_leverage"]
+                        new_trade["gauntlet_notes"]       = _sz["notes"]
+                    else:
+                        _bal_at_open = get_balance(dashboard_ws) or balance
+                        new_trade["risk_amount_usd"] = round(new_trade.get("risk_pct", 1.0) / 100 * _bal_at_open, 2)
                     new_trade["atr_at_entry"]    = result.get("atr", 0)
                     _g, _      = _setup_grade(result, asset_type)
                     _, _sq     = _session_grade(asset_type)
@@ -8013,6 +9448,15 @@ while True:
                     new_trade["heat_at_entry"]   = _heat
                     # Persist metadata into the sheet's conf_json cell (col 18) so it survives restarts
                     try:
+                        _gauntlet_meta = {}
+                        if _g_res and _g_res["verdict"] == "PASS":
+                            _sz = _g_res["sized"]
+                            _gauntlet_meta = {
+                                "chev_wanted_size":     _sz["chev_wanted_size"],
+                                "chev_wanted_leverage": _sz["chev_wanted_leverage"],
+                                "chev_wanted_risk_pct": _sz["chev_wanted_risk_pct"],
+                                "gauntlet_notes":       _sz["notes"],
+                            }
                         _meta_json = json.dumps({
                             "prices":          conf_prices,
                             "setup_grade":     _g,
@@ -8020,6 +9464,7 @@ while True:
                             "heat_at_entry":   _heat,
                             "reasoning":       new_trade["reasoning"],
                             "primary_tf":      primary_tf,
+                            **_gauntlet_meta,
                         })
                         worksheet.update_cell(new_trade["row"], 18, _meta_json)
                     except Exception as _me:
@@ -8039,7 +9484,7 @@ while True:
                             new_trade["direction"], new_trade["entry"], new_trade["tp"]
                         )
                         new_trade["entry_brief_snapshot"] = _snap_brief
-                        new_trade["entry_snapshot_time"]  = new_trade.get("opened_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                        new_trade["entry_snapshot_time"]  = new_trade.get("opened_at", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
                     except Exception as _se:
                         print(f"[Entry snapshot] Failed for {new_trade['symbol']}: {_se}")
                     # Performance Engine: link this trade to the top hypothesis
@@ -8072,6 +9517,20 @@ while True:
                         "POST", parsed.get("telegram_message", ""),
                         (result.get("regime_4h") or {}).get("regime")
                     )
+                    try:
+                        _td = parsed.get("trade") or {}
+                        labeller.record_setup(
+                            result, asset_type, "POST",
+                            chev_meta={
+                                "direction": _td.get("direction"),
+                                "entry":     _td.get("entry"),
+                                "tags":      _td.get("tags"),
+                                "reason":    parsed.get("reasoning") or parsed.get("skip_reason"),
+                                "trade_type": _td.get("trade_type"),
+                            }
+                        )
+                    except Exception as _le:
+                        print(f"[labeller] record_setup error (POST): {_le}")
                 else:
                     print(f"[{datetime.now()}] Chev posted but TRADE: line missing/invalid.")
                 _last_escalated[esc_key] = time.time() + post_cool
@@ -8084,7 +9543,17 @@ while True:
                     "SKIP", _skip_reason,
                     (result.get("regime_4h") or {}).get("regime")
                 )
+                try:
+                    labeller.record_setup(result, asset_type, "SKIP",
+                                         chev_meta={"reason": _skip_reason})
+                except Exception as _le:
+                    print(f"[labeller] record_setup error (SKIP): {_le}")
         elif result:
             print(f"[{datetime.now()}] {result['symbol']}/{primary_tf}: score={result['count']:.1f} — below threshold ({min_conf})")
+            try:
+                labeller.record_setup(result, asset_type, "NOT_ESCALATED",
+                                     chev_meta={"reason": "below_threshold"})
+            except Exception as _le:
+                print(f"[labeller] record_setup error (below_threshold): {_le}")
 
     time.sleep(CHECK_INTERVAL_SECONDS)
