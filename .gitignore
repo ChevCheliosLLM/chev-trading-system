@@ -3,6 +3,7 @@ google_credentials.json
 *.json.key
 .env
 secrets.py
+secrets.local
 
 # ─── Python environments (huge, not needed) ──────────────────────────────────
 .venv/
@@ -29,7 +30,13 @@ labels_open.jsonl
 labels_closed.jsonl
 labels_discovery.json
 daily_risk.json
+system_state.jsonl
+tunables.json
+counterfactual_report.txt
 *.log
+
+# ─── Not part of this project ────────────────────────────────────────────────
+Ale/
 
 # ─── Local backups / scratch ─────────────────────────────────────────────────
 *.bak
@@ -52,3 +59,4 @@ desktop.ini
 .idea/
 *.suo
 *.user
+*.code-workspace

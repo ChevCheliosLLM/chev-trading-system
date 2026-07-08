@@ -9,26 +9,26 @@ Last updated: 2026-07-02 08:58:20 | Based on 60 Chev + 2 Jane closed trades
 
 ### MARKET STRUCTURE RULES
 - Trend context improves setup quality when there is a clear directional bias (e.g., head & shoulders breakout) supported by multiple technical indicators.
-- Confidence in reaching TP increases when setups align with strong structural support/resistance and are confirmed by recent price action, such as EMA crossovers or volume expansion at the level.
+- Confidence in reaching TP increases when setups align with strong structural support/resistance and are supported by recent price action, such as EMA crossovers or volume expansion at the level.
 - High-quality setups often show robust market sentiment through high volume spikes at key levels or confluence of multiple bullish/bearish signals.
 
 ### ENTRY QUALITY STANDARDS
-- High-conviction entries are defined by clear structural support/resistance, strong technical indicators (EMA crossovers, Fibonacci levels), and confirmatory price action.
-- Winners typically had a combination of well-defined SR zones, hidden divergences, and confluence at multiple timeframes, whereas losers lacked robust structural context or clear trend confirmation.
-- Marginal entries often failed due to insufficient support/resistance validation or reliance on single indicators like RSI divergence without additional confirmatory signals.
+- High-conviction entries are defined by clear structural support/resistance, strong technical indicators (EMA crossovers, Fibonacci levels), and aligned price action.
+- Winners typically had a combination of well-defined SR zones, hidden divergences, and confluence at multiple timeframes, whereas losers lacked robust structural context or clear trend alignment.
+- Marginal entries often failed due to insufficient support/resistance validation or reliance on single indicators like RSI divergence without additional supporting confluence.
 
 ### TRADE MANAGEMENT PATTERNS
 - Insufficient data — revisit next session.
 
 ### REASONING QUALITY
 - 8 out of the last 30 setups were fully validated, indicating that about 27% of reasoning is supported by price action.
-- Invalidated setups often lacked clear structural support/resistance or relied too heavily on single indicators like RSI divergence without additional confirmation.
+- Invalidated setups often lacked clear structural support/resistance or relied too heavily on single indicators like RSI divergence without additional confluence.
 - A+ setups showed higher validation rates (100%) compared to B setups (25%), suggesting more robust confluence and clearer market structure.
 
 ### ASSET NOTES
-- Cryptocurrencies show better performance in setups with multiple confluences at key support/resistance levels, whereas forex pairs require a clear trend context or strong structural confirmation.
+- Cryptocurrencies show better performance in setups with multiple confluences at key support/resistance levels, whereas forex pairs require a clear trend context or strong structural alignment.
 - Stocks like AMZN benefit from setups aligned with historical patterns (e.g., head & shoulders breakouts) and robust technical indicators.
 
 ### JANE'S PATTERNS
-- Jane consistently shows profitability on setups with hidden bullish/bearish divergences confirmed by strong structural support/resistance levels at 4-hour timeframes.
-- Her instincts often diverge from models in volatile markets where single indicator signals (e.g., RSI divergence) are less reliable; her approach tends to outperform when she waits for additional confirmatory price action.
+- Jane consistently shows profitability on setups with hidden bullish/bearish divergences supported by strong structural support/resistance levels at 4-hour timeframes.
+- Her instincts often diverge from models in volatile markets where single indicator signals (e.g., RSI divergence) are less reliable; her approach tends to outperform when she demands more confluence before entering — not by waiting on extra candles after the setup is already identified.

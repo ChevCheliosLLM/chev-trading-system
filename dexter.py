@@ -2,7 +2,12 @@ import requests
 import pandas as pd
 import numpy as np
 import time
+import os
+import functools
+import hmac
 from datetime import datetime, timezone
+from datetime import timedelta
+from collections import Counter
 import gspread
 import re
 import json
@@ -18,9 +23,49 @@ import trade_forensics
 import patterns
 import risk_gauntlet
 import honest_sim
+import counterfactual_report
 
 flask_app = Flask(__name__, static_folder=None)
 WEBAPP_FOLDER = r"C:\ChevTools\webapp"
+
+# PHASE 9: shared-secret auth for every mutating route. secrets.local is a plain
+# key=value file, never committed (gitignored), created by Kev by hand -- e.g.
+#   DASHBOARD_KEY=<a long random passphrase>
+#   GITHUB_TOKEN=<a github personal access token, read by push_dashboard.py>
+# Missing file or missing DASHBOARD_KEY -- never fall back to open access; every
+# @require_key route returns 503 instead.
+SECRETS_FILE = r"C:\ChevTools\secrets.local"
+
+def _load_secrets():
+    out = {}
+    try:
+        with open(SECRETS_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    return out
+
+_SECRETS = _load_secrets()
+DASHBOARD_KEY = _SECRETS.get("DASHBOARD_KEY") or None
+if not DASHBOARD_KEY:
+    print(f"[AUTH] WARNING: {SECRETS_FILE} missing or has no DASHBOARD_KEY -- "
+          f"all mutating routes are DISABLED (503) until this is fixed.")
+
+def require_key(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not DASHBOARD_KEY:
+            return jsonify({"ok": False, "error": "auth not configured"}), 503
+        supplied = flask_request.headers.get("X-Chev-Key", "")
+        if not hmac.compare_digest(supplied, DASHBOARD_KEY):
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+        return fn(*args, **kwargs)
+    return wrapper
 
 @flask_app.after_request
 def _add_cors(response):
@@ -81,7 +126,103 @@ def api_trades():
     return jsonify({"active": active, "last_closed": last_closed})
 
 
+# PHASE 12: read-only system vitals for the frontend's vitals strip -- heartbeat (last_scan_
+# age), drought clock (hours since a surviving POST), slot occupancy vs caps, exploration
+# mode, today's realized R, Chev deliberation latency, and per-source file freshness.
+# GET-only, computes and serves, writes nothing. 30s module-level cache (same pattern as
+# PHASE 7B-1's /api/strategy/counterfactual) so a phone poll never re-scans the growing
+# jsonl files more than twice a minute.
+VITALS_CACHE_SECS = 30
+_vitals_cache = {"ts": 0.0, "payload": None}
+
+@flask_app.route("/api/vitals")
+def api_vitals():
+    now = time.time()
+    if _vitals_cache["payload"] is not None and (now - _vitals_cache["ts"]) < VITALS_CACHE_SECS:
+        payload = dict(_vitals_cache["payload"])
+        payload["cache_age_secs"] = round(now - _vitals_cache["ts"], 1)
+        return jsonify(payload)
+
+    # Last surviving POST: newest-first scan of chev_decisions.jsonl for decision=="POST".
+    _last_post_ts = None
+    for r in reversed(_read_jsonl(_CHEV_DECISIONS_LOG, max_lines=8000)):
+        if r.get("decision") == "POST":
+            _last_post_ts = _parse_dt(r.get("ts"))
+            break
+    _now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    hours_since_post = (
+        round((_now_naive - _last_post_ts).total_seconds() / 3600, 2) if _last_post_ts else None
+    )
+
+    # Median deliberation_secs over the last 24h (PHASE 11's new field) -- absent/non-numeric
+    # entries (pre-PHASE-11 history, or SKIP's untouched call site) are simply skipped.
+    _cutoff = _now_naive - timedelta(hours=24)
+    _delibs = []
+    for r in _read_jsonl(_CHEV_DECISIONS_LOG, max_lines=8000):
+        _ts = _parse_dt(r.get("ts"))
+        if _ts is None or _ts < _cutoff:
+            continue
+        _d = r.get("deliberation_secs")
+        if isinstance(_d, (int, float)):
+            _delibs.append(_d)
+    _delibs.sort()
+    median_deliberation = None
+    if _delibs:
+        _n = len(_delibs)
+        median_deliberation = (_delibs[_n // 2] if _n % 2
+                               else round((_delibs[_n // 2 - 1] + _delibs[_n // 2]) / 2, 1))
+
+    # Slot occupancy per trade_type -- SAME in-memory open_trades list /api/trades reads,
+    # and the SAME active profile risk_gauntlet's own concurrency-cap gate reads. Never
+    # re-derives balance/position math independently.
+    _prof   = risk_gauntlet.get_active_profile(EXPLORATION_MODE)
+    _cap    = _prof["CONCURRENCY_CAP"]
+    _counts = {"scalp": 0, "day": 0, "swing": 0}
+    for t in open_trades:
+        if t.get("status") in ("OPEN", "PENDING"):
+            _tt = (t.get("trade_type") or "day").lower()
+            if _tt in _counts:
+                _counts[_tt] += 1
+    slots = {
+        tt: {"open_pending": _counts[tt], "cap": _cap.get(tt, 0), "full": _counts[tt] >= _cap.get(tt, 0)}
+        for tt in _counts
+    }
+
+    # Today's realized R -- reuses honest_sim's own circuit-breaker tracker (the same
+    # number the daily-halt check itself reads), never re-derived from the journal here.
+    try:
+        today_r = honest_sim.breaker_status().get("daily_R", 0.0)
+    except Exception:
+        today_r = None
+
+    def _age(path):
+        try:
+            return round(now - os.path.getmtime(path), 1)
+        except Exception:
+            return None
+
+    payload = {
+        "last_scan_ts": (
+            datetime.fromtimestamp(_last_scan_completed_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            if _last_scan_completed_ts else None
+        ),
+        "last_scan_age_secs": (round(now - _last_scan_completed_ts, 1) if _last_scan_completed_ts else None),
+        "hours_since_last_surviving_post": hours_since_post,
+        "slots":                       slots,
+        "exploration_mode":             EXPLORATION_MODE,
+        "today_realized_r":             today_r,
+        "median_deliberation_secs_24h": median_deliberation,
+        "decisions_log_age_secs":       _age(_CHEV_DECISIONS_LOG),
+        "journal_age_secs":             _age(JOURNAL_PATH),
+        "cache_age_secs":               0.0,
+    }
+    _vitals_cache["ts"]      = now
+    _vitals_cache["payload"] = payload
+    return jsonify(payload)
+
+
 @flask_app.route("/api/reset_balance", methods=["POST"])
+@require_key
 def api_reset_balance():
     global open_trades
     try:
@@ -101,6 +242,7 @@ def api_reset_balance():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 @flask_app.route("/api/close_trade", methods=["POST"])
+@require_key
 def api_close_trade():
     """Force-close an open trade by symbol. Marks it as LOSS at current price in the sheet."""
     global open_trades, _cached_balance
@@ -173,6 +315,7 @@ def api_close_trade():
                     "position_size_usd": target.get("position_size_usd", 0),
                     "leverage":         target.get("leverage", 1),
                     "chev_moves":       target.get("chev_moves", []),
+                    "system_era":       SYSTEM_ERA,
                 })
                 with open(JOURNAL_PATH, "w", encoding="utf-8") as f:
                     json.dump(journal, f, indent=2)
@@ -197,6 +340,7 @@ _forex_cache = {}   # key → (timestamp, candles_list)
 _FOREX_CACHE_TTL = 20  # seconds — poll interval is 15s so this avoids back-to-back Twelve Data hits
 
 @flask_app.route("/api/chev_chat", methods=["POST"])
+@require_key
 def api_chev_chat():
     """Proxy chat messages to Open WebUI — avoids CORS from the webapp."""
     body = flask_request.get_json(force=True, silent=True) or {}
@@ -287,6 +431,7 @@ def api_pending():
     return jsonify(pending)
 
 @flask_app.route("/api/jane/idea", methods=["POST"])
+@require_key
 def api_jane_idea():
     global jane_trades
     data = flask_request.get_json(force=True, silent=True) or {}
@@ -336,6 +481,603 @@ def api_jane_idea():
     ).start()
     threading.Thread(target=_evaluate_jane_trade_with_chev, args=(trade_entry,), daemon=True).start()
     return jsonify({"ok": True, "row": trade_entry["row"], "status": "PENDING"})
+
+
+# ============================================================
+# STRATEGY DASHBOARD API (added 2026-07-05) — read-only aggregation over
+# chev_decisions.jsonl, chev_journal.json, and the Examiner's shadow log
+# (labeller.OPEN_FILE / CLOSED_FILE). Powers the webapp's Strategy tab.
+# Nothing here touches trading logic — pure read + aggregate.
+# ============================================================
+
+def _read_jsonl(path, max_lines=None):
+    """Read a JSONL file into a list of dicts. max_lines caps to the TAIL of the file
+    (most recent entries) so this stays cheap even as logs grow over months."""
+    recs = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        if max_lines:
+            lines = lines[-max_lines:]
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                recs.append(json.loads(line))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return recs
+
+
+def _parse_dt(ts_str):
+    """Parse 'YYYY-MM-DD HH:MM:SS[...]' — tolerant of a trailing microsecond suffix."""
+    if not ts_str:
+        return None
+    try:
+        return datetime.strptime(ts_str[:19], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+@flask_app.route("/api/strategy/feed")
+def api_strategy_feed():
+    """Recent Chev decisions (SKIP/REJECT/gate-rejects) — the 'Chev's thoughts' feed
+    and the raw drill-down table both read this, just rendered differently."""
+    hours    = float(flask_request.args.get("hours", 24))
+    limit    = int(flask_request.args.get("limit", 300))
+    decision = flask_request.args.get("decision", "").upper().strip()
+    symbol   = flask_request.args.get("symbol", "").upper().strip()
+    cutoff = datetime.now() - timedelta(hours=hours)
+
+    out = []
+    for r in _read_jsonl(_CHEV_DECISIONS_LOG, max_lines=8000):
+        ts = _parse_dt(r.get("ts", ""))
+        if ts is None or ts < cutoff:
+            continue
+        if decision and r.get("decision", "").upper() != decision:
+            continue
+        if symbol and r.get("symbol", "").upper() != symbol:
+            continue
+        out.append(r)
+    out = out[-limit:]
+    out.reverse()  # newest first
+    return jsonify({"count": len(out), "decisions": out})
+
+
+@flask_app.route("/api/strategy/funnel")
+def api_strategy_funnel():
+    """Pipeline attrition for the window: pre-escalation NOT_ESCALATED reasons (from
+    the Examiner's shadow log, which sees setups even before Chev does) + Chev's own
+    decision breakdown + how many actually opened. Answers 'where do things die.'"""
+    hours = float(flask_request.args.get("hours", 24))
+    cutoff_epoch = time.time() - hours * 3600
+    cutoff_dt    = datetime.now() - timedelta(hours=hours)
+
+    not_esc = Counter()
+    for path in (labeller.OPEN_FILE, labeller.CLOSED_FILE):
+        for r in _read_jsonl(path, max_lines=20000):
+            if r.get("chev_decision") != "NOT_ESCALATED":
+                continue
+            ts_epoch = r.get("ts_epoch")
+            if ts_epoch is None or ts_epoch < cutoff_epoch:
+                continue
+            not_esc[r.get("chev_reason") or "unknown"] += 1
+
+    dec_counts = Counter()
+    for r in _read_jsonl(_CHEV_DECISIONS_LOG, max_lines=8000):
+        ts = _parse_dt(r.get("ts", ""))
+        if ts is None or ts < cutoff_dt:
+            continue
+        dec_counts[r.get("decision") or "unknown"] += 1
+
+    opened = 0
+    for t in _load_journal():
+        ts = _parse_dt(t.get("open_ts") or t.get("ts") or "")
+        if ts and ts >= cutoff_dt:
+            opened += 1
+    for t in open_trades:
+        ts = _parse_dt(t.get("open_ts") or "")
+        if ts and ts >= cutoff_dt:
+            opened += 1
+
+    return jsonify({
+        "hours":              hours,
+        "not_escalated":      dict(not_esc),
+        "not_escalated_total": sum(not_esc.values()),
+        "decisions":          dict(dec_counts),
+        "escalated_total":    sum(dec_counts.values()) + opened,
+        "opened":             opened,
+    })
+
+
+@flask_app.route("/api/strategy/performance")
+def api_strategy_performance():
+    """Scorecard numbers + equity curve + R-multiple distribution + grade/tag win rates,
+    all from chev_journal.json (closed trades) — the same file the Sheet exports from."""
+    journal = _load_journal()
+    closed  = [t for t in journal if t.get("outcome") in ("WIN", "LOSS")]
+    wins    = [t for t in closed if t["outcome"] == "WIN"]
+    losses  = [t for t in closed if t["outcome"] == "LOSS"]
+
+    total_pnl  = sum(float(t.get("pnl", 0) or 0) for t in closed)
+    gross_win  = sum(float(t.get("pnl", 0) or 0) for t in wins)
+    gross_loss = abs(sum(float(t.get("pnl", 0) or 0) for t in losses))
+    win_rate      = (len(wins) / len(closed) * 100) if closed else 0
+    profit_factor = (gross_win / gross_loss) if gross_loss > 0 else None
+    expectancy    = (total_pnl / len(closed)) if closed else 0
+
+    # PHASE 25: one point per 4h bucket boundary across the account's full history (was
+    # one point per trade) -- value is the running balance AS OF that boundary. A bucket
+    # with no new close simply repeats the last known balance, which is what produces the
+    # flat segments between trades "for free" (as real, honest data points, not a special
+    # step-interpolation rendering mode the frontend would have to opt into).
+    EQUITY_BUCKET_HOURS = 4
+
+    def _eq_bucket_start(dt):
+        floored_hour = (dt.hour // EQUITY_BUCKET_HOURS) * EQUITY_BUCKET_HOURS
+        return dt.replace(hour=floored_hour, minute=0, second=0, microsecond=0)
+
+    equity_curve = []
+    planned_rrs  = []
+    running = 0.0
+    _bucket_end_balance = {}
+    _first_bucket = _last_bucket = None
+    for t in sorted(closed, key=lambda x: x.get("ts", "")):
+        pnl = float(t.get("pnl", 0) or 0)
+        running += pnl
+        ts = _parse_dt(t.get("ts"))
+        if ts is not None:
+            bkt = _eq_bucket_start(ts)
+            _bucket_end_balance[bkt] = round(running, 2)
+            if _first_bucket is None or bkt < _first_bucket:
+                _first_bucket = bkt
+            if _last_bucket is None or bkt > _last_bucket:
+                _last_bucket = bkt
+        # Dexter's ACTUAL planned R:R (same cost-adjusted formula risk_gauntlet gates on),
+        # not a realized-outcome approximation — journal doesn't store trade_type on
+        # closed entries yet, so this defaults to "day" for the funding-cost term
+        # (crypto swing only, a small effect either way).
+        try:
+            rr = risk_gauntlet.compute_planned_rr(
+                float(t.get("entry") or 0), float(t.get("sl") or 0), float(t.get("tp") or 0),
+                t.get("asset_type") or "crypto", trade_type="day"
+            )
+            if rr is not None:
+                planned_rrs.append(round(rr, 3))
+        except Exception:
+            pass
+
+    if _first_bucket is not None:
+        _now_bucket = _eq_bucket_start(datetime.now(timezone.utc).replace(tzinfo=None))
+        _last_bucket = max(_last_bucket, _now_bucket)
+        last_balance = 0.0
+        bkt = _first_bucket
+        while bkt <= _last_bucket:
+            if bkt in _bucket_end_balance:
+                last_balance = _bucket_end_balance[bkt]
+            equity_curve.append({
+                "t": int(bkt.replace(tzinfo=timezone.utc).timestamp()),
+                "cum_pnl": last_balance,
+            })
+            bkt = bkt + timedelta(hours=EQUITY_BUCKET_HOURS)
+
+    grade_stats = {}
+    for t in closed:
+        g = (t.get("setup_grade") or "").strip() or "ungraded"
+        gs = grade_stats.setdefault(g, {"n": 0, "wins": 0})
+        gs["n"] += 1
+        if t["outcome"] == "WIN":
+            gs["wins"] += 1
+    for gs in grade_stats.values():
+        gs["win_rate"] = round(gs["wins"] / gs["n"] * 100, 1) if gs["n"] else 0
+
+    # Combo win rates — real sample sizes are thin right now (see compute_combo_win_rates
+    # docstring); returned as-is, dashboard is responsible for graying out low-n combos.
+    combo_stats = risk_gauntlet.compute_combo_win_rates(journal)
+
+    return jsonify({
+        "total_closed":  len(closed),
+        "wins":          len(wins),
+        "losses":        len(losses),
+        "win_rate":      round(win_rate, 1),
+        "profit_factor": round(profit_factor, 2) if profit_factor is not None else None,
+        "expectancy":    round(expectancy, 2),
+        "total_pnl":     round(total_pnl, 2),
+        "equity_curve":  equity_curve,
+        "planned_rrs":   planned_rrs,
+        "grade_stats":   grade_stats,
+        "tag_stats":     risk_gauntlet.compute_tag_win_rates(journal),
+        "combo_stats":   combo_stats,
+    })
+
+
+# PHASE 7B-1: read-only counterfactual endpoint. GET-only, mutates nothing — computes from
+# labels_closed.jsonl/labels_open.jsonl/chev_decisions.jsonl via counterfactual_report's
+# shared build_counterfactual() (the SAME function the .txt report uses, so the phone always
+# matches the file) and serves JSON. Never touches Chev, chev_journal.json, Sheets, or
+# Firebase. A module-level cooldown cache avoids re-parsing the growing jsonl files on every
+# phone poll; ?force=1 bypasses the cache but is itself rate-limited to once per 30s so a
+# refresh-spamming client can't defeat the cache's whole purpose.
+COUNTERFACTUAL_CACHE_SECS = 300
+_counterfactual_cache = {"ts": 0.0, "payload": None}
+_counterfactual_last_force_ts = 0.0
+
+@flask_app.route("/api/strategy/counterfactual")
+def api_strategy_counterfactual():
+    """Read-only Examiner counterfactual summary (PHASE 7B-1) — see counterfactual_report.py
+    for the full firewalled discovery behind this. GET-only; computes and serves, writes
+    nothing, calls nothing (no Chev, no journal, no Sheets, no Firebase)."""
+    global _counterfactual_last_force_ts
+    now = time.time()
+    force = flask_request.args.get("force") == "1"
+    if force and (now - _counterfactual_last_force_ts) < 30:
+        force = False  # rate-limit force-refresh so it can't defeat the cache
+    cache_age = now - _counterfactual_cache["ts"]
+
+    if force or _counterfactual_cache["payload"] is None or cache_age >= COUNTERFACTUAL_CACHE_SECS:
+        data = counterfactual_report.build_counterfactual()
+        _counterfactual_cache["ts"] = now
+        _counterfactual_cache["payload"] = data
+        if force:
+            _counterfactual_last_force_ts = now
+        cache_age = 0.0
+
+    data = _counterfactual_cache["payload"]
+    # Public schema only — strip build_counterfactual()'s "_"-prefixed internal fields
+    # (raw winner/loser record dicts etc., used by the .txt renderer) before serving.
+    public_buckets = [
+        {k: b[k] for k in ("key", "label", "kind", "n", "resolved", "shadow_wr", "avg_r",
+                            "total_r", "verdict_split")}
+        for b in data["buckets"]
+    ]
+    return jsonify({
+        "generated_at":    data["generated_at"],
+        "baseline_ts":     data["baseline_ts"],
+        "cache_age_secs":  round(cache_age, 1),
+        "coverage":        data["coverage"],
+        "headline":        data["headline"],
+        "buckets":         public_buckets,
+        "shadow_tags":     data["shadow_tags"],
+        "shadow_combos":   data["shadow_combos"],
+        "resolved_items":  data["resolved_items"],
+        "weekly":          data["weekly"],
+    })
+
+
+@flask_app.route("/api/strategy/heatmap")
+def api_strategy_heatmap():
+    """Setup volume by day-of-week x 4-hour block (UTC), from the Examiner's shadow log
+    (every setup Dexter evaluates gets a dow/hour_utc stamp, escalated or not) — answers
+    'what does weekend vs weekday, or session, actually look like.'
+    dow follows Python's date.weekday(): 0=Monday .. 6=Sunday.
+    PHASE 25: 6 four-hour blocks (00-04, 04-08, ... 20-24) instead of 24 hour columns --
+    hour_utc // 4 is the only change; the stored per-record hour_utc field is untouched,
+    this route is the one place the hour math is grouped."""
+    days = float(flask_request.args.get("days", 14))
+    cutoff_epoch = time.time() - days * 86400
+    grid = [[0] * 6 for _ in range(7)]
+    for path in (labeller.OPEN_FILE, labeller.CLOSED_FILE):
+        for r in _read_jsonl(path, max_lines=20000):
+            ts_epoch = r.get("ts_epoch")
+            if ts_epoch is None or ts_epoch < cutoff_epoch:
+                continue
+            dow, hour = r.get("dow"), r.get("hour_utc")
+            if dow is None or hour is None:
+                continue
+            try:
+                grid[int(dow)][int(hour) // 4] += 1
+            except (IndexError, ValueError, TypeError):
+                continue
+    return jsonify({"days": days, "grid": grid, "block_hours": 4})
+
+
+# PHASE 13: read-only daily aggregates for the "System Over Time" charts (R:R pressure,
+# threshold-vs-flow, stop-distance reality) plus annotation markers built from
+# system_state.jsonl (PHASE 10). GET-only, computes and serves, writes nothing. 300s
+# module-level cache, same pattern as PHASE 7B-1's counterfactual cache -- keyed on `days`
+# so switching the window doesn't serve a stale window's cache.
+TIMESERIES_CACHE_SECS = 300
+_timeseries_cache = {"ts": 0.0, "days": None, "bucket_hours": None, "payload": None}
+
+@flask_app.route("/api/strategy/timeseries")
+def api_strategy_timeseries():
+    days = int(float(flask_request.args.get("days", 30)))
+    # PHASE 25: bucket granularity for the X axis -- 4h (default) or 24h (daily, the old
+    # behavior). Restricted to values that divide 24 evenly so a simple floor-division
+    # always lands on a clean boundary (00/04/08/12/16/20 for 4h; just 00 for 24h).
+    bucket_hours = int(float(flask_request.args.get("bucket_hours", 4)))
+    if bucket_hours not in (4, 24):
+        bucket_hours = 4
+    now = time.time()
+    if (_timeseries_cache["payload"] is not None and _timeseries_cache["days"] == days
+            and _timeseries_cache["bucket_hours"] == bucket_hours
+            and (now - _timeseries_cache["ts"]) < TIMESERIES_CACHE_SECS):
+        payload = dict(_timeseries_cache["payload"])
+        payload["cache_age_secs"] = round(now - _timeseries_cache["ts"], 1)
+        return jsonify(payload)
+
+    cutoff_dt = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    all_decisions = _read_jsonl(_CHEV_DECISIONS_LOG, max_lines=20000)
+
+    # Earliest timestamp anywhere in the log carrying a PHASE 11 structured field -- NOT
+    # windowed by `days`, since this is "when did structured data begin at all," used by
+    # the frontend to render "collecting data since <date>" instead of empty axes. If
+    # Dexter hasn't been restarted since PHASE 11 landed, every entry's new fields are
+    # still absent and this stays None -- that is the correct, honest answer, not a bug.
+    earliest_structured = None
+    for r in all_decisions:
+        if not any(isinstance(r.get(f), (int, float))
+                   for f in ("planned_rr", "ev_advisory_rr", "enforced_rr_floor", "stop_pct")):
+            continue
+        ts = _parse_dt(r.get("ts"))
+        if ts is not None and (earliest_structured is None or ts < earliest_structured):
+            earliest_structured = ts
+
+    def _median(vals):
+        if not vals:
+            return None
+        s = sorted(vals)
+        n = len(s)
+        return s[n // 2] if n % 2 else round((s[n // 2 - 1] + s[n // 2]) / 2, 4)
+
+    def _bucket_start(dt):
+        floored_hour = (dt.hour // bucket_hours) * bucket_hours
+        return dt.replace(hour=floored_hour, minute=0, second=0, microsecond=0)
+
+    def _bucket_epoch(bucket_dt):
+        return int(bucket_dt.replace(tzinfo=timezone.utc).timestamp())
+
+    by_bucket = {}
+    for r in all_decisions:
+        ts = _parse_dt(r.get("ts"))
+        if ts is None or ts < cutoff_dt:
+            continue
+        bkt = _bucket_start(ts)
+        d = by_bucket.setdefault(bkt, {
+            "enforced_rr_floor": [], "ev_advisory_rr": [], "planned_rr": [],
+            "stop_pct": [], "escalations": 0, "posts": 0,
+        })
+        d["escalations"] += 1
+        decision = r.get("decision") or ""
+        if decision == "POST":
+            d["posts"] += 1
+        for fld in ("enforced_rr_floor", "ev_advisory_rr", "planned_rr"):
+            v = r.get(fld)
+            if isinstance(v, (int, float)):
+                d[fld].append(v)
+        sp = r.get("stop_pct")
+        if isinstance(sp, (int, float)) and (decision == "POST" or decision.endswith("REJECT")):
+            d["stop_pct"].append(sp)
+
+    # PHASE 25: bucket key is now the bucket's start EPOCH (numeric UNIX seconds) instead
+    # of a day-string -- LightweightCharts' "business day" string mode can only represent
+    # a whole calendar day, so sub-day granularity (4h buckets) requires real timestamps
+    # (numeric time mode) on the frontend. `label` carries the same info in human form for
+    # tooltips, so nothing that used to read a date string loses information.
+    rr_pressure, flow, stop_reality = [], [], []
+    for bkt in sorted(by_bucket.keys()):
+        d = by_bucket[bkt]
+        t, label = _bucket_epoch(bkt), bkt.strftime("%Y-%m-%d %H:%M")
+        rr_pressure.append({
+            "t": t, "label": label,
+            "enforced_floor":  _median(d["enforced_rr_floor"]),
+            "ev_advisory":     _median(d["ev_advisory_rr"]),
+            "proposed_median": _median(d["planned_rr"]),
+            "proposed_min":    round(min(d["planned_rr"]), 3) if d["planned_rr"] else None,
+            "proposed_max":    round(max(d["planned_rr"]), 3) if d["planned_rr"] else None,
+        })
+        flow.append({"t": t, "label": label, "escalations": d["escalations"], "posts": d["posts"]})
+        sp_sorted = sorted(d["stop_pct"])
+        stop_reality.append({
+            "t": t, "label": label,
+            "median_stop_pct": _median(sp_sorted),
+            "p10": (sp_sorted[max(0, int(len(sp_sorted) * 0.1) - 1)] if sp_sorted else None),
+            "p90": (sp_sorted[min(len(sp_sorted) - 1, int(len(sp_sorted) * 0.9))] if sp_sorted else None),
+            "n":   len(sp_sorted),
+        })
+
+    # Threshold step-line + annotation markers, both from system_state.jsonl (PHASE 10).
+    # Sparse, event-driven -- reported at their own exact timestamp (never bucket-aligned;
+    # they're precise flight-recorder events, not aggregated counts) -- the frontend
+    # forward-fills the step line between points and buckets an annotation into whichever
+    # chart bucket its own epoch falls inside; we only ever report the snapshots that
+    # actually exist, no synthesis.
+    threshold_points = []
+    annotations = []
+    for r in _read_jsonl(SYSTEM_STATE_FILE, max_lines=5000):
+        ts = _parse_dt(r.get("ts"))
+        if ts is None or ts < cutoff_dt:
+            continue
+        t_epoch = int(ts.replace(tzinfo=timezone.utc).timestamp())
+        try:
+            score = r["snapshot"]["escalation_thresholds"]["active"]["crypto"]["score"]
+            threshold_points.append({"ts": r.get("ts"), "t": t_epoch, "score": score})
+        except Exception:
+            pass
+        changed = r.get("changed")
+        if changed:
+            summary = "; ".join(f"{k}: {v.get('old')}→{v.get('new')}" for k, v in changed.items())
+        else:
+            summary = r.get("event") or "event"
+        annotations.append({"ts": r.get("ts"), "t": t_epoch, "event": r.get("event"), "summary": summary})
+
+    # Crypto day-trade round-trip cost floor, as a stop_pct-comparable percentage (PHASE 2's
+    # COST GATE concept) -- a stop tighter than this can't clear costs even on a full winner.
+    crypto_day_cost_floor_pct = round(
+        2 * (risk_gauntlet.FEE_SIDE["crypto"] + risk_gauntlet.SLIPPAGE_SIDE["crypto"]) * 100, 3
+    )
+
+    payload = {
+        "days":                     days,
+        "bucket_hours":             bucket_hours,
+        "earliest_structured_ts": (earliest_structured.strftime("%Y-%m-%d %H:%M:%S")
+                                    if earliest_structured else None),
+        "rr_pressure":              rr_pressure,
+        "flow":                     flow,
+        "threshold":                threshold_points,
+        "stop_reality":             stop_reality,
+        "crypto_day_cost_floor_pct": crypto_day_cost_floor_pct,
+        "annotations":              annotations,
+        "cache_age_secs":           0.0,
+    }
+    _timeseries_cache["ts"] = now
+    _timeseries_cache["days"] = days
+    _timeseries_cache["bucket_hours"] = bucket_hours
+    _timeseries_cache["payload"] = payload
+    return jsonify(payload)
+
+
+# PHASE 16: read-only tag registry -- friendly names/tooltips/definitions for every
+# confluence code the system can emit, across all three tag vocabularies (see TAG_REGISTRY's
+# own comment block above CONFLUENCE_SCORES for the full explanation). `points` is looked
+# up fresh from CONFLUENCE_SCORES on every serve -- never duplicated into TAG_REGISTRY
+# itself, so retuning a weight in code is automatically reflected here with no second edit.
+# GET-only, computes and serves, writes nothing. 300s module-level cache (tag meanings and
+# weights change only when Claude edits this file, never at runtime -- a long cache is safe).
+TAG_REGISTRY_CACHE_SECS = 300
+_tag_registry_cache = {"ts": 0.0, "payload": None}
+
+@flask_app.route("/api/tag_registry")
+def api_tag_registry():
+    now = time.time()
+    if _tag_registry_cache["payload"] is not None and (now - _tag_registry_cache["ts"]) < TAG_REGISTRY_CACHE_SECS:
+        payload = dict(_tag_registry_cache["payload"])
+        payload["cache_age_secs"] = round(now - _tag_registry_cache["ts"], 1)
+        return jsonify(payload)
+
+    tags = {
+        code: {
+            "code":       code,
+            "name":       meta["name"],
+            "tooltip":    meta["tooltip"],
+            "definition": meta["definition"],
+            "how":        meta["how"],
+            "points":     CONFLUENCE_SCORES.get(code),
+        }
+        for code, meta in TAG_REGISTRY.items()
+    }
+    payload = {"tags": tags, "cache_age_secs": 0.0}
+    _tag_registry_cache["ts"] = now
+    _tag_registry_cache["payload"] = payload
+    return jsonify(payload)
+
+
+# PHASE 18: read-only per-tag weekly win-rate history -- the Indicator Scoreboard's
+# sparkline column. Computed from chev_journal.json's closed trades using the SAME `tags`
+# field compute_tag_win_rates() already reads (never re-derived, never touches that
+# function or its call sites). GET-only, writes nothing. 300s cache, keyed on `all` since
+# the two windows (current-era vs full-history) serve genuinely different payloads.
+TAG_TRENDS_CACHE_SECS = 300
+_tag_trends_cache = {"ts": 0.0, "all": None, "payload": None}
+
+def _week_start_utc(dt):
+    """Monday 00:00:00 UTC of the week containing dt -- same convention
+    counterfactual_report.py's build_weekly_regret() uses, so 'week' means the same thing
+    everywhere on the dashboard. Not imported from there (that module's own internal
+    helper) -- reimplemented here since it's a one-line calculation, not machinery."""
+    monday = dt - timedelta(days=dt.weekday())
+    return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+
+@flask_app.route("/api/strategy/tag_trends")
+def api_strategy_tag_trends():
+    all_history = flask_request.args.get("all") == "1"
+    now = time.time()
+    if (_tag_trends_cache["payload"] is not None and _tag_trends_cache["all"] == all_history
+            and (now - _tag_trends_cache["ts"]) < TAG_TRENDS_CACHE_SECS):
+        payload = dict(_tag_trends_cache["payload"])
+        payload["cache_age_secs"] = round(now - _tag_trends_cache["ts"], 1)
+        return jsonify(payload)
+
+    # Era boundary: pre-baseline trades were earned under different rules. SYSTEM_ERA
+    # carries its own start date as a trailing YYYY-MM-DD (e.g. "explor_v2_2026-07-06") --
+    # parsed here rather than requiring a per-trade `system_era` field, since that field is
+    # only stamped on trades closed AFTER it was introduced (most of the real journal right
+    # now predates it entirely). `?all=1` bypasses this filter for the full history.
+    era_start = None
+    _m = re.search(r"(\d{4}-\d{2}-\d{2})", SYSTEM_ERA)
+    if _m:
+        try:
+            era_start = datetime.strptime(_m.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except Exception:
+            era_start = None
+
+    journal = _load_journal()
+    closed = [t for t in journal if t.get("outcome") in ("WIN", "LOSS")]
+
+    buckets = {}   # tag -> week_start(datetime) -> {"n": int, "wins": int}
+    for t in closed:
+        ts = _parse_dt(t.get("ts"))
+        if ts is None:
+            continue
+        ts = ts.replace(tzinfo=timezone.utc)   # journal "ts" is always UTC (see every _log_* call site)
+        if not all_history and era_start is not None and ts < era_start:
+            continue
+        week = _week_start_utc(ts)
+        raw = (t.get("tags") or "").replace(" manual-close", "")
+        for tag in set(tok.strip().lower() for tok in raw.split(",") if tok.strip()):
+            wk_bucket = buckets.setdefault(tag, {}).setdefault(week, {"n": 0, "wins": 0})
+            wk_bucket["n"] += 1
+            if t.get("outcome") == "WIN":
+                wk_bucket["wins"] += 1
+
+    # Weeks with n=0 never get a bucket at all (nothing to omit-after-the-fact) -- honest
+    # sparse history, not zero-filled, per spec.
+    tags_out = {
+        tag: [
+            {"week": wk.strftime("%Y-%m-%d"), "wr": round(b["wins"] / b["n"], 4), "n": b["n"]}
+            for wk, b in sorted(weeks.items())
+        ]
+        for tag, weeks in buckets.items()
+    }
+
+    payload = {
+        "all":   all_history,
+        "since": (era_start.strftime("%Y-%m-%d") if (era_start and not all_history) else None),
+        "tags":  tags_out,
+        "cache_age_secs": 0.0,
+    }
+    _tag_trends_cache["ts"] = now
+    _tag_trends_cache["all"] = all_history
+    _tag_trends_cache["payload"] = payload
+    return jsonify(payload)
+
+
+@flask_app.route("/api/strategy/mode")
+def api_strategy_mode():
+    """Current EXPLORATION_MODE status + the actual active NORMAL/EXPLORATION numbers,
+    so the dashboard can show which ruleset is live without opening a file."""
+    return jsonify({
+        "exploration_mode": EXPLORATION_MODE,
+        "profile": risk_gauntlet.get_active_profile(EXPLORATION_MODE),
+    })
+
+
+@flask_app.route("/api/strategy/toggle_exploration", methods=["POST"])
+@require_key
+def api_strategy_toggle_exploration():
+    """Flips the live EXPLORATION_MODE flag in this running process — takes effect on the
+    very next scan/gauntlet call, no restart needed. This is a real, immediate change to
+    the account's risk posture (ATR floor, cost gate, R:R, heat/correlation/concurrency
+    caps all move with it — see THE BIG PICTURE / EXPLORATION MODE LINKAGE in handoff.txt),
+    not a cosmetic toggle. The dashboard is expected to confirm with the user before
+    calling this; nothing server-side gates it beyond that today. Parameter VALUES
+    (the NORMAL/EXPLORATION numbers themselves) are not editable here or anywhere over
+    HTTP — changing those still requires editing risk_gauntlet.py directly. That's
+    deliberate: this endpoint only flips WHICH already-reviewed profile is active.
+    """
+    global EXPLORATION_MODE
+    _old_mode = EXPLORATION_MODE
+    EXPLORATION_MODE = not EXPLORATION_MODE
+    print(f"[{datetime.now()}] EXPLORATION_MODE toggled via dashboard -> {EXPLORATION_MODE}")
+    record_system_state("toggle", "web",
+                        changed={"exploration_mode": {"old": _old_mode, "new": EXPLORATION_MODE}})
+    return jsonify({
+        "exploration_mode": EXPLORATION_MODE,
+        "profile": risk_gauntlet.get_active_profile(EXPLORATION_MODE),
+    })
 
 
 @flask_app.route("/api/jane/trades")
@@ -1024,6 +1766,66 @@ def api_analysis_engine():
         return jsonify({"error": str(e)}), 500
 
 
+@flask_app.route("/api/analysis/hypothetical", methods=["POST"])
+@require_key
+def api_analysis_hypothetical():
+    """Fire a real, one-off question at Chev: 'if you had to take this, where would you enter?' —
+    even for a setup he'd pass on live. Off-the-record: not gated, not logged, not posted anywhere.
+
+    Both external calls this makes (candle fetch, Chev's LLM call) are run through a bounded
+    .result(timeout=...) rather than called directly, so a hung upstream API (yfinance has no
+    built-in timeout, and Chev's call can queue behind the live scanner's shared rate-limit lock)
+    can't leave this request — and the browser waiting on it — hanging forever. The underlying
+    thread is abandoned (not killed) on timeout; it doesn't touch any state the live loop depends on.
+    """
+    data   = flask_request.get_json(force=True, silent=True) or {}
+    symbol = str(data.get("symbol", "")).upper()
+    tf     = data.get("tf", "1h")
+    if not symbol:
+        return jsonify({"error": "Missing symbol"}), 400
+    from concurrent.futures import TimeoutError as _FutTimeout
+    ex = ThreadPoolExecutor(max_workers=2)
+    try:
+        atype = _an_asset_type(symbol)
+        try:
+            result = ex.submit(scan_pair_tf, symbol, atype, tf).result(timeout=30)
+        except _FutTimeout:
+            return jsonify({"error": "Timed out fetching market data for this symbol (30s) — the candle source may be stuck, try again"}), 200
+        if not result or not result.get("count"):
+            return jsonify({"error": "No confluence detected — nothing to ask Chev about"}), 200
+
+        balance = get_balance(dashboard_ws)
+        try:
+            chev_response, _ = ex.submit(
+                ask_chev_to_judge, result, balance, dashboard_ws, timeout=120, force_take=True
+            ).result(timeout=200)
+        except _FutTimeout:
+            return jsonify({"error": "Chev didn't respond within 200s (he may be mid-conversation with the live scanner) — try again shortly"}), 200
+        parsed = parse_chev_reply(chev_response)
+        if not parsed or not parsed.get("trade"):
+            return jsonify({"error": "Chev didn't return usable numbers — try again"}), 200
+
+        td          = parsed["trade"]
+        conf_prices = _build_confluence_prices(td)
+        planned_rr  = risk_gauntlet.compute_planned_rr(td["entry"], td["sl"], td["tp"], atype, td.get("trade_type", "day"))
+
+        return jsonify({
+            "symbol": symbol, "tf": tf, "direction": td["direction"],
+            "entry": td["entry"], "sl": td["sl"], "tp": td["tp"],
+            "tags": td["tags"], "trade_type": td["trade_type"],
+            "confluence_prices": conf_prices, "planned_rr": planned_rr,
+            "would_take": parsed.get("would_take"),
+            "reasoning": td.get("reasoning"),
+            "structure_4h": parsed.get("structure_4h"),
+            "invalidation": parsed.get("invalidation"),
+        })
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        ex.shutdown(wait=False)
+
+
 def run_web_server():
     try:
         flask_app.run(host="0.0.0.0", port=8080, threaded=True, use_reloader=False)
@@ -1122,6 +1924,15 @@ PLAYBOOK_PATHS     = {
 MODEL_ID = "chev-chelios"
 
 TRADE_TYPE_EXPIRY_HOURS = {"scalp": 2, "day": 6, "swing": 48}
+
+# Hallucination guard (PHASE 6): a POST whose entry/sl/tp can't belong to this chart at all
+# (a training-era price, or the Chev Prompt's own format example leaking through) -- caught
+# right after parsing, before GEOMETRY REVIEW does real math on numbers that were never real.
+# 0.03 is deliberately generous: the DISTANCE pre-gate already caps a legitimate pending
+# entry at 1.5% (exploration) from the confluence zone, so 3% is well beyond any valid
+# MODE-B pending and only catches numbers that plainly don't belong to this asset right now.
+HALLUCINATION_MAX_ENTRY_DIST = 0.03
+HALLUCINATION_MAX_SLTP_DIST  = 0.15
 MAX_LEVERAGE_BY_TYPE = {
     "crypto": {"scalp": 10, "day": 10, "swing": 5},
     "forex": {"scalp": 5, "day": 5, "swing": 2},
@@ -1183,6 +1994,577 @@ CONFLUENCE_SCORES = {
     # Market / price structure (higher timeframe context)
     "ms_1d": 5, "ms_4h": 4, "ms_1h": 3, "ms_30m": 2, "ms_15m": 1, "ms": 3,
 }
+
+# =============================================================================
+# PHASE 16: TAG REGISTRY — one entry per confluence code the system can emit, across
+# all THREE vocabularies that actually render on the Strategy dashboard:
+#   1. CONFLUENCE_SCORES above (Dexter's own weights table).
+#   2. Chev's free-typed `tags=` field on POSTed trades (chev_journal.json) — a superset
+#      of #1 plus some codes Chev has typed that were never in the weights table at all
+#      (spelling drift, or shorthand with no formal scoring weight).
+#   3. labeller.py's normalize_reasons() tokens (REASON_MAP_ORDERED + sr_multi/sr_single +
+#      pattern_* + "other") — used only by the Shadow Tag/Combo leaderboards (PHASE 7B-3),
+#      a differently-named vocabulary (percentage-based Fib levels, no-underscore EMA
+#      periods, etc.) that mostly does NOT string-match the weights table.
+#
+# `points` is deliberately NOT a field on these entries — /api/tag_registry looks it up
+# fresh from CONFLUENCE_SCORES at serve time (the one and only source of truth for score
+# contribution; retuning a weight in code is automatically reflected on the site, nothing
+# to keep in sync by hand). A code with no CONFLUENCE_SCORES entry serves `points: null` —
+# true for every #3-only shadow token except gp/rsi_ob/rsi_os (which DO string-match), and
+# for a handful of things Chev has typed that never had a formal weight (see below).
+#
+# A few codes are honest best-guesses, not confirmed anywhere in code — flagged in their
+# own tooltip text rather than silently asserted: `hd`/`rd` (Chev's own journal shorthand,
+# never defined anywhere; inferred from labeller.py's own hidden/regular divergence
+# distinction) and `tp_balance_extreme` (no definition found anywhere in the codebase).
+# =============================================================================
+TAG_REGISTRY = {
+    # ── Support / Resistance ────────────────────────────────────────────────
+    "sr_4h": {"name": "Support/Resistance (4H)",
+              "tooltip": "A support or resistance level identified on the 4-hour chart.",
+              "definition": "A price area where the market has repeatedly reversed or paused in the past, so traders expect buying or selling pressure to reappear there. The 4H version carries the most weight of any timeframe because a level respected on a slower chart tends to hold longer.",
+              "how": "Counted from swing highs/lows that cluster near the same price on the 4H candles; more touches at the same level score higher."},
+    "sr_1h":  {"name": "Support/Resistance (1H)",
+               "tooltip": "A support or resistance level identified on the 1-hour chart.",
+               "definition": "Same concept as the 4H version — a price area where the market has previously reversed or paused — but read from the 1-hour chart, so it reacts faster and carries less weight.",
+               "how": "Counted from swing highs/lows that cluster near the same price on the 1H candles."},
+    "sr_30m": {"name": "Support/Resistance (30M)",
+               "tooltip": "A support or resistance level identified on the 30-minute chart.",
+               "definition": "Same concept as the 4H/1H versions, read from the 30-minute chart — a faster, lower-weight structural level.",
+               "how": "Counted from swing highs/lows that cluster near the same price on the 30M candles."},
+    "sr_15m": {"name": "Support/Resistance (15M)",
+               "tooltip": "A support or resistance level identified on the 15-minute chart.",
+               "definition": "Same concept as the other SR tags, read from the 15-minute chart — the fastest, lowest-weight structural level Dexter scores.",
+               "how": "Counted from swing highs/lows that cluster near the same price on the 15M candles."},
+    "sr":     {"name": "Support/Resistance",
+               "tooltip": "A support or resistance level without a specific timeframe recorded.",
+               "definition": "The general support/resistance concept — a price area where the market has previously reversed — logged without a timeframe tag attached.",
+               "how": "Same touch-clustering logic as the timeframe-specific SR tags, timeframe unspecified."},
+    "sr_multi":  {"name": "Support/Resistance (Multiple Touches)",
+                  "tooltip": "A support/resistance level price has touched 3 or more times.",
+                  "definition": "A level is more trustworthy the more times price has approached and reversed from it without breaking through. This tag marks a level with 3+ recorded touches — the strongest tier of the touch-count check used for the shadow (Examiner) leaderboards.",
+                  "how": "Read from Dexter's own reason text (e.g. \"Resistance(3x,3pt)\"); a touch count of 3 or more is classified sr_multi, below that is sr_single."},
+    "sr_single": {"name": "Support/Resistance (1-2 Touches)",
+                  "tooltip": "A support/resistance level price has touched only once or twice.",
+                  "definition": "The weaker tier of the touch-count check — a level with only 1-2 recorded touches so far, less proven than sr_multi but still a real structural reference.",
+                  "how": "Read from Dexter's own reason text (e.g. \"Support(2x,2pt)\"); a touch count below 3 is classified sr_single."},
+
+    # ── Fibonacci retracement — timeframe-based (weights table) ────────────
+    "fib_4h": {"name": "Fibonacci Retracement (4H)",
+               "tooltip": "Price sitting at a Fibonacci retracement level on the 4-hour chart.",
+               "definition": "Fibonacci retracement levels (50%, 61.8%, 65%, 78.6% of a recent swing) mark spots traders commonly watch for a bounce or rejection during a pullback. The 4H version is measured off the largest, slowest swing and carries the most weight.",
+               "how": "Computed from the highest-high/lowest-low swing on the 4H chart; price sitting within a small tolerance of one of the retracement prices scores this tag."},
+    "fib_1h": {"name": "Fibonacci Retracement (1H)",
+               "tooltip": "Price sitting at a Fibonacci retracement level on the 1-hour chart.",
+               "definition": "Same Fibonacci retracement concept as the 4H version, measured off the 1-hour swing — reacts faster, carries less weight.",
+               "how": "Computed from the swing high/low on the 1H chart; price near a retracement price scores this tag."},
+    "fib_30m": {"name": "Fibonacci Retracement (30M)",
+                "tooltip": "Price sitting at a Fibonacci retracement level on the 30-minute chart.",
+                "definition": "Same Fibonacci retracement concept, measured off the 30-minute swing.",
+                "how": "Computed from the swing high/low on the 30M chart; price near a retracement price scores this tag."},
+    "fib_15m": {"name": "Fibonacci Retracement (15M)",
+                "tooltip": "Price sitting at a Fibonacci retracement level on the 15-minute chart.",
+                "definition": "Same Fibonacci retracement concept, measured off the fastest swing Dexter scores.",
+                "how": "Computed from the swing high/low on the 15M chart; price near a retracement price scores this tag."},
+    "fib":    {"name": "Fibonacci Retracement",
+               "tooltip": "Price at a Fibonacci retracement level without a specific timeframe recorded.",
+               "definition": "The general Fibonacci retracement concept, logged without a timeframe tag attached.",
+               "how": "Same retracement-level logic as the timeframe-specific fib tags, timeframe unspecified."},
+    "fib_5m": {"name": "Fibonacci Retracement (5M)",
+               "tooltip": "Price at a Fibonacci retracement level on the 5-minute chart.",
+               "definition": "Same Fibonacci retracement concept, measured off the 5-minute swing. Not a formal Dexter weight — Chev has typed this in his own tags field, but the 5-minute timeframe isn't in Dexter's scored Fibonacci table.",
+               "how": "Same retracement-level logic as the other fib tags; 5M isn't one of the timeframes CONFLUENCE_SCORES assigns a point value to."},
+
+    # ── Fibonacci retracement — percentage-based (shadow-only vocabulary) ───
+    "fib_618":  {"name": "Fibonacci 61.8%",
+                 "tooltip": "Price at the 61.8% Fibonacci retracement level — the golden ratio.",
+                 "definition": "The 61.8% retracement is the most-watched Fibonacci level, often called the golden ratio. It marks the deep-pullback boundary of the Golden Pocket zone.",
+                 "how": "Computed as the swing high minus 61.8% of the swing's price range (or the mirrored calculation for a downswing)."},
+    "fib_50":   {"name": "Fibonacci 50%",
+                 "tooltip": "Price at the 50% retracement of a recent swing.",
+                 "definition": "The halfway point of a recent price swing — not a true Fibonacci ratio, but the level traders watch most often alongside the real Fibonacci levels.",
+                 "how": "Computed as the exact midpoint between the swing high and swing low."},
+    "fib_786":  {"name": "Fibonacci 78.6%",
+                 "tooltip": "Price at the 78.6% Fibonacci retracement level.",
+                 "definition": "A deep retracement level — a pullback this far back into the prior swing is considered a late, high-risk entry zone by most Fibonacci traders.",
+                 "how": "Computed as the swing high minus 78.6% of the swing's price range (or the mirrored calculation for a downswing)."},
+    "fib_382":  {"name": "Fibonacci 38.2%",
+                 "tooltip": "Price at the 38.2% Fibonacci retracement level.",
+                 "definition": "A shallow retracement level — a pullback this small suggests the prior trend is still strong.",
+                 "how": "Computed as the swing high minus 38.2% of the swing's price range (or the mirrored calculation for a downswing)."},
+    "fib_236":  {"name": "Fibonacci 23.6%",
+                 "tooltip": "Price at the 23.6% Fibonacci retracement level.",
+                 "definition": "The shallowest standard Fibonacci retracement level — a very minor pullback.",
+                 "how": "Computed as the swing high minus 23.6% of the swing's price range (or the mirrored calculation for a downswing)."},
+    "fib_other": {"name": "Fibonacci (Other Level)",
+                  "tooltip": "Price at a Fibonacci-family level not covered by the standard buckets.",
+                  "definition": "A catch-all for a Fibonacci-related reason string that didn't match one of the named percentage levels.",
+                  "how": "Assigned whenever Dexter's reason text contains \"Fib\" but doesn't match one of the specific percentage patterns."},
+
+    # ── Golden Pocket ─────────────────────────────────────────────────────
+    "gp": {"name": "Golden Pocket",
+           "tooltip": "Price sitting inside the Golden Pocket — the 50%-61.8% Fibonacci zone.",
+           "definition": "The Golden Pocket is the price band between the 50% and 61.8% Fibonacci retracement levels of a recent swing — widely considered the highest-probability reversal zone in Fibonacci trading. It is Dexter's single highest-weighted individual confluence tag.",
+           "how": "Flagged when the current price sits between the chart's computed 50% and 61.8% retracement prices (with a small tolerance either side)."},
+    "gp_sr_combo": {"name": "Golden Pocket + S/R Combo",
+                    "tooltip": "A Golden Pocket zone that also lines up with a support/resistance level.",
+                    "definition": "A Golden Pocket carries extra weight when it lands on top of an independent support/resistance level — two different tools agreeing on the same price is a stronger signal than either alone.",
+                    "how": "Flagged from Dexter's own \"GP*SR DEADLY COMBO\" reason text, emitted when a Golden Pocket zone and an SR level overlap."},
+
+    # ── RSI divergence — confirmed (weights table) ──────────────────────────
+    "rsi_4h": {"name": "RSI Divergence (4H, Confirmed)",
+               "tooltip": "A confirmed RSI divergence on the 4-hour chart.",
+               "definition": "RSI divergence is when price makes a new high/low but the RSI momentum indicator does not follow — a classic warning that the current move is losing strength. \"Confirmed\" means the divergence pattern has fully completed, not still forming. The 4H version carries the most weight.",
+               "how": "Compares price swing highs/lows against RSI swing highs/lows on the 4H chart; a completed mismatch (price higher, RSI lower, or vice versa) scores this tag."},
+    "rsi_1h": {"name": "RSI Divergence (1H, Confirmed)",
+               "tooltip": "A confirmed RSI divergence on the 1-hour chart.",
+               "definition": "Same confirmed RSI divergence concept as the 4H version, read from the 1-hour chart.",
+               "how": "Compares price swing highs/lows against RSI swing highs/lows on the 1H chart."},
+    "rsi_30m": {"name": "RSI Divergence (30M, Confirmed)",
+                "tooltip": "A confirmed RSI divergence on the 30-minute chart.",
+                "definition": "Same confirmed RSI divergence concept, read from the 30-minute chart.",
+                "how": "Compares price swing highs/lows against RSI swing highs/lows on the 30M chart."},
+    "rsi_15m": {"name": "RSI Divergence (15M, Confirmed)",
+                "tooltip": "A confirmed RSI divergence on the 15-minute chart.",
+                "definition": "Same confirmed RSI divergence concept, read from the 15-minute chart — the fastest RSI divergence Dexter scores.",
+                "how": "Compares price swing highs/lows against RSI swing highs/lows on the 15M chart."},
+    "rsi":    {"name": "RSI Divergence (Confirmed)",
+               "tooltip": "A confirmed RSI divergence without a specific timeframe recorded.",
+               "definition": "The general confirmed RSI divergence concept, logged without a timeframe tag attached.",
+               "how": "Same price-vs-RSI comparison as the timeframe-specific rsi tags, timeframe unspecified."},
+
+    # ── RSI divergence — forming / not yet confirmed (weights table) ───────
+    "rsi_form_4h": {"name": "RSI Divergence Forming (4H)",
+                    "tooltip": "An RSI divergence on the 4-hour chart that hasn't fully confirmed yet.",
+                    "definition": "The same price-vs-RSI mismatch as a confirmed divergence, but still developing — the final swing point hasn't closed yet, so it could still resolve either way. Scored lower than a confirmed divergence for that reason.",
+                    "how": "Same comparison logic as rsi_4h, but flagged while the most recent swing point is still active rather than finalized."},
+    "rsi_form_1h": {"name": "RSI Divergence Forming (1H)",
+                    "tooltip": "An RSI divergence on the 1-hour chart that hasn't fully confirmed yet.",
+                    "definition": "Same forming-divergence concept as the 4H version, read from the 1-hour chart.",
+                    "how": "Same comparison logic as rsi_1h, flagged while the most recent swing point is still developing."},
+    "rsi_form_30m": {"name": "RSI Divergence Forming (30M)",
+                     "tooltip": "An RSI divergence on the 30-minute chart that hasn't fully confirmed yet.",
+                     "definition": "Same forming-divergence concept, read from the 30-minute chart.",
+                     "how": "Same comparison logic as rsi_30m, flagged while the most recent swing point is still developing."},
+    "rsi_form_15m": {"name": "RSI Divergence Forming (15M)",
+                     "tooltip": "An RSI divergence on the 15-minute chart that hasn't fully confirmed yet.",
+                     "definition": "Same forming-divergence concept, read from the 15-minute chart.",
+                     "how": "Same comparison logic as rsi_15m, flagged while the most recent swing point is still developing."},
+    "rsi_form": {"name": "RSI Divergence Forming",
+                 "tooltip": "An RSI divergence without a specific timeframe recorded that hasn't fully confirmed yet.",
+                 "definition": "The general forming-divergence concept, logged without a timeframe tag attached.",
+                 "how": "Same comparison logic as the timeframe-specific rsi_form tags, timeframe unspecified."},
+
+    # ── RSI divergence — shadow vocabulary's own type distinction ──────────
+    "rsi_div": {"name": "RSI Divergence",
+                "tooltip": "A confirmed RSI divergence (shadow-log naming).",
+                "definition": "The same confirmed price-vs-RSI mismatch described under the timeframe-specific rsi tags, recorded under the Examiner's own generic \"Divergence\" reason text.",
+                "how": "Assigned whenever Dexter's reason text contains \"Divergence\"/\"divergence\" but isn't specifically flagged Hidden or Regular."},
+    "rsi_div_hidden": {"name": "Hidden Divergence",
+                       "tooltip": "A hidden RSI divergence — a continuation signal, not a reversal signal.",
+                       "definition": "Hidden divergence is the less-common counterpart to regular divergence: price makes a shallower high/low while RSI makes a deeper one, which technical traders read as the existing trend continuing rather than reversing.",
+                       "how": "Assigned from Dexter's own \"Hidden Bullish\"/\"Hidden Bearish\" reason text."},
+    "rsi_div_regular": {"name": "Regular Divergence",
+                        "tooltip": "A regular RSI divergence — the classic reversal-warning signal.",
+                        "definition": "The standard divergence pattern: price pushes to a new high/low that RSI does not confirm, a warning sign the current trend may be running out of momentum.",
+                        "how": "Assigned from Dexter's own \"Regular Bullish\"/\"Regular Bearish\" reason text."},
+    "rsi_div_forming": {"name": "RSI Divergence Forming (Shadow)",
+                        "tooltip": "An RSI divergence still developing, not yet confirmed (shadow-log naming).",
+                        "definition": "The same still-developing divergence concept described under rsi_form, recorded under the Examiner's own reason text for a pattern that hasn't finished forming.",
+                        "how": "Assigned from Dexter's own \"[WATCH - not yet confirmed]\" reason prefix."},
+
+    # ── RSI level signals (weights table) ───────────────────────────────────
+    "rsi_ob": {"name": "RSI Overbought",
+               "tooltip": "RSI has moved into overbought territory.",
+               "definition": "RSI (Relative Strength Index) above roughly 70 is considered overbought — the market has moved up quickly enough that a pause or pullback becomes more likely, though it isn't a guarantee.",
+               "how": "Flagged when RSI crosses above its overbought threshold on the relevant chart."},
+    "rsi_os": {"name": "RSI Oversold",
+               "tooltip": "RSI has moved into oversold territory.",
+               "definition": "RSI below roughly 30 is considered oversold — the market has moved down quickly enough that a bounce becomes more likely, though it isn't a guarantee.",
+               "how": "Flagged when RSI crosses below its oversold threshold on the relevant chart."},
+    "rsi_50":  {"name": "RSI at 50",
+                "tooltip": "RSI sitting at or crossing its 50 midline.",
+                "definition": "The RSI midline (50) separates bullish momentum (above) from bearish momentum (below) — a cross of this line is often read as an early momentum shift.",
+                "how": "Flagged when RSI is at or has recently crossed the 50 level."},
+    "rsi_50_cross": {"name": "RSI Crossed 50",
+                     "tooltip": "RSI has just crossed its 50 midline (shadow-log naming).",
+                     "definition": "The same RSI-midline concept as rsi_50, recorded under the Examiner's own \"RSI crossed 50\" reason text.",
+                     "how": "Assigned from Dexter's own \"RSI crossed 50\" reason text, with the bar count since the cross."},
+
+    # ── Journal shorthand for divergence type (Chev's own typing, no formal weight) ──
+    "hd": {"name": "Hidden Divergence (shorthand)",
+           "tooltip": "Best-guess reading: Chev's own shorthand for Hidden Divergence — not formally defined anywhere in code.",
+           "definition": "This exact code isn't produced by Dexter's scorer or defined anywhere in the codebase — it only appears in Chev's own free-typed tags field. Given the system elsewhere distinguishes Hidden vs Regular divergence (see rsi_div_hidden), \"hd\" is inferred to mean the same thing, abbreviated. Treat this inference as unconfirmed.",
+           "how": "Not computed by Dexter — this is a value Chev typed by hand."},
+    "rd": {"name": "Regular Divergence (shorthand)",
+           "tooltip": "Best-guess reading: Chev's own shorthand for Regular Divergence — not formally defined anywhere in code.",
+           "definition": "This exact code isn't produced by Dexter's scorer or defined anywhere in the codebase — it only appears in Chev's own free-typed tags field. Given the system elsewhere distinguishes Hidden vs Regular divergence (see rsi_div_regular), \"rd\" is inferred to mean the same thing, abbreviated. Treat this inference as unconfirmed.",
+           "how": "Not computed by Dexter — this is a value Chev typed by hand."},
+
+    # ── EMA (weights table, underscore form) ────────────────────────────────
+    "ema_55": {"name": "EMA 55",
+               "tooltip": "Price testing or crossing the 55-period Exponential Moving Average.",
+               "definition": "The 55-EMA is the slowest of Dexter's three tracked EMAs, used as the primary trend reference — price holding above or below it is read as a longer-term trend signal. It carries the most weight of the three EMA periods.",
+               "how": "Flagged when price is at, or has just crossed, the 55-period EMA on the relevant chart."},
+    "ema_21": {"name": "EMA 21",
+               "tooltip": "Price testing or crossing the 21-period Exponential Moving Average.",
+               "definition": "The 21-EMA is Dexter's medium-speed trend reference, faster to react than the 55-EMA and slower than the 13-EMA.",
+               "how": "Flagged when price is at, or has just crossed, the 21-period EMA on the relevant chart."},
+    "ema_13": {"name": "EMA 13",
+               "tooltip": "Price testing or crossing the 13-period Exponential Moving Average.",
+               "definition": "The 13-EMA is Dexter's fastest tracked EMA, reacting quickest to short-term price moves.",
+               "how": "Flagged when price is at, or has just crossed, the 13-period EMA on the relevant chart."},
+    "ema_4h": {"name": "EMA Test/Cross (4H)",
+               "tooltip": "An EMA test or crossover event on the 4-hour chart (legacy tag).",
+               "definition": "An older, timeframe-qualified EMA tag kept only so past journal entries still resolve to a name — new entries use the period-specific tags (ema_55/ema_21/ema_13) instead.",
+               "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+    "ema_1h": {"name": "EMA Test/Cross (1H)",
+               "tooltip": "An EMA test or crossover event on the 1-hour chart (legacy tag).",
+               "definition": "An older, timeframe-qualified EMA tag kept only so past journal entries still resolve to a name.",
+               "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+    "ema_30m": {"name": "EMA Test/Cross (30M)",
+                "tooltip": "An EMA test or crossover event on the 30-minute chart (legacy tag).",
+                "definition": "An older, timeframe-qualified EMA tag kept only so past journal entries still resolve to a name.",
+                "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+    "ema_15m": {"name": "EMA Test/Cross (15M)",
+                "tooltip": "An EMA test or crossover event on the 15-minute chart (legacy tag).",
+                "definition": "An older, timeframe-qualified EMA tag kept only so past journal entries still resolve to a name.",
+                "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+    "ema": {"name": "EMA Test/Cross",
+            "tooltip": "An EMA test or crossover event without a specific period recorded.",
+            "definition": "The general EMA concept, logged without a period tag attached.",
+            "how": "Legacy/generic alias for an EMA-related reason."},
+    "ema_5m": {"name": "EMA Test/Cross (5M)",
+               "tooltip": "An EMA test or crossover event on the 5-minute chart.",
+               "definition": "Same EMA concept as the other EMA tags, on the 5-minute chart. Not a formal Dexter weight — Chev has typed this in his own tags field, but 5-minute EMA isn't in Dexter's scored table.",
+               "how": "Not in CONFLUENCE_SCORES — 5-minute EMA isn't a timeframe Dexter's scorer assigns a point value to."},
+
+    # ── EMA (shadow vocabulary, no-underscore period + explicit crossover) ──
+    "ema55": {"name": "EMA 55",
+              "tooltip": "Price testing or crossing the 55-period Exponential Moving Average (shadow-log naming).",
+              "definition": "The same 55-EMA concept described under ema_55, recorded under the Examiner's own no-underscore naming.",
+              "how": "Assigned from Dexter's own \"EMA55\" reason text."},
+    "ema21": {"name": "EMA 21",
+              "tooltip": "Price testing or crossing the 21-period Exponential Moving Average (shadow-log naming).",
+              "definition": "The same 21-EMA concept described under ema_21, recorded under the Examiner's own no-underscore naming.",
+              "how": "Assigned from Dexter's own \"EMA21\" reason text."},
+    "ema13": {"name": "EMA 13",
+              "tooltip": "Price testing or crossing the 13-period Exponential Moving Average (shadow-log naming).",
+              "definition": "The same 13-EMA concept described under ema_13, recorded under the Examiner's own no-underscore naming.",
+              "how": "Assigned from Dexter's own \"EMA13\" reason text."},
+    "ema_cross": {"name": "EMA Crossover",
+                  "tooltip": "Two of Dexter's tracked EMAs have just crossed each other.",
+                  "definition": "An EMA crossover — one moving average crossing above or below another — is a classic trend-change signal, distinct from price simply testing a single EMA.",
+                  "how": "Assigned from Dexter's own \"EMA crossover\" reason text."},
+
+    # ── Bollinger Bands (weights table, timeframe-based) ────────────────────
+    "bb_4h": {"name": "Bollinger Bands (4H)",
+              "tooltip": "A Bollinger Band signal (squeeze, touch, or expansion) on the 4-hour chart.",
+              "definition": "Bollinger Bands measure price volatility around a moving average; a squeeze (narrow bands) often precedes a big move, while a touch of the upper/lower band flags a price extreme relative to recent volatility. The 4H version carries the most weight.",
+              "how": "Computed from the standard deviation of price around its moving average on the 4H chart."},
+    "bb_1h": {"name": "Bollinger Bands (1H)",
+              "tooltip": "A Bollinger Band signal on the 1-hour chart.",
+              "definition": "Same Bollinger Band concept as the 4H version, read from the 1-hour chart.",
+              "how": "Computed from the standard deviation of price around its moving average on the 1H chart."},
+    "bb_30m": {"name": "Bollinger Bands (30M)",
+               "tooltip": "A Bollinger Band signal on the 30-minute chart.",
+               "definition": "Same Bollinger Band concept, read from the 30-minute chart.",
+               "how": "Computed from the standard deviation of price around its moving average on the 30M chart."},
+    "bb_15m": {"name": "Bollinger Bands (15M)",
+               "tooltip": "A Bollinger Band signal on the 15-minute chart.",
+               "definition": "Same Bollinger Band concept, read from the 15-minute chart.",
+               "how": "Computed from the standard deviation of price around its moving average on the 15M chart."},
+    "bb": {"name": "Bollinger Bands",
+           "tooltip": "A Bollinger Band signal without a specific timeframe recorded.",
+           "definition": "The general Bollinger Band concept, logged without a timeframe tag attached.",
+           "how": "Same volatility-band logic as the timeframe-specific bb tags, timeframe unspecified."},
+
+    # ── Bollinger Bands (shadow vocabulary — specific mechanic, no weight match) ──
+    "bb_squeeze": {"name": "Bollinger Band Squeeze",
+                   "tooltip": "The Bollinger Bands have narrowed sharply — volatility is unusually low.",
+                   "definition": "A squeeze is when the bands pull in tight around price, meaning recent volatility has dropped well below normal. Traders watch a squeeze as an early warning that a large move is building, without knowing the direction yet.",
+                   "how": "Flagged when the band width (as a % of price) falls under a low threshold on the relevant chart. Not a formal Dexter weight — Chev has also typed variants of this (\"bbsq\", \"bbsqueeze\") that carry the identical meaning."},
+    "bbsq": {"name": "Bollinger Band Squeeze",
+             "tooltip": "Same as Bollinger Band Squeeze — an alternate spelling Chev has typed.",
+             "definition": "Identical concept to bb_squeeze; this is simply a shorter spelling Chev has used in his own tags field at different points.",
+             "how": "Not computed by Dexter under this exact spelling — this is a value Chev typed by hand, meaning the same thing as bb_squeeze."},
+    "bbsqueeze": {"name": "Bollinger Band Squeeze",
+                  "tooltip": "Same as Bollinger Band Squeeze — an alternate spelling Chev has typed.",
+                  "definition": "Identical concept to bb_squeeze; this is simply a different spelling Chev has used in his own tags field at different points.",
+                  "how": "Not computed by Dexter under this exact spelling — this is a value Chev typed by hand, meaning the same thing as bb_squeeze."},
+    "bb_burst": {"name": "Bollinger Band Burst",
+                 "tooltip": "Price has punched through the upper or lower Bollinger Band with force.",
+                 "definition": "A burst is a strong, fast push through the band's edge — the opposite situation to a squeeze, signalling the volatility expansion is already underway rather than still building.",
+                 "how": "Assigned from Dexter's own \"BB upper BURST\"/\"BB lower BURST\" reason text."},
+    "bb_near": {"name": "Bollinger Band Edge",
+                "tooltip": "Price is sitting near the upper or lower Bollinger Band.",
+                "definition": "Price approaching but not yet punching through a band edge — a milder version of a burst, flagging a price extreme relative to recent volatility.",
+                "how": "Assigned from Dexter's own \"BB near upper\"/\"BB near lower\" reason text."},
+    "bb_mid": {"name": "Bollinger Band Midline",
+               "tooltip": "Price sitting at the Bollinger Bands' middle moving-average line.",
+               "definition": "The midline of the Bollinger Bands is itself a moving average — price sitting on it is often read as a balance point between the recent high and low volatility extremes.",
+               "how": "Assigned from Dexter's own \"BB mid\" reason text."},
+
+    # ── Chart patterns — reversal (weights table) ───────────────────────────
+    "hs":  {"name": "Head & Shoulders",
+            "tooltip": "A completed Head & Shoulders pattern — a classic bearish reversal shape.",
+            "definition": "A Head & Shoulders pattern is three peaks, with the middle one (the head) higher than the two outer ones (the shoulders) — traditionally read as a topping signal that a rally is ending.",
+            "how": "Detected geometrically from the sequence of swing highs matching the three-peak shape."},
+    "ihs": {"name": "Inverse Head & Shoulders",
+            "tooltip": "A completed Inverse Head & Shoulders pattern — a classic bullish reversal shape.",
+            "definition": "The mirror image of a Head & Shoulders — three troughs, with the middle one lower than the two outer ones — traditionally read as a bottoming signal that a decline is ending.",
+            "how": "Detected geometrically from the sequence of swing lows matching the three-trough shape."},
+    "double_top": {"name": "Double Top",
+                   "tooltip": "A completed Double Top pattern — a bearish reversal shape.",
+                   "definition": "Two peaks at roughly the same price level with a pullback between them — a classic sign that buyers have twice failed to push higher.",
+                   "how": "Detected geometrically from two swing highs at a similar price with a confirmed pullback between them."},
+    "double_bottom": {"name": "Double Bottom",
+                      "tooltip": "A completed Double Bottom pattern — a bullish reversal shape.",
+                      "definition": "The mirror image of a Double Top — two troughs at roughly the same price level, a classic sign that sellers have twice failed to push lower.",
+                      "how": "Detected geometrically from two swing lows at a similar price with a confirmed bounce between them."},
+    "triple_top": {"name": "Triple Top",
+                   "tooltip": "A completed Triple Top pattern — a rarer, stronger bearish reversal shape.",
+                   "definition": "Three peaks at roughly the same price level — a rarer variant of the Double Top, scored higher because a level that has rejected price three times is a stronger signal.",
+                   "how": "Detected geometrically from three swing highs at a similar price."},
+    "triple_bottom": {"name": "Triple Bottom",
+                      "tooltip": "A completed Triple Bottom pattern — a rarer, stronger bullish reversal shape.",
+                      "definition": "The mirror image of a Triple Top — three troughs at roughly the same price level.",
+                      "how": "Detected geometrically from three swing lows at a similar price."},
+    "rising_wedge": {"name": "Rising Wedge",
+                     "tooltip": "A Rising Wedge pattern — typically a bearish reversal shape.",
+                     "definition": "A Rising Wedge is a narrowing price channel that slopes upward — despite the upward slope, it's traditionally read as a bearish pattern because the narrowing range shows buying pressure is weakening.",
+                     "how": "Detected geometrically from two converging, upward-sloping trendlines connecting recent swing highs and lows."},
+    "falling_wedge": {"name": "Falling Wedge",
+                      "tooltip": "A Falling Wedge pattern — typically a bullish reversal shape.",
+                      "definition": "The mirror image of a Rising Wedge — a narrowing channel that slopes downward, traditionally read as bullish because the narrowing range shows selling pressure is weakening.",
+                      "how": "Detected geometrically from two converging, downward-sloping trendlines connecting recent swing highs and lows."},
+
+    # ── Chart patterns — continuation (weights table) ───────────────────────
+    "bull_flag": {"name": "Bull Flag",
+                  "tooltip": "A Bull Flag pattern — a brief pause expected to resolve upward.",
+                  "definition": "A short, tight consolidation (the flag) after a sharp upward move (the flagpole) — traditionally read as a pause before the prior uptrend continues.",
+                  "how": "Detected geometrically from a strong prior up-move followed by a narrow, mildly downward or sideways consolidation channel."},
+    "bear_flag": {"name": "Bear Flag",
+                  "tooltip": "A Bear Flag pattern — a brief pause expected to resolve downward.",
+                  "definition": "The mirror image of a Bull Flag — a narrow consolidation after a sharp downward move, traditionally read as a pause before the prior downtrend continues.",
+                  "how": "Detected geometrically from a strong prior down-move followed by a narrow, mildly upward or sideways consolidation channel."},
+    "bull_pennant": {"name": "Bull Pennant",
+                     "tooltip": "A Bull Pennant pattern — a converging pause expected to resolve upward.",
+                     "definition": "Similar to a Bull Flag but the consolidation converges to a point (like a small symmetrical triangle) rather than running parallel.",
+                     "how": "Detected geometrically from a strong prior up-move followed by a converging consolidation."},
+    "bear_pennant": {"name": "Bear Pennant",
+                     "tooltip": "A Bear Pennant pattern — a converging pause expected to resolve downward.",
+                     "definition": "The mirror image of a Bull Pennant — a converging consolidation after a sharp downward move.",
+                     "how": "Detected geometrically from a strong prior down-move followed by a converging consolidation."},
+    "bull_channel": {"name": "Bull Channel",
+                     "tooltip": "Price is moving up inside a parallel upward channel.",
+                     "definition": "A sustained uptrend bounded by two roughly parallel upward-sloping trendlines — one connecting the swing lows, one connecting the swing highs.",
+                     "how": "Detected geometrically from two parallel, upward-sloping trendlines connecting recent swing highs and lows."},
+    "bear_channel": {"name": "Bear Channel",
+                     "tooltip": "Price is moving down inside a parallel downward channel.",
+                     "definition": "The mirror image of a Bull Channel — a sustained downtrend bounded by two roughly parallel downward-sloping trendlines.",
+                     "how": "Detected geometrically from two parallel, downward-sloping trendlines connecting recent swing highs and lows."},
+    "asc_tri": {"name": "Ascending Triangle",
+                "tooltip": "An Ascending Triangle pattern — typically a bullish continuation shape.",
+                "definition": "A flat resistance line with a rising support line underneath — buyers are stepping in at progressively higher prices while sellers defend one fixed level, usually resolving upward when that level breaks.",
+                "how": "Detected geometrically from a flat upper trendline and a rising lower trendline."},
+    "desc_tri": {"name": "Descending Triangle",
+                 "tooltip": "A Descending Triangle pattern — typically a bearish continuation shape.",
+                 "definition": "The mirror image of an Ascending Triangle — a flat support line with a falling resistance line above it, usually resolving downward when that level breaks.",
+                 "how": "Detected geometrically from a flat lower trendline and a falling upper trendline."},
+    "sym_tri": {"name": "Symmetrical Triangle",
+                "tooltip": "A Symmetrical Triangle pattern — a converging pause with no directional bias of its own.",
+                "definition": "Two converging trendlines, one rising and one falling, squeezing price into a point — a pause in trading that can resolve in either direction, so it's read alongside the broader trend rather than on its own.",
+                "how": "Detected geometrically from two converging trendlines, one rising and one falling."},
+    "rectangle": {"name": "Rectangle (Range)",
+                  "tooltip": "Price is bouncing between a flat floor and a flat ceiling.",
+                  "definition": "A simple horizontal trading range bounded by a repeated support level below and a repeated resistance level above.",
+                  "how": "Detected geometrically from roughly flat upper and lower trendlines connecting recent swing highs and lows."},
+
+    # ── Chart patterns — legacy triangle timeframe aliases (weights table) ──
+    "tri_4h": {"name": "Triangle (4H, legacy)",
+               "tooltip": "A triangle pattern on the 4-hour chart (legacy tag).",
+               "definition": "An older, timeframe-qualified triangle tag kept only so past journal entries still resolve to a name — new entries use the shape-specific tags (asc_tri/desc_tri/sym_tri) instead.",
+               "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+    "tri_1h": {"name": "Triangle (1H, legacy)",
+               "tooltip": "A triangle pattern on the 1-hour chart (legacy tag).",
+               "definition": "An older, timeframe-qualified triangle tag kept only so past journal entries still resolve to a name.",
+               "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+    "tri_30m": {"name": "Triangle (30M, legacy)",
+                "tooltip": "A triangle pattern on the 30-minute chart (legacy tag).",
+                "definition": "An older, timeframe-qualified triangle tag kept only so past journal entries still resolve to a name.",
+                "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+    "tri_15m": {"name": "Triangle (15M, legacy)",
+                "tooltip": "A triangle pattern on the 15-minute chart (legacy tag).",
+                "definition": "An older, timeframe-qualified triangle tag kept only so past journal entries still resolve to a name.",
+                "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+    "triangle_4h": {"name": "Triangle (4H, legacy)",
+                    "tooltip": "A triangle pattern on the 4-hour chart (legacy tag).",
+                    "definition": "An older, longer-named triangle tag kept only so past journal entries still resolve to a name.",
+                    "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+    "triangle_1h": {"name": "Triangle (1H, legacy)",
+                    "tooltip": "A triangle pattern on the 1-hour chart (legacy tag).",
+                    "definition": "An older, longer-named triangle tag kept only so past journal entries still resolve to a name.",
+                    "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+    "triangle_30m": {"name": "Triangle (30M, legacy)",
+                     "tooltip": "A triangle pattern on the 30-minute chart (legacy tag).",
+                     "definition": "An older, longer-named triangle tag kept only so past journal entries still resolve to a name.",
+                     "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+    "triangle_15m": {"name": "Triangle (15M, legacy)",
+                     "tooltip": "A triangle pattern on the 15-minute chart (legacy tag).",
+                     "definition": "An older, longer-named triangle tag kept only so past journal entries still resolve to a name.",
+                     "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+    "triangle": {"name": "Triangle (legacy)",
+                 "tooltip": "A triangle pattern without a specific timeframe recorded (legacy tag).",
+                 "definition": "The general legacy triangle tag, logged without a timeframe attached.",
+                 "how": "Legacy journal-compatibility alias; not emitted by the current scorer."},
+
+    # ── Chart pattern confidence buckets (shadow vocabulary, no weight match) ──
+    "pattern_breakout": {"name": "Pattern Breakout",
+                         "tooltip": "A chart pattern has broken out of its shape.",
+                         "definition": "The pattern's boundary (a trendline, a flat top/bottom) has just been broken, meaning the pattern is resolving rather than still forming.",
+                         "how": "Assigned when a detected pattern's reason text includes \"BREAKOUT\" without an accompanying volume confirmation."},
+    "pattern_breakout_vol": {"name": "Pattern Breakout (Volume Confirmed)",
+                             "tooltip": "A chart pattern has broken out with above-average volume behind it.",
+                             "definition": "The same breakout concept as pattern_breakout, but the move was accompanied by a volume surge — traders consider a volume-backed breakout more reliable than one on quiet volume.",
+                             "how": "Assigned when a detected pattern's reason text includes \"BREAKOUT+vol\"."},
+    "pattern_high_conf": {"name": "Pattern (High Confidence)",
+                          "tooltip": "A chart pattern detected with high geometric confidence.",
+                          "definition": "Dexter's pattern detector scores how cleanly a shape matches its textbook geometry; this bucket covers patterns scoring 70% confidence or higher.",
+                          "how": "Assigned when the pattern detector's confidence score (\"conf=\") is 0.70 or above."},
+    "pattern_mid_conf": {"name": "Pattern (Medium Confidence)",
+                         "tooltip": "A chart pattern detected with moderate geometric confidence.",
+                         "definition": "The same pattern-confidence scoring as pattern_high_conf, but for shapes matching less cleanly — still a real detection, just a looser fit to the textbook geometry.",
+                         "how": "Assigned when the pattern detector's confidence score (\"conf=\") is below 0.70."},
+
+    # ── Volume Profile / VWAP (weights table) ───────────────────────────────
+    "vp": {"name": "Volume Profile",
+           "tooltip": "Price interacting with a Volume Profile level (POC, Value Area High, or Value Area Low).",
+           "definition": "Volume Profile maps how much trading volume occurred at each price level over a session, rather than over time. It highlights the prices where the most business was actually done, which tend to act as support/resistance later.",
+           "how": "Built from the traded volume at each price bucket over the profiling window; price near the resulting POC/VAH/VAL levels scores this tag."},
+    "volprofile": {"name": "Volume Profile",
+                   "tooltip": "Same as Volume Profile — an alternate name used in some records.",
+                   "definition": "Identical concept to vp; kept as a separate dict key purely for journal-compatibility.",
+                   "how": "Same Volume Profile logic as vp."},
+    "vw": {"name": "VWAP",
+           "tooltip": "Price testing the Volume-Weighted Average Price.",
+           "definition": "VWAP is the average price of the session weighted by how much volume traded at each price — institutional traders commonly use it as a fair-value reference, so price reacting to it is considered meaningful.",
+           "how": "Computed as cumulative (price × volume) divided by cumulative volume over the session; price near this level scores this tag."},
+    "vwap": {"name": "VWAP",
+             "tooltip": "Same as VWAP — an alternate name used in some records.",
+             "definition": "Identical concept to vw; kept as a separate dict key purely for journal-compatibility.",
+             "how": "Same VWAP logic as vw."},
+
+    # ── Volume Profile detail (shadow vocabulary, no weight match) ──────────
+    "vp_poc": {"name": "Volume Profile POC",
+               "tooltip": "Price is near the Volume Profile's Point of Control — the single most-traded price.",
+               "definition": "The Point of Control is the exact price level with the highest traded volume in the profiling window — often the single strongest magnet/support-resistance price on the chart.",
+               "how": "Identified as the price bucket with the largest traded volume in the Volume Profile calculation; price within a small tolerance of it scores this tag."},
+    "vp_vah": {"name": "Volume Profile Value Area High",
+               "tooltip": "Price is near the top of the Volume Profile's Value Area.",
+               "definition": "The Value Area is the price band containing roughly 70% of a session's traded volume; the Value Area High is its upper edge — often acting as resistance from below or support once broken above.",
+               "how": "Identified as the upper boundary of the price range containing ~70% of traded volume; price within a small tolerance of it scores this tag."},
+    "vp_val": {"name": "Volume Profile Value Area Low",
+               "tooltip": "Price is near the bottom of the Volume Profile's Value Area.",
+               "definition": "The lower edge of the same 70%-of-volume Value Area described under vp_vah — often acting as support from above or resistance once broken below.",
+               "how": "Identified as the lower boundary of the price range containing ~70% of traded volume; price within a small tolerance of it scores this tag."},
+
+    # ── Divergence (non-RSI) / Candle pattern (weights table) ──────────────
+    "dv": {"name": "Divergence (Non-RSI)",
+           "tooltip": "A price-momentum divergence detected outside the RSI indicator.",
+           "definition": "The same divergence concept as RSI divergence — price making a new extreme without a matching indicator extreme — but flagged from a different underlying signal than RSI (e.g. an open-interest or volume-based comparison, depending on what triggered it).",
+           "how": "Compares price swing extremes against a non-RSI indicator's own swing extremes; a mismatch scores this tag."},
+    "cp": {"name": "Candle Pattern",
+           "tooltip": "A single- or multi-candle price pattern (e.g. engulfing, pin bar) confirming the setup.",
+           "definition": "A short-term candlestick formation used as a confirmation signal rather than a standalone reason to trade — Dexter weights it lowest of all tags for this reason.",
+           "how": "Detected from the shape/relationship of the most recent one to a few candles."},
+    "candlepattern": {"name": "Candle Pattern",
+                      "tooltip": "Same as Candle Pattern — an alternate name used in some records.",
+                      "definition": "Identical concept to cp; kept as a separate dict key purely for journal-compatibility.",
+                      "how": "Same candle-pattern logic as cp."},
+
+    # ── Market structure (weights table) ────────────────────────────────────
+    "ms_1d": {"name": "Market Structure (Daily)",
+              "tooltip": "A higher-timeframe market structure signal on the daily chart.",
+              "definition": "Market structure tracks the sequence of swing highs/lows to determine whether the broader trend is intact, weakening, or breaking. The daily version is the slowest, biggest-picture read and carries the most weight of any tag in the whole system.",
+              "how": "Computed from the sequence of daily swing highs and lows (higher-highs/higher-lows for an uptrend, the reverse for a downtrend, or a break in that sequence)."},
+    "ms_4h": {"name": "Market Structure (4H)",
+              "tooltip": "A market structure signal on the 4-hour chart.",
+              "definition": "Same market structure concept as the daily version, read from the 4-hour chart.",
+              "how": "Computed from the sequence of 4H swing highs and lows."},
+    "ms_1h": {"name": "Market Structure (1H)",
+              "tooltip": "A market structure signal on the 1-hour chart.",
+              "definition": "Same market structure concept, read from the 1-hour chart.",
+              "how": "Computed from the sequence of 1H swing highs and lows."},
+    "ms_30m": {"name": "Market Structure (30M)",
+               "tooltip": "A market structure signal on the 30-minute chart.",
+               "definition": "Same market structure concept, read from the 30-minute chart.",
+               "how": "Computed from the sequence of 30M swing highs and lows."},
+    "ms_15m": {"name": "Market Structure (15M)",
+               "tooltip": "A market structure signal on the 15-minute chart.",
+               "definition": "Same market structure concept, read from the 15-minute chart — the fastest structure read Dexter scores.",
+               "how": "Computed from the sequence of 15M swing highs and lows."},
+    "ms": {"name": "Market Structure",
+           "tooltip": "A market structure signal without a specific timeframe recorded.",
+           "definition": "The general market structure concept, logged without a timeframe tag attached.",
+           "how": "Same swing-sequence logic as the timeframe-specific ms tags, timeframe unspecified."},
+
+    # ── Derivatives (shadow vocabulary — Binance futures, no weight match) ──
+    "funding_extreme": {"name": "Funding Rate Extreme",
+                        "tooltip": "The perpetual futures funding rate has reached an extreme level.",
+                        "definition": "Funding rate is the periodic payment between long and short traders on a perpetual futures contract; an extreme reading means one side is heavily overcrowded and paying a steep premium to stay in the trade — often a contrarian signal.",
+                        "how": "Read from Binance futures funding-rate data; flagged when it moves beyond a normal range."},
+    "oi_divergence": {"name": "Open Interest Divergence",
+                      "tooltip": "Open interest is moving opposite to what the price move would suggest.",
+                      "definition": "Open interest is the total number of outstanding futures contracts. When price rises but open interest falls (or vice versa), it suggests the move is being driven by short-covering/long-liquidation rather than fresh conviction — a weaker kind of move.",
+                      "how": "Compares the direction of price change against the direction of open-interest change over the same window."},
+    "oi_confirm": {"name": "Open Interest Confirmation",
+                   "tooltip": "Open interest is moving in the same direction as price, confirming the move.",
+                   "definition": "The opposite situation to oi_divergence — price and open interest rising (or falling) together suggests fresh positioning is backing the move, a stronger signal than a move on falling open interest.",
+                   "how": "Compares the direction of price change against the direction of open-interest change over the same window."},
+
+    # ── Fast intraday structural anchors (shadow vocabulary, no weight match) ──
+    "fast_anchor_pdh": {"name": "Prior Day High",
+                        "tooltip": "Price is near the prior trading day's high.",
+                        "definition": "The previous day's high is a level intraday traders watch closely as a fast-forming reference point, useful when a slower structural level (like a multi-touch SR) hasn't had time to form yet.",
+                        "how": "The high price of the previous calendar day; price within a small tolerance of it scores this tag."},
+    "fast_anchor_pdl": {"name": "Prior Day Low",
+                        "tooltip": "Price is near the prior trading day's low.",
+                        "definition": "The mirror image of the Prior Day High — the previous day's low as a fast intraday reference point.",
+                        "how": "The low price of the previous calendar day; price within a small tolerance of it scores this tag."},
+    "fast_anchor_or_high": {"name": "Opening Range High",
+                            "tooltip": "Price is near the high of today's opening range.",
+                            "definition": "The opening range is the high/low price band set in the first part of today's session — a widely-watched intraday reference before the rest of the day's structure has formed.",
+                            "how": "The highest price in the defined opening window of the current session; price within a small tolerance of it scores this tag."},
+    "fast_anchor_or_low": {"name": "Opening Range Low",
+                           "tooltip": "Price is near the low of today's opening range.",
+                           "definition": "The mirror image of the Opening Range High — the low of the same opening window.",
+                           "how": "The lowest price in the defined opening window of the current session; price within a small tolerance of it scores this tag."},
+
+    # ── Liquidity sweep (shadow vocabulary, no weight match) ────────────────
+    "sweep": {"name": "Liquidity Sweep",
+              "tooltip": "A stop-hunt: price wicked through a cluster of equal highs/lows then closed back inside.",
+              "definition": "A liquidity sweep happens when price briefly pierces a level where many traders' stop-losses are likely resting (equal highs or lows), triggers them, then reverses back inside the range — often read as a trap that clears out weak positioning before the real move.",
+              "how": "Detected from a candle whose wick crosses a cluster of equal highs/lows by a small tolerance while its close stays back inside, within the most recent ~40 candles."},
+
+    # ── Meta / catch-all (shadow vocabulary, no weight match) ───────────────
+    "watch_signal": {"name": "Watch Signal",
+                     "tooltip": "A developing signal Dexter is watching but hasn't confirmed yet.",
+                     "definition": "A catch-all for any \"[WATCH]\"-prefixed reason that isn't the specific forming-RSI-divergence case — something Dexter is tracking as a possible setup ingredient before it's confirmed.",
+                     "how": "Assigned to any reason text starting with \"[WATCH\" that doesn't match the forming-divergence pattern specifically."},
+    "other": {"name": "Other / Unclassified",
+              "tooltip": "A reason Dexter produced that doesn't match any named tag yet.",
+              "definition": "A safety-net bucket for reason text the classifier doesn't recognize — keeps the Examiner's stats from silently dropping data when a new kind of reason string appears, at the cost of not being a specific, named concept.",
+              "how": "Assigned whenever a reason string doesn't match any pattern in the classifier's lookup table; each new unmatched string is logged once so the table can be extended."},
+
+    # ── Journal shorthand, unclear origin (Chev's own typing, no formal weight) ──
+    "tp_balance_extreme": {"name": "TP at Balance Extreme (unconfirmed)",
+                           "tooltip": "Best-guess reading: a take-profit set at the edge of a price balance/range area — not formally defined anywhere in code.",
+                           "definition": "This exact code isn't produced by Dexter's scorer or defined anywhere in the codebase — it only appears in Chev's own free-typed tags field, and its precise meaning isn't confirmed. The most likely reading, given the name, is a take-profit placed at the extreme edge of a price range the market has been balancing inside. Treat this description as unconfirmed.",
+                           "how": "Not computed by Dexter — this is a value Chev typed by hand."},
+}
+
 CONFLUENCE_THRESHOLD_CRYPTO = 10   # minimum score to open a trade on crypto
 CONFLUENCE_THRESHOLD_FOREX  = 8    # raised from 7 — SR reweighting means 7 was too lenient
 CONFLUENCE_THRESHOLD_STOCK  = 8    # stocks previously fell into the crypto branch (10) by accident
@@ -1193,13 +2575,34 @@ CONFLICT_DOMINANCE_RATIO    = 2.0  # dominant directional score must be ≥ this
 # Temporary paper-trading data-collection phase: lower the entry bar so small
 # graded trades flow and the learning loops (playbooks, the Examiner) get data
 # to learn from. Flip EXPLORATION_MODE to False to restore normal thresholds
-# everywhere at once — every gate reads these through _active_thresholds().
-# Hygiene gates (STRUCT PRE-GATE, CONFLICT gate, risk_gauntlet) are unaffected.
+# everywhere at once. As of 2026-07-05 this single flag reaches THREE layers:
+#   1. Escalation eligibility — score threshold + max distance via _active_thresholds().
+#   2. Chev's own subjective judgment gates — loosened in the escalation message itself
+#      (maturity/participation/direction-score become sizing inputs, not vetoes).
+#   3. Setup-QUALITY math — GEOMETRY REVIEW pre-check AND risk_gauntlet.run_gauntlet()
+#      both read the same NORMAL/EXPLORATION profile via risk_gauntlet.get_active_profile()
+#      (ATR floor, cost gate, R:R, heat cap, correlation cap, concurrency cap).
+# Still NEVER affected regardless of mode (account-survival math, not setup quality):
+# STRUCT PRE-GATE, CONFLICT gate, equity floor, liquidation, leverage caps.
 EXPLORATION_MODE            = True
 EXPLORATION_THRESHOLD_CRYPTO = 7
 EXPLORATION_THRESHOLD_FOREX  = 6
 EXPLORATION_THRESHOLD_STOCK  = 6
 EXPLORATION_MAX_DIST_PCT     = 1.5
+
+# Floor below which a setup is scanned + shadow-labeled but never escalated to Chev.
+# Crypto 5m: round-trip cost (fee+slippage, scalp trade_type) eats too large a share of
+# the R:R achievable at a 5m-realistic ATR stop -- not fixable by loosening, the timeframe
+# itself doesn't leave enough room. Forex/stock scalps don't scan 5m at all (SCAN_TFS_FOREX
+# starts at 15m; stock has no 5m scan either), so their floor is a no-op today, kept explicit
+# for when/if a faster TF is ever added.
+ESCALATION_TF_FLOOR          = {"crypto": "15m", "forex": "5m", "stock": "5m"}
+
+# Stamped onto every newly-closed Chev-trade journal entry (purely additive — nothing reads
+# this yet). Lets EV enforcement, when it returns, be fed only trades earned under the
+# current system instead of the pre-2026-07-06 era. Bump this string any time a change is
+# significant enough that pre-change trades shouldn't count toward post-change EV stats.
+SYSTEM_ERA = "explor_v2_2026-07-06"
 
 VALID_TAGS = list(CONFLUENCE_SCORES.keys())
 
@@ -1321,6 +2724,10 @@ _watchlist_prices = {}
 _watchlist_prices_lock = threading.Lock()
 _cached_balance = STARTING_BALANCE          # kept fresh by main loop, read by Firebase push
 _firebase_win_stats = {"wins": 0, "losses": 0}  # kept fresh by main loop
+_last_scan_completed_ts = 0.0  # PHASE 12: set at the end of every full main-loop iteration
+                                # (right before the sleep) -- a hung/crashed loop stops
+                                # advancing this even though Flask keeps serving, which a
+                                # plain HTTP ping alone would never catch.
 
 COINGECKO_IDS = {
     "BTCUSDT":  "bitcoin",
@@ -1511,8 +2918,46 @@ _CHEV_DECISIONS_LOG = r"C:\ChevTools\chev_decisions.jsonl"  # one JSON-line per 
 _recent_losses: list = []  # rolling store of loss fingerprints for confluence re-entry cooldown
 
 
-def _log_chev_decision(symbol, primary_tf, dexter_score, dexter_reasons, decision, reason, regime_4h=None):
-    """Append one JSON-line to the Chev decision log for post-session review."""
+def _trade_metrics_for_log(parsed):
+    """PHASE 11: pure. Computes planned_rr/stop_pct/tp_pct/trade_type_chosen directly from
+    Chev's own parsed TRADE: line -- independent of whether risk_gauntlet.run_gauntlet()
+    ever ran, so these are available at every POST/REJECT-family decision (GATE_REJECT/
+    STRUCT_REJECT/MTF_TAX_REJECT/GEOMETRY_REJECT/REJECT/POST all happen at or after Chev
+    proposes concrete entry/sl/tp numbers, several of them before the gauntlet is ever
+    called). Returns a dict of Nones if no usable trade/entry/sl/tp is present -- never
+    raises, never guesses a number that isn't there."""
+    _td = (parsed or {}).get("trade") or {}
+    try:
+        _entry = float(_td.get("entry") or 0)
+        _sl    = float(_td.get("sl")    or 0)
+        _tp    = float(_td.get("tp")    or 0)
+    except (TypeError, ValueError):
+        _entry = _sl = _tp = 0
+    if not (_entry and _sl and _tp):
+        return {"planned_rr": None, "stop_pct": None, "tp_pct": None, "trade_type_chosen": None}
+    _sl_dist = abs(_entry - _sl)
+    # stop_pct/tp_pct are stored as actual percentage numbers (1.622 means 1.622%, not the
+    # fraction 0.01622) so "rounded to 4 decimals" keeps real precision on tight stops --
+    # rounding the fraction itself to 4 places would collapse to 2 decimal digits of %.
+    return {
+        "planned_rr":        round(abs(_tp - _entry) / _sl_dist, 4) if _sl_dist > 0 else None,
+        "stop_pct":          round(_sl_dist / _entry * 100, 4),
+        "tp_pct":            round(abs(_tp - _entry) / _entry * 100, 4),
+        "trade_type_chosen": _td.get("trade_type") or None,
+    }
+
+
+def _log_chev_decision(symbol, primary_tf, dexter_score, dexter_reasons, decision, reason, regime_4h=None, detail="",
+                        planned_rr=None, stop_pct=None, tp_pct=None, cost_r=None, trade_type_chosen=None,
+                        ev_advisory_rr=None, enforced_rr_floor=None, deliberation_secs=None):
+    """Append one JSON-line to the Chev decision log for post-session review.
+    PHASE 11: the fields after `detail` are additive/optional (default None -- absent data
+    stays null, nothing is guessed). planned_rr/stop_pct/tp_pct/cost_r/trade_type_chosen are
+    only ever passed by POST/REJECT-family call sites (never SKIP/FORMAT_ERROR, which have
+    no trade numbers to report). ev_advisory_rr/enforced_rr_floor are only ever passed by
+    call sites downstream of risk_gauntlet.run_gauntlet(). deliberation_secs is passed at
+    every escalation call site (including SKIP) -- it times the Chev round-trip itself, not
+    the trade proposal, so it applies regardless of what Chev ultimately said."""
     import json as _json
     entry = {
         "ts":             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
@@ -1522,7 +2967,17 @@ def _log_chev_decision(symbol, primary_tf, dexter_score, dexter_reasons, decisio
         "dexter_reasons": dexter_reasons if isinstance(dexter_reasons, list) else [dexter_reasons],
         "decision":       decision,      # SKIP | POST | GATE_REJECT | FORMAT_ERROR
         "reason":         reason,
+        "detail":         detail,        # Chev's full REASONING (+ WHAT WAS MISSING for skips)
+        "specific":       any(ch.isdigit() for ch in (detail or reason or "")),
         "regime_4h":      regime_4h,
+        "planned_rr":        planned_rr,
+        "stop_pct":          stop_pct,
+        "tp_pct":            tp_pct,
+        "cost_r":            cost_r,
+        "trade_type_chosen": trade_type_chosen,
+        "ev_advisory_rr":    ev_advisory_rr,
+        "enforced_rr_floor": enforced_rr_floor,
+        "deliberation_secs": deliberation_secs,
     }
     try:
         with open(_CHEV_DECISIONS_LOG, "a", encoding="utf-8") as _f:
@@ -1959,6 +3414,12 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
         f"What setup types is Jane consistently profitable on? Where do her instincts diverge from your models — and who was right?\n\n"
         f"IMPORTANT: Build statistical understanding — not a list of prohibitions. A setup that failed once can be valid in different conditions. "
         f"Think in conditions, not outcomes.\n\n"
+        f"HARD RULE — NO ENTRY-TIMING GATES: Never write advice telling future-you to wait for a "
+        f"confirmation candle, a rejection candle, a candle close, or any other price-action event AFTER "
+        f"the setup is already identified. Entries are decided on the confluence, structure, and score "
+        f"already present at scan time — never on watching for one more candle to print. If you're about "
+        f"to write 'confirms' or 'confirmatory,' stop and name the specific structural or quantitative "
+        f"factor instead (e.g. '4H SR level with 3+ historical touches,' not 'confirmed by price action').\n\n"
         f"FORMAT RULES (hard cap — no exceptions):\n"
         f"- Each section must be bullet points only, no prose paragraphs\n"
         f"- Maximum 3 bullets per section\n"
@@ -2007,13 +3468,18 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
                 f"Your task: identify setup patterns or market conditions that appear across these outcomes. "
                 f"This is a data analysis exercise, not a self-criticism exercise. Markets are uncertain — "
                 f"not every loss means the setup was wrong. But patterns across these outcomes can reveal "
-                f"conditions where additional confirmation would help.\n\n"
-                f"Write exactly 3 bullet points under the heading 'SETUPS NEEDING EXTRA CONFIRMATION:'. "
+                f"structural weaknesses that were knowable at entry time.\n\n"
+                f"Write exactly 3 bullet points under the heading 'STRUCTURAL RISK FACTORS:'. "
                 f"Each bullet describes a MARKET CONDITION or SETUP PATTERN (not a personal failing) "
-                f"that these outcomes have in common, and what additional confirmation would have helped.\n\n"
-                f"Format: '- [Pattern/Condition]: [What extra confirmation would have helped]'\n\n"
-                f"Example: '- First-visit to a level with no prior rejection data: wait for one rejection candle close before entering'\n"
-                f"NOT: '- I made a mistake entering here'\n\n"
+                f"that these outcomes have in common, and what confluence, structural level, or data point "
+                f"available AT SCAN TIME would have flagged the risk in advance.\n\n"
+                f"Format: '- [Pattern/Condition]: [What structural/quantitative factor would have flagged the risk]'\n\n"
+                f"Example: '- First-visit to a level with no prior touches: treat as untested — require an "
+                f"additional timeframe or indicator confluence before sizing normally'\n"
+                f"NOT: '- I made a mistake entering here'\n"
+                f"HARD RULE: never recommend waiting for a confirmation candle, rejection candle, candle "
+                f"close, or any other price-action event after the setup is already identified — entries "
+                f"are decided on data available at scan time, not on watching for one more candle.\n\n"
                 f"Write only the 3 bullet points. No intro, no conclusion, no additional text."
             )
             loss_analysis = _call_chev([{"role": "user", "content": loss_prompt}], timeout=90)
@@ -2037,10 +3503,11 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
                         f"RECENT LOSSES (trades where price moved differently):\n{loss_text2}\n\n"
                         f"What did the winning trades have that the losing trades did not? "
                         f"Look at: the tags (confluence pattern), the market conditions in the post-mortem, "
-                        f"the structural quality described. Be specific — 'the wins had a 4H SR level confirmed' "
-                        f"is useful. 'The wins were better setups' is not.\n\n"
+                        f"the structural quality described. Be specific — 'the wins had a 4H SR level with "
+                        f"3+ prior touches' is useful. 'The wins were better setups' is not.\n\n"
                         f"Write exactly 2 bullet points under 'WIN/LOSS INSIGHT:'. "
-                        f"Each bullet is one specific, concrete differentiator. "
+                        f"Each bullet is one specific, concrete differentiator — never a recommendation to "
+                        f"wait for a confirmation candle or additional price action after entry conditions are met. "
                         f"No intro, no conclusion — just the 2 bullets."
                     )
                     compare_analysis = _call_chev([{"role": "user", "content": compare_prompt}], timeout=90)
@@ -2048,7 +3515,7 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
                     compare_analysis = None
 
                 # Append both analyses to the playbook as supplemental sections
-                supplement = f"\n\n### SETUPS NEEDING EXTRA CONFIRMATION\n{loss_analysis}"
+                supplement = f"\n\n### STRUCTURAL RISK FACTORS\n{loss_analysis}"
                 if compare_analysis:
                     supplement += f"\n\n### WIN/LOSS INSIGHT\n{compare_analysis}"
                 with open(_pb_path, "a", encoding="utf-8") as f:
@@ -2137,7 +3604,7 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
             f"YOUR PRE-TRADE ANALYSIS:\n"
             f"  4H Structure : {_str_4h or 'not recorded'}\n"
             f"  Invalidation : {_str_inv or 'not recorded'}\n"
-            f"  Confirmation : {_str_conf or 'not recorded'}\n\n"
+            f"  Entry basis  : {_str_conf or 'not recorded'}\n\n"
         )
 
     prompt = (
@@ -2211,6 +3678,7 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
         "chev_moves":       trade.get("chev_moves", []),
         "open_ts":          trade.get("open_ts", ""),
         "forensics":        _forensics,
+        "system_era":       SYSTEM_ERA,
     }
     try:
         journal = _load_journal()
@@ -4011,14 +5479,31 @@ def _detect_equal_highs_lows(df, tolerance_pct=0.1):
     return cluster_prices(recent_highs), cluster_prices(recent_lows)
 
 
+_pdhl_cache = {}   # (symbol, asset_type) -> (utc_date_str, {"pdh","pdl","pdc"})
+
 def _get_previous_day_hl(symbol, asset_type):
-    """Fetch yesterday's high, low, close."""
+    """Fetch yesterday's high, low, close.
+
+    Cached per (symbol, asset_type) for the rest of the current UTC day -- this value
+    only changes once every 24h, so fetch_candles' shared 60s cache (sized for
+    fast-moving intraday data) is the wrong invalidation window for it and would
+    otherwise refetch on nearly every scan round. Same per-symbol day-guard pattern as
+    derivs.py's cache. Failures are NOT cached -- a transient fetch error retries next
+    scan instead of silently blocking this symbol for the rest of the day.
+    """
+    key   = (symbol, asset_type)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    hit   = _pdhl_cache.get(key)
+    if hit and hit[0] == today:
+        return hit[1]
     try:
         df = fetch_candles(symbol, asset_type, "1d", limit=5)
         if len(df) < 2:
             return None
         yd = df.iloc[-2]
-        return {"pdh": float(yd["high"]), "pdl": float(yd["low"]), "pdc": float(yd["close"])}
+        result = {"pdh": float(yd["high"]), "pdl": float(yd["low"]), "pdc": float(yd["close"])}
+        _pdhl_cache[key] = (today, result)
+        return result
     except Exception:
         return None
 
@@ -6294,7 +7779,43 @@ def _check_confluence_pattern(symbol, direction, proposed_entry, proposed_tags_s
     return warnings
 
 
-def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
+def _build_executable_geometry_block(asset_type, atr, price, exploration_mode):
+    """Pure string builder — the survivable SL/R:R/TP numbers the Risk Gauntlet will
+    actually enforce, computed from risk_gauntlet's own constants (never duplicated here,
+    always imported) so Chev sees the real limits before picking a stop, not after being
+    rejected for one. Added 2026-07-06 (Phase 3) — Chev was being told "1x ATR" by an
+    earlier paragraph while the cost gate silently demanded more; this makes both numbers
+    explicit and tells him which one actually wins.
+    """
+    a = asset_type if asset_type in risk_gauntlet.FEE_SIDE else "crypto"
+    prof = risk_gauntlet.get_active_profile(exploration_mode)
+    atr_pct = (atr / price) if (atr and price) else None
+
+    lines = ["EXECUTABLE GEOMETRY — hard limits the Risk Gauntlet will enforce on any POST:"]
+    for trade_type in ("scalp", "day", "swing"):
+        cost_rt = 2 * (risk_gauntlet.FEE_SIDE[a] + risk_gauntlet.SLIPPAGE_SIDE[a])
+        if a == "crypto" and trade_type == "swing":
+            cost_rt += risk_gauntlet.FUNDING_EST_SWING
+        min_stop_cost = cost_rt / prof["MAX_COST_R"][trade_type]
+        min_stop_atr  = (prof["ATR_FLOOR"][trade_type] * atr_pct) if atr_pct is not None else 0.0
+        if min_stop_atr > min_stop_cost:
+            eff_min_stop, floor_label = min_stop_atr, "ATR floor"
+        else:
+            eff_min_stop, floor_label = min_stop_cost, "cost floor"
+        required_rr = prof["MIN_NET_RR"][trade_type]
+        tp_min_pct  = required_rr * (eff_min_stop + cost_rt) + cost_rt
+        lines.append(
+            f"  {trade_type}: min SL {eff_min_stop:.2%} ({floor_label}) | "
+            f"min R:R {required_rr:.2f}:1 (floor) | min TP {tp_min_pct:.2%} from entry"
+        )
+    lines.append(
+        "If no real structural level exists at or beyond the minimum SL distance for any "
+        "trade_type, that is a VALID SKIP — write exactly that, citing these numbers.\n"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360, force_take=False):
     global _chev_online
     symbol = result["symbol"]
     confluence_zone = result['price']
@@ -6514,6 +8035,29 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         except Exception as _sf_err:
             print(f"[Dexter] format_survey_for_chev failed: {_sf_err}")
             pattern_block = ""
+        # Zone alignment check: Dexter's SR/Fib confluence zone and the Opportunity
+        # Engine's entry_zone are two independently-computed prices -- state how close
+        # they actually are (same proximity buckets as dist_from_level elsewhere) so
+        # Chev reads a stated fact instead of re-judging "do these line up" himself.
+        if pattern_block and _survey.opportunity is not None:
+            try:
+                _opp = _survey.opportunity
+                _zlo, _zhi = _opp.entry_zone
+                if _zlo <= confluence_zone <= _zhi:
+                    _zone_dist_pct = 0.0
+                else:
+                    _zone_dist_pct = (min(abs(confluence_zone - _zlo), abs(confluence_zone - _zhi))
+                                       / max(abs(confluence_zone), 1e-10) * 100.0)
+                _zone_lbl = ("SAME ZONE" if _zone_dist_pct <= 0.5 else
+                             "NEARBY"    if _zone_dist_pct <= 2.0 else
+                             f"DIFFERENT ({_zone_dist_pct:.2f}% apart)")
+                pattern_block += (
+                    f"ZONE ALIGNMENT CHECK: Dexter's confluence zone ({confluence_zone:.5f}) vs the "
+                    f"Opportunity Engine's entry zone ({_zlo:.5f}-{_zhi:.5f}) — {_zone_lbl}. Trust "
+                    f"this stated distance rather than re-eyeballing whether SR/Fib/BB 'line up'.\n\n"
+                )
+            except Exception as _za_err:
+                print(f"[Dexter] Zone alignment check failed: {_za_err}")
     # Fallback to legacy pattern block if survey unavailable
     if not pattern_block:
         _all_pats = result.get("all_patterns", [])
@@ -6543,24 +8087,36 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
                 )
             pattern_block += "\n"
 
+    geometry_block = _build_executable_geometry_block(
+        asset_type, result.get("atr"), result.get("current_price") or confluence_zone, EXPLORATION_MODE
+    )
+
     msg = (
         f"⚡ OUTPUT FORMAT — READ FIRST:\n"
         f"Your reply MUST follow this EXACT structure. POST: or SKIP: is the first word you write — no preamble.\n\n"
         f"If TAKING the trade:\n"
         f"  POST: <your read in 15 words max>\n"
         f"  4H STRUCTURE: <one sentence — trending/ranging, last BOS or CHoCH, last key level>\n"
-        f"  INVALIDATION: <exact price and candle condition that proves this trade wrong>\n"
-        f"  CONFIRMATION: <what the current candle at the entry level looks like right now>\n"
+        f"  INVALIDATION: <exact price that proves this trade wrong>\n"
+        f"  ENTRY BASIS: <the confluence/structure already in place that makes this the moment to act>\n"
         f"  TRADE: direction=..., entry=..., sl=..., tp=..., risk_pct=..., leverage=..., position_size_usd=..., tags=..., trade_type=...\n"
         f"  REASONING: <full narrative — why this level, what structure supports it, what you're watching>\n\n"
         f"If PASSING the trade:\n"
         f"  SKIP: <one sentence reason>\n"
-        f"  WHAT WAS MISSING: <which criterion failed — 4H STRUCTURE context / INVALIDATION level / CONFIRMATION candle / confluence / other>\n"
+        f"  WHAT WAS MISSING: <which criterion failed — 4H STRUCTURE context / INVALIDATION level / confluence quality / other>\n"
         f"  REASONING: <what you saw that made you pass — be specific, no generalities>\n\n"
         f"MANDATORY RULES:\n"
-        f"  4H STRUCTURE, INVALIDATION, CONFIRMATION — all three required on every POST.\n"
+        f"  4H STRUCTURE, INVALIDATION, ENTRY BASIS — all three required on every POST.\n"
         f"  WHAT WAS MISSING — required on every SKIP.\n"
         f"  REASONING — required on both POST and SKIP.\n"
+        f"  SPECIFICITY — WHAT WAS MISSING and REASONING must each cite at least one real number\n"
+        f"    FROM THIS SETUP: a price level, an ATR multiple, an RSI value, a %, or a named tag —\n"
+        f"    not a qualitative judgment with no number attached. Vague: 'confluence quality below\n"
+        f"    threshold despite strong indicators.' Specific: 'EMA-21/55 cluster at 61,300 vs. the\n"
+        f"    4H golden pocket at 61,250-61,420, but no confirmed RSI divergence and the nearest\n"
+        f"    swing low is 2.1% away — R:R only 1.1:1 against the 1.3:1 floor.' If you can't point to\n"
+        f"    a real number from THIS setup, you haven't actually looked closely enough yet — look\n"
+        f"    again before writing SKIP or POST.\n"
         f"  Dexter will not log the trade without all required fields.\n\n"
         f"Hey Chev, Dexter here with REAL computed numbers. I've given you the full market data above — candles, volume, all levels. Study it yourself and make your own read.\n\n"
         f"I've detected a confluence zone at {confluence_zone:.5f} with {result['count']} factor(s) aligning: {', '.join(result['reasons'])}.\n"
@@ -6569,6 +8125,7 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"{regime_context}"
         f"{rsi_block}"
         f"{pattern_block}"
+        f"{geometry_block}"
         f"TOOLS AVAILABLE — CALL THEM BEFORE WRITING POST: OR SKIP:\n"
         f"You have live analysis tools. Use them now to independently verify this setup and populate your tags correctly.\n\n"
         f"ALWAYS CALL FIRST:\n"
@@ -6583,7 +8140,9 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"  detect_rsi_divergence(\"{symbol}\", \"{primary_tf}\") — call if RSI looks like it's diverging on the candle data.\n"
         f"    If confirmed → add rsi_Xtf tag and set rsi_div_t1=<older pivot date>, rsi_div_t2=<newer pivot date>.\n\n"
         f"  get_atr_stop_suggestion(\"{symbol}\", \"{primary_tf}\", entry_price=<your entry>, direction=<long or short>) — call before finalising your SL.\n"
-        f"    Your SL must clear at least 1× ATR from entry. If your structural SL is tighter than that, widen it or SKIP.\n\n"
+        f"    Your SL must clear BOTH the ATR floor AND the cost floor stated in the EXECUTABLE\n"
+        f"    GEOMETRY block above for this trade_type — whichever of the two is larger is the\n"
+        f"    real minimum. If your structural SL is tighter than that, widen it or SKIP.\n\n"
         f"TOOL INTEGRITY RULE: Only tag what your tools confirm from live data. No guessed levels, no fabricated pivot dates.\n"
         f"If a tool returns no level near the zone — drop that tag. Your REASONING must explain what the tools showed.\n\n"
         f"Your job: decide if this is a genuine trade setup. Be an actual trader — reason about:\n"
@@ -6593,7 +8152,9 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"  4. Where is the SL? Place it just beyond the structural level that invalidates the trade — the nearest significant swing high/low or SR zone. "
         f"A small buffer beyond that level is fine. Being stopped out by a wick that breaches the level is correct behaviour — the level was broken, the trade is wrong. "
         f"What is NOT acceptable is placing the SL just a few ticks from entry before any real structural level — that is not a stop loss, it is a guaranteed loss. "
-        f"For forex, minimum 20 pips. For stocks, minimum 0.5%. The distance should come from where the level actually is, not be invented.\n"
+        f"For forex, minimum 20 pips. For stocks, minimum 0.5%. For crypto, see the min SL row "
+        f"for this trade_type in the EXECUTABLE GEOMETRY block above — do not use a smaller one. "
+        f"The distance should come from where the level actually is, not be invented.\n"
         f"  5. Where is the FIRST meaningful structural level in the direction of the trade?\n"
         f"     Look at the touch count next to each SR level in the brief above — e.g. '1.0490(4x)' means 4 confirmed touches.\n"
         f"     STRONG level: 4+ touches — price is very likely to react here. Use as TP.\n"
@@ -6610,6 +8171,14 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"     → This is the correct response when a level looks valid but price needs to come to you.\n\n"
         f"Only SKIP if the setup itself is genuinely weak — wrong trend, poor confluence quality, no clear invalidation level.\n"
         f"Do NOT skip simply because price hasn't arrived at the level yet.\n\n"
+        f"BANNED SKIP LANGUAGE: 'lacks confirmation,' 'needs confirmation,' 'lacks clear confirmation at\n"
+        f"the current price level,' 'too early,' or any variant that doesn't name a concrete, checkable\n"
+        f"factor. These are not real reasons — they're a placeholder for not having looked closely enough.\n"
+        f"Confluence already over the score threshold IS the basis to act, not a reason to look for more.\n"
+        f"If you SKIP, WHAT WAS MISSING must name one of: a specific tool that returned nothing near the\n"
+        f"zone (say which), a specific contradicting 4H structure fact, a specific R:R or ATR-floor\n"
+        f"problem with real numbers, or a specific invalidation level that can't be placed sensibly. If\n"
+        f"none of those apply, the setup doesn't qualify for a SKIP — take it or size down, don't stall.\n\n"
         f"ABSOLUTE RULES — trades that break these are REJECTED and wasted:\n"
         f"  LONG:  sl MUST be a number LOWER than entry  (e.g. entry=1.0445, sl=1.038 ✓ | sl=1.047 ✗ WRONG)\n"
         f"  SHORT: sl MUST be a number HIGHER than entry (e.g. entry=1.0445, sl=1.055 ✓ | sl=1.040 ✗ WRONG)\n"
@@ -6618,18 +8187,18 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"The R:R that results from that is what it is. Do NOT invent an SL distance to hit a ratio target.\n"
         f"  That said — be aware: if the nearest structure gives you R:R below 1:1 (risking more than you make), "
         f"that is a signal the setup is weak, not that you should force a tighter SL.\n"
-        f"  Do NOT enter just because confluence exists — require price action confirmation:\n"
-        f"    a bullish candle close ABOVE the level (for longs), or bearish close BELOW (for shorts).\n"
-        f"    Touching a level is not confirmation. A candle close through it is.\n\n"
-        f"ENTRY MODES — every POST must use exactly one, and say which in CONFIRMATION:\n"
-        f"  MODE A (confirmation entry): price is AT the zone NOW and the current or last candle\n"
-        f"    confirms (close through the level, or clear rejection wick). entry = current price area.\n"
-        f"  MODE B (pending limit at the zone): the structure is valid but price hasn't tagged the\n"
-        f"    zone or printed confirmation yet. Set entry = the zone price. Dexter parks it as a\n"
-        f"    PENDING order that only fills if price touches it, and expires per trade_type.\n"
-        f"  If the ONLY thing missing is the touch or the confirmation candle, use MODE B —\n"
-        f"    do NOT skip. Pending orders exist precisely for that case. SL must still sit at the\n"
-        f"    structural invalidation level beyond the zone.\n\n"
+        f"  Confluence and structure ARE the entry basis — once they support the trade, act. Do NOT\n"
+        f"    wait for an additional candle to close or a rejection wick to print before entering;\n"
+        f"    that additional wait is not required and not requested.\n\n"
+        f"ENTRY MODES — every POST must use exactly one, and say which in ENTRY BASIS:\n"
+        f"  MODE A (market entry): price is AT the zone NOW. entry = current price area. Commit —\n"
+        f"    don't wait for one more candle to print first.\n"
+        f"  MODE B (pending limit at the zone): price hasn't reached the zone yet. Set entry = the\n"
+        f"    zone price. Dexter parks it as a PENDING order that fills automatically if price\n"
+        f"    arrives, and expires per trade_type.\n"
+        f"  Choose MODE A vs MODE B purely on whether price is at the zone right now — never SKIP\n"
+        f"    just because price hasn't arrived yet. SL must still sit at the structural\n"
+        f"    invalidation level beyond the zone.\n\n"
         f"SIP — Stop in Profit (trade management concept):\n"
         f"  When Dexter asks you to manage an open trade, you may trail your SL above your entry (for LONG)\n"
         f"  or below your entry (for SHORT). Once SL crosses entry, it is NO LONGER an SL — it is a SIP.\n"
@@ -6658,15 +8227,15 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"    Tag this as bb_Xtf (e.g. bb_1h if 1H chart). No visual anchor needed.\n\n"
         f"  NEAR BAND (approaching signal — %B > 0.85 or %B < 0.15):\n"
         f"    Price is in the top or bottom 15% of the current band — approaching the edge.\n"
-        f"    This is not yet a confirmed reversal, but you are entering the danger zone.\n"
+        f"    This is moderate on its own — a BURST is the stronger version of this signal.\n"
         f"    Only tag as bb_Xtf if it coincides with a structural level (SR, Fib, EMA) — do not trade band touch alone.\n\n"
         f"  MID LINE (dynamic support/resistance — %B near 0.5):\n"
         f"    The blue middle line (20 SMA) acts as support when price is above it, resistance when below.\n"
-        f"    A rejection or bounce off the mid line confirms directional bias. Tag as bb_Xtf if mid confirms your SR.\n\n"
+        f"    A rejection or bounce off the mid line supports directional bias. Tag as bb_Xtf if mid aligns with your SR.\n\n"
         f"  SQUEEZE (big move warning — band width < 1.5%):\n"
         f"    Bands are compressed. A directional explosion is coming — do NOT predict which way.\n"
         f"    Wait for the burst direction THEN trade the mean reversion back in, or wait for BB to expand with clear direction.\n"
-        f"    Do not enter a trade during a squeeze unless other confluences strongly confirm the direction.\n\n"
+        f"    Do not enter a trade during a squeeze unless other confluences strongly support the direction.\n\n"
         f"  KEY RULE: BB signals are strongest when they COMBINE with SR, Fib, or divergence at the same level.\n"
         f"  A burst through the band AT a 4H resistance zone is a high-conviction SHORT. Alone, it is just a signal.\n\n"
         f"If you're posting a trade:\n"
@@ -6685,8 +8254,8 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"Example: TRADE: direction=long, entry=1.2340, sl=1.2280, tp=1.2500, ..., tags=sr_4h,fib_1h,rsi_1h, trade_type=day, sr_level=1.2300, fib_high=1.2650, fib_low=1.2100, rsi_div_t1=2024-06-01, rsi_div_t2=2024-06-15\n\n"
         f"REMINDER — required fields after TRADE: line:\n"
         f"  4H STRUCTURE: <4H trend context — one sentence>\n"
-        f"  INVALIDATION: <the specific price and candle that proves you wrong>\n"
-        f"  CONFIRMATION: <what the candle at the entry zone looks like right now>\n"
+        f"  INVALIDATION: <the specific price that proves you wrong>\n"
+        f"  ENTRY BASIS: <the confluence/structure already in place that makes this the moment to act>\n"
         f"  REASONING: <full analysis — why this setup, what structure supports it, what you're watching. No word limit.>\n"
         f"All four are required. Dexter stores them for post-mortems and learning sessions. Missing = blind spot.\n\n"
         f"If not convinced: SKIP: <one sentence>, WHAT WAS MISSING: <which criterion failed>, REASONING: <be specific>\n\n"
@@ -6707,6 +8276,14 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360):
         f"{_exploration_note}"
         f"Reminder: first word of your reply = POST or SKIP. No exceptions."
     )
+    if force_take:
+        msg += (
+            "\n\nHYPOTHETICAL MODE — this is Kev asking off the record, not a real trade request. "
+            "It will not be posted, logged, or executed. Even if your honest read is SKIP, answer "
+            "using the POST:/TRADE: format above with your best hypothetical entry/SL/TP/tags. Add "
+            "one line after TRADE: → WOULD_TAKE: yes or WOULD_TAKE: no (would you genuinely take "
+            "this live), and say why in REASONING regardless of the format you're forced to use."
+        )
     messages = [{"role": "user", "content": context_prefix + msg}]
     reply = _call_chev(messages, timeout=timeout)
 
@@ -6766,6 +8343,15 @@ def parse_chev_reply(text):
         result["post"] = False
         result["skip_reason"] = directive_line.split(":", 1)[1].strip() if ":" in directive_line else directive_line
 
+    # REASONING is required on both POST and SKIP replies — parse it unconditionally so
+    # a SKIP's full narrative isn't silently discarded (only the one-line SKIP: summary
+    # and WHAT WAS MISSING used to survive).
+    for line in lines:
+        s = line.strip()
+        if s.upper().startswith("REASONING:"):
+            result["reasoning"] = s.split(":", 1)[1].strip()
+            break
+
     if result["post"]:
         trade_line = None
         for line in lines[1:]:
@@ -6805,25 +8391,30 @@ def parse_chev_reply(text):
             except (KeyError, ValueError):
                 result["trade"] = None
 
-        # Parse REASONING: and structured fields (may appear on any line after POST:/TRADE:)
-        reasoning = None
-        for line in lines:
-            s = line.strip()
-            if s.upper().startswith("REASONING:"):
-                reasoning = s.split(":", 1)[1].strip()
-                break
-        if result["trade"] is not None and reasoning:
-            result["trade"]["reasoning"] = reasoning
+        # REASONING already parsed unconditionally above — attach it to the trade dict too.
+        if result["trade"] is not None and result.get("reasoning"):
+            result["trade"]["reasoning"] = result["reasoning"]
 
-        # Parse the three mandatory structured analysis fields
+        # Parse the three mandatory structured analysis fields. ENTRY BASIS replaced the old
+        # CONFIRMATION field (2026-07-05 — dropped the "wait for a candle close" framing); both
+        # labels are still accepted here so an in-flight thread that hasn't picked up the new
+        # prompt wording yet doesn't silently lose the field.
         for _field, _key in [("4H STRUCTURE:", "structure_4h"),
                               ("INVALIDATION:", "invalidation"),
+                              ("ENTRY BASIS:", "confirmation"),
                               ("CONFIRMATION:", "confirmation")]:
             for line in lines:
                 s = line.strip()
                 if s.upper().startswith(_field.upper()):
                     result[_key] = s.split(":", 1)[1].strip() if ":" in s else ""
                     break
+
+        # WOULD_TAKE — only present on hypothetical (force_take) replies; harmless no-op otherwise
+        for line in lines:
+            s = line.strip()
+            if s.upper().startswith("WOULD_TAKE:"):
+                result["would_take"] = s.split(":", 1)[1].strip().lower().startswith("y")
+                break
 
         # Hard validation: SL/TP must be on the correct side of entry
         if result["trade"]:
@@ -7229,6 +8820,63 @@ def _ask_chev_partial_tp(trade, current_price, price_r, level_verdict=None, leve
         print(f"[PARTIAL MILESTONE] {symbol} unexpected reply '{(reply or '').strip()[:50]}' — treating as HOLD")
 
 
+def _ask_chev_time_stop(trade, current_price, hours_open, hours_allowed, price_r):
+    """Send Chev the time-stop checkpoint for a trade that's OPEN past its expiry_at.
+    Chev replies CLOSE_NOW or CONVERT_TO_SWING. Builds and sends only -- the caller in
+    check_and_update_open_trades parses the reply and executes it (same division of
+    responsibility as ask_chev_manage_trade, since this can also fully close the trade
+    and that has to happen where still_open/balance/sheet are in scope)."""
+    symbol     = trade["symbol"]
+    direction  = trade["direction"]
+    trade_type = trade.get("trade_type", "day")
+    primary_tf = trade.get("primary_tf", "1h")
+    asset_type = next((w["type"] for w in WATCHLIST if w["symbol"] == symbol), "crypto")
+
+    market_brief  = _build_management_brief(symbol, asset_type, primary_tf, direction, trade["entry"], trade["tp"])
+    playbook_text = _load_playbook(asset_type)
+
+    checkpoint_block = (
+        f"══════════════════════════════════════════\n"
+        f"TIME-STOP CHECKPOINT — {symbol} {direction.upper()}\n"
+        f"══════════════════════════════════════════\n"
+        f"Trade type: {trade_type.upper()}  |  Hours open: {hours_open:.1f}  |  Hours allowed: {hours_allowed}\n\n"
+        f"This trade has run past the time budget for a {trade_type} trade. It hasn't hit SL or\n"
+        f"TP -- it's just sitting open. That is not the trade you originally chose; it's a\n"
+        f"different trade nobody consciously picked. Decide, right now, which one this actually is.\n\n"
+        f"CURRENT STATUS:\n"
+        f"  Entry:          {trade['entry']}\n"
+        f"  Stop Loss:      {trade['sl']}\n"
+        f"  TP target:      {trade['tp']}\n"
+        f"  Current price:  {current_price:.5f}\n"
+        f"  Unrealized R:   {price_r:+.2f}R\n\n"
+        f"YOUR TWO OPTIONS -- reply with exactly one:\n\n"
+        f"  CLOSE_NOW        — exit the full position now at market. Use this if the original\n"
+        f"                     thesis has gone stale or you can't name a reason it's still valid.\n"
+        f"  CONVERT_TO_SWING — consciously re-choose this as a swing trade (new 48h time\n"
+        f"                     budget). Only takes effect if this trade is not already a swing,\n"
+        f"                     and only usable once per trade -- if it times out again later as\n"
+        f"                     a swing, it closes, it does not convert again. Use this only if\n"
+        f"                     the original structural thesis is still intact and simply needs\n"
+        f"                     more room than its original trade_type allowed.\n\n"
+        f"No other reply is valid. Do not explain your choice — just reply with the one word/phrase.\n"
+    )
+
+    content = (
+        (f"=== YOUR TRADING PLAYBOOK ===\n{playbook_text}\n\n" if playbook_text else "")
+        + checkpoint_block
+        + market_brief
+    )
+
+    print(f"[TIME-STOP] {symbol} {direction.upper()} — {hours_open:.1f}h open vs {hours_allowed}h allowed "
+          f"({price_r:+.2f}R) — asking Chev CLOSE_NOW/CONVERT_TO_SWING")
+    reply = _call_chev([{"role": "user", "content": content}], timeout=90)
+    if reply:
+        trade["last_chev_decision"]  = f"TIME-STOP: {reply.strip()[:60]}"
+        trade["last_decision_price"] = round(current_price, 5)
+        trade["last_decision_time"]  = datetime.now(timezone.utc).strftime("%H:%M")
+    return reply
+
+
 def ask_chev_manage_trade(trade, current_price, bos_paragraph=None):
     """Ask Chev to manage an open trade — trail SL/SIP, close, or hold."""
 
@@ -7285,7 +8933,7 @@ def ask_chev_manage_trade(trade, current_price, bos_paragraph=None):
         f"  POST        : {(trade.get('reasoning') or 'not recorded')[:150]}\n"
         f"  4H STRUCTURE: {trade.get('structure_4h') or 'not recorded'}\n"
         f"  INVALIDATION: {trade.get('invalidation') or 'not recorded'}\n"
-        f"  CONFIRMATION: {trade.get('confirmation') or 'not recorded'}\n\n"
+        f"  ENTRY BASIS  : {trade.get('confirmation') or 'not recorded'}\n\n"
     )
     if _snap:
         _context += (
@@ -7748,8 +9396,13 @@ def load_state_from_sheet(worksheet):
                     trade_entry["sip_active"] = True
                     trade_entry["sip_price"]  = _sl_val
                     print(f"[SIP] {pair} loaded with SIP at {_sl_val} — trade cannot lose.")
+                # expiry_at is written once at proposal time (still PENDING) and never
+                # rewritten at fill -- the same column holds the trade's original expiry
+                # whether it's still PENDING or has since gone OPEN. Load it for both
+                # statuses so the OPEN-branch time-stop check (PHASE 5) has it after a
+                # restart, not just fresh-this-process trades.
+                trade_entry["expiry_at"] = row[16] if len(row) > 16 and row[16] else (datetime.now(timezone.utc) + pd.Timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
                 if status_clean == "PENDING":
-                    trade_entry["expiry_at"] = row[16] if len(row) > 16 else (datetime.now(timezone.utc) + pd.Timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
                     if len(row) > 18 and row[18] in ("True", "False"):
                         # Stored at order creation — safe across restarts
                         trade_entry["entry_trigger_above"] = row[18] == "True"
@@ -8039,7 +9692,56 @@ def check_and_update_jane_trades():
     jane_trades = still_open
 
 
-def log_new_trade(worksheet, dashboard_ws, symbol, asset_type, trade, current_price_at_creation, confluence_prices=None):
+def _build_confluence_prices(td):
+    """Translate Chev's visual-anchor fields (chev_sr_level, chev_fib_high/low, chev_vp_start,
+    chev_rsi_div_t1/t2) on a parsed trade dict into the SR_S/FB_*/VP_*/RSI_DIV_* price-line
+    shape the webapp's chart overlay draws. Pure — no I/O, no logging side effects."""
+    conf_prices = {}
+
+    # --- Support / Resistance ---
+    # Only Chev's explicitly provided level. No Dexter fallback.
+    if td.get("chev_sr_level"):
+        conf_prices["SR_S"] = round(td["chev_sr_level"], 5)
+
+    # --- Fibonacci ---
+    # Only drawn if Chev gave both the swing high and swing low.
+    if td.get("chev_fib_high") and td.get("chev_fib_low"):
+        fh, fl = td["chev_fib_high"], td["chev_fib_low"]
+        rng = fh - fl
+        conf_prices["FB_50"]     = round(fh - rng * 0.500, 5)
+        conf_prices["FB_618"]    = round(fh - rng * 0.618, 5)
+        conf_prices["FB_65"]     = round(fh - rng * 0.650, 5)
+        conf_prices["FB_786"]    = round(fh - rng * 0.786, 5)
+        conf_prices["FB_HIGH_P"] = round(fh, 5)
+        conf_prices["FB_LOW_P"]  = round(fl, 5)
+
+    # --- Volume Profile ---
+    # Only drawn if Chev gave a specific start date for the range.
+    if td.get("chev_vp_start"):
+        try:
+            import calendar as _cal
+            vp_dt = datetime.strptime(td["chev_vp_start"].strip()[:10], "%Y-%m-%d")
+            conf_prices["VP_START_T"] = int(_cal.timegm(vp_dt.timetuple()))
+            conf_prices["VP_END_T"]   = int(time.time())
+        except Exception as _e:
+            print(f"[Dexter] VP start parse error ({td['chev_vp_start']}): {_e}")
+
+    # --- RSI Divergence ---
+    # Chev marks the two RSI swing pivots by date. System draws the RSI trendline
+    # on the RSI panel AND the matching price trendline on the main chart.
+    for _rdi_key, _conf_key in [("chev_rsi_div_t1", "RSI_DIV_T1"), ("chev_rsi_div_t2", "RSI_DIV_T2")]:
+        if td.get(_rdi_key):
+            try:
+                import calendar as _cal
+                _rdi_dt = datetime.strptime(td[_rdi_key].strip()[:10], "%Y-%m-%d")
+                conf_prices[_conf_key] = int(_cal.timegm(_rdi_dt.timetuple()))
+            except Exception as _e:
+                print(f"[Dexter] RSI div parse error ({td[_rdi_key]}): {_e}")
+
+    return conf_prices
+
+
+def log_new_trade(worksheet, dashboard_ws, symbol, asset_type, trade, current_price_at_creation, confluence_prices=None, primary_tf=None, regime_at_proposal=None):
     direction = trade["direction"]
     entry = trade["entry"]
     sl = trade["sl"]
@@ -8096,6 +9798,8 @@ def log_new_trade(worksheet, dashboard_ws, symbol, asset_type, trade, current_pr
         "expiry_at": expiry_at,
         "entry_trigger_above": entry_trigger_above,
         "confluence_prices": confluence_prices or {},
+        "primary_tf": primary_tf,
+        "regime_at_proposal": regime_at_proposal,
     }
 
 
@@ -8221,6 +9925,78 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
                     continue
                 still_open.append(trade)
                 continue
+
+            # ── Fill-time re-validation ───────────────────────────────────────
+            # risk_gauntlet only ever runs once, at proposal time. A PENDING order can
+            # sit for up to TRADE_TYPE_EXPIRY_HOURS (2h scalp / 6h day / 48h swing) before
+            # filling -- far longer than the ~6-minute window the stale-price guard was
+            # calibrated for. Re-check the two conditions that can meaningfully drift
+            # with time (ATR floor, cost/R:R using the ACTUAL fill price, which can differ
+            # from the quoted entry on a gap fill) before committing real capital.
+            # Regime drift is logged but NOT auto-cancelled on -- deciding whether a
+            # regime flip should kill an otherwise-valid pending order is a bigger
+            # judgment call than this fix is scoped to make.
+            _fill_price    = fill["fill_price"]
+            _cancel_reason = None
+            _fill_prof     = risk_gauntlet.get_active_profile(EXPLORATION_MODE)
+            try:
+                _fresh_tf = trade.get("primary_tf") or "1h"
+                _fresh_df = fetch_candles(trade["symbol"], trade["asset_type"], _fresh_tf, limit=60)
+                _fresh_df = _ca_add_indicators(_fresh_df)
+                _fresh_atr = float(_fresh_df["ATR"].iloc[-1]) if "ATR" in _fresh_df.columns else None
+            except Exception as _fe:
+                _fresh_atr = None
+                print(f"[FILL RE-CHECK] {trade['symbol']} fresh ATR fetch failed ({_fe}) -- skipping ATR floor re-check this fill.")
+
+            if _fresh_atr and _fresh_atr > 0:
+                _tt_check      = trade.get("trade_type", "day")
+                _atr_floor_mult = _fill_prof["ATR_FLOOR"].get(_tt_check, 1.2)
+                _sl_dist       = abs(_fill_price - trade["sl"])
+                _atr_min       = _atr_floor_mult * _fresh_atr
+                if _sl_dist < _atr_min:
+                    _cancel_reason = (f"ATR floor no longer met at fill -- SL distance {_sl_dist:.6f} < "
+                                      f"{_atr_floor_mult}x fresh ATR ({_atr_min:.6f}). Volatility shifted "
+                                      f"since Chev's proposal.")
+
+            if _cancel_reason is None:
+                try:
+                    _a_check  = trade["asset_type"] if trade["asset_type"] in risk_gauntlet.FEE_SIDE else "crypto"
+                    _stop_pct = abs(_fill_price - trade["sl"]) / _fill_price if _fill_price else 0
+                    _tp_pct   = abs(trade["tp"] - _fill_price) / _fill_price if _fill_price else 0
+                    _cost_rt  = 2 * (risk_gauntlet.FEE_SIDE[_a_check] + risk_gauntlet.SLIPPAGE_SIDE[_a_check])
+                    if _a_check == "crypto" and trade.get("trade_type") == "swing":
+                        _cost_rt += risk_gauntlet.FUNDING_EST_SWING
+                    _cost_R  = _cost_rt / _stop_pct if _stop_pct > 0 else float("inf")
+                    _net_rr  = (_tp_pct - _cost_rt) / (_stop_pct + _cost_rt) if (_stop_pct + _cost_rt) > 0 else 0.0
+                    _tt_check = trade.get("trade_type", "day")
+                    if _cost_R > _fill_prof["MAX_COST_R"].get(_tt_check, 0.25):
+                        _cancel_reason = (f"Cost gate fails at fill price -- cost_R {_cost_R:.2f} > "
+                                          f"max {_fill_prof['MAX_COST_R'].get(_tt_check, 0.25)} for {_tt_check}.")
+                    elif _net_rr < _fill_prof["MIN_NET_RR"].get(_tt_check, 2.0):
+                        _cancel_reason = (f"Net R:R degraded at fill price -- {_net_rr:.2f} < "
+                                          f"minimum {_fill_prof['MIN_NET_RR'].get(_tt_check, 2.0)} for {_tt_check}.")
+                except Exception as _re:
+                    print(f"[FILL RE-CHECK] {trade['symbol']} cost/R:R re-check failed ({_re}) -- proceeding on original gauntlet pass.")
+
+            if _cancel_reason:
+                try:
+                    worksheet.update_cell(trade["row"], 13, "EXPIRED")
+                except Exception as e:
+                    print(f"[{datetime.now()}] Cancel-at-fill sheet update failed for {trade['symbol']}: {e}")
+                print(f"[FILL RE-CHECK] {trade['symbol']} PENDING fill CANCELLED at trigger price {_fill_price} -- {_cancel_reason}")
+                continue
+
+            # Regime drift -- informational only, does not block the fill.
+            try:
+                _fresh_4h_df  = fetch_candles(trade["symbol"], trade["asset_type"], "4h", limit=60)
+                _fresh_regime = _an_regime(_fresh_4h_df) if _fresh_4h_df is not None and len(_fresh_4h_df) >= 50 else None
+                _fresh_regime_str = (_fresh_regime or {}).get("regime")
+                _proposed_regime  = trade.get("regime_at_proposal")
+                if _proposed_regime and _fresh_regime_str and _fresh_regime_str != _proposed_regime:
+                    print(f"[FILL RE-CHECK] {trade['symbol']} regime drift at fill: proposed under "
+                          f"{_proposed_regime}, now {_fresh_regime_str}. Not auto-cancelled -- flagging for review.")
+            except Exception:
+                pass
 
             trade["status"] = "OPEN"
             trade["entry"]  = fill["fill_price"]
@@ -8473,6 +10249,77 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
             trade["sip_active"] = True
             trade["sip_price"]  = trade["sl"]
             print(f"[SIP] {trade['symbol']} SL {trade['sl']} crossed entry {trade['entry']} — SIP active, trade cannot lose.")
+
+        # ── TIME-STOP CHECKPOINT ────────────────────────────────────────────────
+        # expiry_at is set at proposal time (TRADE_TYPE_EXPIRY_HOURS) and, until now, was
+        # only ever re-checked while the trade was still PENDING -- once OPEN it squatted
+        # forever even if it never hit SL or TP. One checkpoint per expiry event: Chev
+        # gets CLOSE_NOW or CONVERT_TO_SWING (the latter only valid once per trade, and
+        # only if this trade isn't already a swing). No reply, an invalid reply, or the
+        # trade already being a swing -> force close via the same booking pattern every
+        # other exit above uses, close_type TIME_EXIT.
+        if not trade.get("time_stop_checkpoint_sent") and trade.get("expiry_at"):
+            try:
+                _ts_expiry = datetime.strptime(trade["expiry_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            except Exception:
+                _ts_expiry = None
+            if _ts_expiry and datetime.now(timezone.utc) > _ts_expiry:
+                trade["time_stop_checkpoint_sent"] = True  # set BEFORE the call -- guards a slow reply from double-firing
+                _ts_hours_allowed = TRADE_TYPE_EXPIRY_HOURS.get(trade.get("trade_type", "day"), 6)
+                _ts_hours_open = None
+                if trade.get("opened_at"):
+                    try:
+                        _ts_opened = datetime.strptime(trade["opened_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                        _ts_hours_open = (datetime.now(timezone.utc) - _ts_opened).total_seconds() / 3600
+                    except Exception:
+                        _ts_hours_open = None
+                _ts_risk_usd = trade.get("risk_amount_usd", 0)
+                _ts_price_r  = round(live_pnl_dollars / _ts_risk_usd, 2) if _ts_risk_usd > 0 else 0.0
+
+                ts_reply = _ask_chev_time_stop(trade, price, _ts_hours_open or 0.0, _ts_hours_allowed, _ts_price_r)
+                ts_reply_upper = (ts_reply or "").strip().upper()
+
+                if trade.get("trade_type") != "swing" and ts_reply_upper.startswith("CONVERT_TO_SWING"):
+                    _ts_new_expiry = (datetime.now(timezone.utc) + pd.Timedelta(hours=TRADE_TYPE_EXPIRY_HOURS["swing"])).strftime("%Y-%m-%d %H:%M:%S")
+                    trade["trade_type"]    = "swing"
+                    trade["expiry_at"]     = _ts_new_expiry
+                    trade["time_extended"] = True
+                    trade["time_stop_checkpoint_sent"] = False  # new expiry event -- allow exactly one more checkpoint if THIS one also expires
+                    trade.setdefault("chev_moves", []).append(
+                        f"TIME-STOP: CONVERT_TO_SWING @ {datetime.now(timezone.utc).strftime('%H:%M')} (new expiry {_ts_new_expiry})"
+                    )
+                    try:
+                        worksheet.update_cell(trade["row"], 16, "swing")
+                        worksheet.update_cell(trade["row"], 17, _ts_new_expiry)
+                    except Exception as _e:
+                        print(f"[TIME-STOP] Sheet update failed for {trade['symbol']}: {_e}")
+                    print(f"[TIME-STOP] {trade['symbol']} CONVERT_TO_SWING — new expiry {_ts_new_expiry}")
+                else:
+                    _ts_exit_price = exit_candles[-1]["c"] if exit_candles else price
+                    _ts_exit_move  = ((_ts_exit_price - trade["entry"]) / trade["entry"]) if is_long else ((trade["entry"] - _ts_exit_price) / trade["entry"])
+                    _ts_gross_pnl  = round(trade["position_size_usd"] * _ts_exit_move, 2)
+                    ts_exit_pnl, _ts_trade_cost = honest_sim.apply_costs(trade, _ts_gross_pnl, 1.0)
+                    ts_outcome     = "WIN" if ts_exit_pnl >= 0 else "LOSS"
+                    if ts_outcome == "LOSS":
+                        _record_loss_for_cooldown(trade)  # flag for confluence re-entry check
+                    balance = get_balance(dashboard_ws)
+                    margin_to_return = trade.get("margin_reserved", 0)
+                    new_balance = round(balance + margin_to_return + ts_exit_pnl, 2)
+                    set_balance(dashboard_ws, new_balance)
+                    _cached_balance = new_balance
+                    try:
+                        worksheet.update(values=[[_ts_exit_price, ts_exit_pnl, ts_outcome, ts_exit_pnl]], range_name=f"K{trade['row']}:N{trade['row']}")
+                    except Exception as e:
+                        print(f"[{datetime.now()}] Sheet update failed for {trade['symbol']}: {e}")
+                    print(f"[{datetime.now()}] {trade['symbol']} TIME_EXIT @ {_ts_exit_price}  ${ts_exit_pnl:+.2f} "
+                          f"(gross ${_ts_gross_pnl:+.2f} fees ${_ts_trade_cost:.2f})  |  Balance: ${balance:.2f} -> ${new_balance:.2f}")
+                    trade_copy = dict(trade)
+                    trade_copy["close_type"]   = "TIME_EXIT"
+                    trade_copy["trading_cost"] = _ts_trade_cost
+                    threading.Thread(target=_do_postmortem,
+                                     args=(trade_copy, ts_outcome, ts_exit_pnl, _ts_exit_price),
+                                     daemon=True).start()
+                    continue
 
         # ── Chev milestone partial TP — thresholds still power the spot-fallback block below ──
         _risk_usd   = trade.get("risk_amount_usd", 0)
@@ -8744,10 +10591,309 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
 
 
 # ============================================================
+# THE FLIGHT RECORDER (PHASE 10)
+# ============================================================
+# Append-only log of every hand-tuned setting this system runs with -- the black-box
+# recorder trader logic calls for: you journal your trades, this journals your rules.
+# Written ONLY here. Never read by any gate/decision path -- pure observability, so a
+# failure here (disk full, locked file, permissions) must never affect trading logic.
+SYSTEM_STATE_FILE = r"C:\ChevTools\system_state.jsonl"
+
+
+def snapshot_tunables():
+    """Pure, read-only. Assembles a full snapshot of every hand-tuned setting currently in
+    force -- never changes anything. Captures whole risk_gauntlet profile dicts (via the
+    existing public risk_gauntlet.get_active_profile() accessor, never the private
+    _NORMAL/_EXPLORATION names directly) rather than cherry-picked keys, so a future new
+    key in either profile is captured automatically without this function needing an edit."""
+    _thr = lambda asset: dict(zip(("score", "max_dist_pct"), _active_thresholds(asset)))
+    return {
+        "escalation_thresholds": {
+            "active": {"crypto": _thr("crypto"), "forex": _thr("forex"), "stock": _thr("stock")},
+            "normal": {
+                "score": {"crypto": CONFLUENCE_THRESHOLD_CRYPTO, "forex": CONFLUENCE_THRESHOLD_FOREX,
+                          "stock": CONFLUENCE_THRESHOLD_STOCK},
+                "max_dist_pct": ESCALATION_MAX_DIST_PCT,
+            },
+            "exploration": {
+                "score": {"crypto": EXPLORATION_THRESHOLD_CRYPTO, "forex": EXPLORATION_THRESHOLD_FOREX,
+                          "stock": EXPLORATION_THRESHOLD_STOCK},
+                "max_dist_pct": EXPLORATION_MAX_DIST_PCT,
+            },
+        },
+        "escalation_tf_floor": dict(ESCALATION_TF_FLOOR),
+        "hallucination_guard": {
+            "max_entry_dist": HALLUCINATION_MAX_ENTRY_DIST,
+            "max_sltp_dist":  HALLUCINATION_MAX_SLTP_DIST,
+        },
+        "trade_type_expiry_hours": dict(TRADE_TYPE_EXPIRY_HOURS),
+        "max_leverage_by_type": {k: dict(v) for k, v in MAX_LEVERAGE_BY_TYPE.items()},
+        "risk_gauntlet": {
+            "active_profile":      risk_gauntlet.get_active_profile(EXPLORATION_MODE),
+            "normal_profile":      risk_gauntlet.get_active_profile(False),
+            "exploration_profile": risk_gauntlet.get_active_profile(True),
+            "fee_side":                 dict(risk_gauntlet.FEE_SIDE),
+            "slippage_side":            dict(risk_gauntlet.SLIPPAGE_SIDE),
+            "funding_est_swing":        risk_gauntlet.FUNDING_EST_SWING,
+            "ev_safety_margin":         risk_gauntlet.EV_SAFETY_MARGIN,
+            "min_samples_for_ev":       risk_gauntlet.MIN_SAMPLES_FOR_EV,
+            "tag_winrate_window_trades": risk_gauntlet.TAG_WINRATE_WINDOW_TRADES,
+            "tag_winrate_smoothing_k":  risk_gauntlet.TAG_WINRATE_SMOOTHING_K,
+        },
+    }
+
+
+def record_system_state(event, source, changed=None):
+    """Appends ONE JSON line to system_state.jsonl -- never rewrites the file. A write
+    failure (disk full, locked file, permissions) logs a console warning and never raises
+    -- this is a pure observability side-channel, never allowed to crash the caller."""
+    try:
+        record = {
+            "ts":               datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            "event":            event,
+            "source":           source,
+            "system_era":       SYSTEM_ERA,
+            "exploration_mode": EXPLORATION_MODE,
+            "snapshot":         snapshot_tunables(),
+            "changed":          changed,
+        }
+        with open(SYSTEM_STATE_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, default=str) + "\n")
+    except Exception as e:
+        print(f"[system_state] record_system_state failed ({event}/{source}): {e}")
+
+
+# =============================================================================
+# PHASE 14: TUNABLES.JSON HOT-RELOAD
+#
+# A whitelisted subset of tunables can be changed by editing C:\ChevTools\tunables.json
+# and waiting for the next scan cycle -- no restart. Hardcoded defaults above (e.g.
+# CONFLUENCE_THRESHOLD_CRYPTO = 10) remain the fallback whenever the file, or a given key
+# inside it, is absent -- the file only ever OVERRIDES, it is never the sole source. Every
+# value is validated against TUNABLES_BOUNDS below before being applied; out-of-bounds or
+# malformed values are rejected with a console warning and the last-good (previous-cycle,
+# or hardcoded-default if never successfully overridden) value stays in force. Every
+# APPLIED change (value actually differing from a moment ago) is recorded to the flight
+# recorder (record_system_state) with source "file", so system_state.jsonl shows exactly
+# when and what changed, same as a dashboard toggle or a restart.
+#
+# EXPLORATION_MODE itself is deliberately NOT here -- it already has its own toggle path
+# (api_strategy_toggle_exploration), and two masters for one flag is a bug factory.
+#
+# WHITELIST + BOUNDS (dotted JSON path -> (min, max) inclusive, or a fixed allowed-set):
+#   escalation_thresholds.normal.score.{crypto,forex,stock}       (1, 20)
+#   escalation_thresholds.normal.max_dist_pct                     (0.1, 5.0)
+#   escalation_thresholds.exploration.score.{crypto,forex,stock}  (1, 20)
+#   escalation_thresholds.exploration.max_dist_pct                (0.1, 5.0)
+#   escalation_tf_floor.{crypto,forex,stock}                      must be a key in TF_SECONDS
+#   hallucination_max_entry_dist                                  (0.005, 0.10)
+#   exploration_profile.min_net_rr.{scalp,day,swing}              (0.5, 5.0)
+#   exploration_profile.max_cost_r.{scalp,day,swing}              (0.05, 0.60)
+#   exploration_profile.concurrency_cap.{scalp,day,swing}         (1, 5)
+# The last three groups are applied via risk_gauntlet.apply_exploration_overrides() (the
+# ONLY sanctioned way to mutate risk_gauntlet's private _EXPLORATION dict from here) --
+# _NORMAL is never reachable through this file, on purpose (see that function's docstring:
+# it's the fixed "return to discipline" baseline and must never drift from a phone tap).
+#
+# BEHAVIOR NOTE, so this isn't mistaken for a bug later: the mutation this file drives is
+# IN-MEMORY ONLY. Every restart resets every value to its hardcoded default above, and the
+# very first scan cycle after that restart reapplies tunables.json on top. So you will
+# correctly see a "startup" flight-recorder snapshot showing hardcoded defaults, followed
+# immediately by a "file" change record showing tunables.json's values being reapplied --
+# that's the system working, not double-toggling.
+# =============================================================================
+TUNABLES_FILE = r"C:\ChevTools\tunables.json"
+
+TUNABLES_BOUNDS = {
+    "escalation_thresholds.normal.score.crypto":      (1, 20),
+    "escalation_thresholds.normal.score.forex":       (1, 20),
+    "escalation_thresholds.normal.score.stock":       (1, 20),
+    "escalation_thresholds.normal.max_dist_pct":      (0.1, 5.0),
+    "escalation_thresholds.exploration.score.crypto": (1, 20),
+    "escalation_thresholds.exploration.score.forex":  (1, 20),
+    "escalation_thresholds.exploration.score.stock":  (1, 20),
+    "escalation_thresholds.exploration.max_dist_pct": (0.1, 5.0),
+    "hallucination_max_entry_dist":                   (0.005, 0.10),
+    "exploration_profile.min_net_rr.scalp":           (0.5, 5.0),
+    "exploration_profile.min_net_rr.day":             (0.5, 5.0),
+    "exploration_profile.min_net_rr.swing":           (0.5, 5.0),
+    "exploration_profile.max_cost_r.scalp":           (0.05, 0.60),
+    "exploration_profile.max_cost_r.day":             (0.05, 0.60),
+    "exploration_profile.max_cost_r.swing":           (0.05, 0.60),
+    "exploration_profile.concurrency_cap.scalp":      (1, 5),
+    "exploration_profile.concurrency_cap.day":        (1, 5),
+    "exploration_profile.concurrency_cap.swing":      (1, 5),
+}
+
+_tunables_warned_once = False
+
+
+def load_tunables():
+    """PHASE 14: read TUNABLES_FILE, validate every whitelisted key against
+    TUNABLES_BOUNDS (or TF_SECONDS for the TF-floor keys), apply only in-bounds values,
+    and record every APPLIED change (value actually differing from a moment ago) to the
+    flight recorder with source "file". Called once per scan cycle, at the very top of
+    the main loop. File missing -> silently keep defaults (this is the normal pre-tuning
+    state, not an error). File corrupt/unreadable, or a value out of bounds/malformed ->
+    warn once (not spammed every cycle) and keep the last-good value; never raises.
+    """
+    global _tunables_warned_once
+    global CONFLUENCE_THRESHOLD_CRYPTO, CONFLUENCE_THRESHOLD_FOREX, CONFLUENCE_THRESHOLD_STOCK
+    global EXPLORATION_THRESHOLD_CRYPTO, EXPLORATION_THRESHOLD_FOREX, EXPLORATION_THRESHOLD_STOCK
+    global ESCALATION_MAX_DIST_PCT, EXPLORATION_MAX_DIST_PCT, HALLUCINATION_MAX_ENTRY_DIST
+
+    try:
+        with open(TUNABLES_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return
+    except Exception as e:
+        if not _tunables_warned_once:
+            print(f"[tunables] {TUNABLES_FILE} unreadable/corrupt ({e}) -- keeping last-good values.")
+            _tunables_warned_once = True
+        return
+    if not isinstance(data, dict):
+        if not _tunables_warned_once:
+            print(f"[tunables] {TUNABLES_FILE} root is not a JSON object -- keeping last-good values.")
+            _tunables_warned_once = True
+        return
+    _tunables_warned_once = False
+
+    applied = {}
+
+    def _num(path, current):
+        """Look up dotted `path` in `data`; validate type + TUNABLES_BOUNDS. Returns
+        (new_value, True) only when present, valid, in-bounds, AND different from
+        `current` -- (None, False) means "leave current alone" for any other reason
+        (absent, wrong type, out of bounds, or unchanged)."""
+        node = data
+        for part in path.split("."):
+            if not isinstance(node, dict) or part not in node:
+                return None, False
+            node = node[part]
+        val = node
+        if not isinstance(val, (int, float)) or isinstance(val, bool):
+            print(f"[tunables] {path}: non-numeric value {val!r} ignored, keeping {current}.")
+            return None, False
+        lo, hi = TUNABLES_BOUNDS[path]
+        if not (lo <= val <= hi):
+            print(f"[tunables] {path}: {val} outside [{lo}, {hi}] -- ignored, keeping {current}.")
+            return None, False
+        if val == current:
+            return None, False
+        return val, True
+
+    new_val, changed = _num("escalation_thresholds.normal.score.crypto", CONFLUENCE_THRESHOLD_CRYPTO)
+    if changed:
+        applied["escalation_thresholds.normal.score.crypto"] = {"old": CONFLUENCE_THRESHOLD_CRYPTO, "new": new_val}
+        CONFLUENCE_THRESHOLD_CRYPTO = new_val
+
+    new_val, changed = _num("escalation_thresholds.normal.score.forex", CONFLUENCE_THRESHOLD_FOREX)
+    if changed:
+        applied["escalation_thresholds.normal.score.forex"] = {"old": CONFLUENCE_THRESHOLD_FOREX, "new": new_val}
+        CONFLUENCE_THRESHOLD_FOREX = new_val
+
+    new_val, changed = _num("escalation_thresholds.normal.score.stock", CONFLUENCE_THRESHOLD_STOCK)
+    if changed:
+        applied["escalation_thresholds.normal.score.stock"] = {"old": CONFLUENCE_THRESHOLD_STOCK, "new": new_val}
+        CONFLUENCE_THRESHOLD_STOCK = new_val
+
+    new_val, changed = _num("escalation_thresholds.normal.max_dist_pct", ESCALATION_MAX_DIST_PCT)
+    if changed:
+        applied["escalation_thresholds.normal.max_dist_pct"] = {"old": ESCALATION_MAX_DIST_PCT, "new": new_val}
+        ESCALATION_MAX_DIST_PCT = new_val
+
+    new_val, changed = _num("escalation_thresholds.exploration.score.crypto", EXPLORATION_THRESHOLD_CRYPTO)
+    if changed:
+        applied["escalation_thresholds.exploration.score.crypto"] = {"old": EXPLORATION_THRESHOLD_CRYPTO, "new": new_val}
+        EXPLORATION_THRESHOLD_CRYPTO = new_val
+
+    new_val, changed = _num("escalation_thresholds.exploration.score.forex", EXPLORATION_THRESHOLD_FOREX)
+    if changed:
+        applied["escalation_thresholds.exploration.score.forex"] = {"old": EXPLORATION_THRESHOLD_FOREX, "new": new_val}
+        EXPLORATION_THRESHOLD_FOREX = new_val
+
+    new_val, changed = _num("escalation_thresholds.exploration.score.stock", EXPLORATION_THRESHOLD_STOCK)
+    if changed:
+        applied["escalation_thresholds.exploration.score.stock"] = {"old": EXPLORATION_THRESHOLD_STOCK, "new": new_val}
+        EXPLORATION_THRESHOLD_STOCK = new_val
+
+    new_val, changed = _num("escalation_thresholds.exploration.max_dist_pct", EXPLORATION_MAX_DIST_PCT)
+    if changed:
+        applied["escalation_thresholds.exploration.max_dist_pct"] = {"old": EXPLORATION_MAX_DIST_PCT, "new": new_val}
+        EXPLORATION_MAX_DIST_PCT = new_val
+
+    new_val, changed = _num("hallucination_max_entry_dist", HALLUCINATION_MAX_ENTRY_DIST)
+    if changed:
+        applied["hallucination_max_entry_dist"] = {"old": HALLUCINATION_MAX_ENTRY_DIST, "new": new_val}
+        HALLUCINATION_MAX_ENTRY_DIST = new_val
+
+    # -- TF floor: an allowed-values check (must be a key in TF_SECONDS), not a numeric range --
+    tf_node = data.get("escalation_tf_floor")
+    if isinstance(tf_node, dict):
+        for asset in ("crypto", "forex", "stock"):
+            if asset not in tf_node:
+                continue
+            val = tf_node[asset]
+            path = f"escalation_tf_floor.{asset}"
+            current = ESCALATION_TF_FLOOR.get(asset)
+            if val not in TF_SECONDS:
+                print(f"[tunables] {path}: {val!r} is not a known timeframe {sorted(TF_SECONDS)} -- "
+                      f"ignored, keeping {current}.")
+                continue
+            if val != current:
+                applied[path] = {"old": current, "new": val}
+                ESCALATION_TF_FLOOR[asset] = val
+
+    # -- exploration-profile dials, via risk_gauntlet's own sanctioned mutator (never poke
+    # risk_gauntlet._EXPLORATION directly from here) --
+    ep_node = data.get("exploration_profile")
+    if isinstance(ep_node, dict):
+        _json_key_of_rg = {"MIN_NET_RR": "min_net_rr", "MAX_COST_R": "max_cost_r",
+                            "CONCURRENCY_CAP": "concurrency_cap"}
+        overrides = {}
+        old_map = {}
+        for rg_key, json_key in _json_key_of_rg.items():
+            group_node = ep_node.get(json_key)
+            if not isinstance(group_node, dict):
+                continue
+            current_group = risk_gauntlet.get_active_profile(True)[rg_key]
+            group_changes, group_olds = {}, {}
+            for trade_type in ("scalp", "day", "swing"):
+                path = f"exploration_profile.{json_key}.{trade_type}"
+                current = current_group.get(trade_type)
+                new_val, changed = _num(path, current)
+                if changed:
+                    group_changes[trade_type] = new_val
+                    group_olds[trade_type] = current
+            if group_changes:
+                overrides[rg_key] = group_changes
+                old_map[rg_key] = group_olds
+        if overrides:
+            really_applied = risk_gauntlet.apply_exploration_overrides(overrides)
+            for rg_key, group in really_applied.items():
+                json_key = _json_key_of_rg[rg_key]
+                for trade_type, new_val in group.items():
+                    path = f"exploration_profile.{json_key}.{trade_type}"
+                    applied[path] = {"old": old_map[rg_key][trade_type], "new": new_val}
+
+    if applied:
+        print(f"[tunables] applied {len(applied)} change(s) from {TUNABLES_FILE}: {sorted(applied.keys())}")
+        try:
+            record_system_state("tunables_applied", "file", changed=applied)
+        except Exception as e:
+            print(f"[tunables] record_system_state failed: {e}")
+
+
+# ============================================================
 # MAIN LOOP
 # ============================================================
 
 print("Dexter is watching the markets...")
+
+# Flight recorder: one snapshot at every startup, placed before anything below that could
+# fail/retry (Sheets connection, etc.) so a crash-loop restart still gets recorded.
+record_system_state("startup", "startup")
 
 # Start web server and price feed immediately — website should never wait on Google Sheets
 threading.Thread(target=run_web_server, daemon=True).start()
@@ -8864,6 +11010,10 @@ _breaker_alert_sent_date = ""  # UTC date string; caps the circuit-breaker Teleg
 
 while True:
     now = time.time()
+
+    # PHASE 14: re-read tunables.json once per scan cycle -- hot-reload, no restart needed
+    # for anything on the whitelist. Safe no-op every cycle nothing has changed.
+    load_tunables()
 
     # Keep Firebase snapshot data fresh (runs every scan cycle ~5min)
     _cached_balance = get_balance(dashboard_ws)
@@ -9031,6 +11181,23 @@ while True:
             # Only escalate setups Chev is actually allowed to approve.
             # Everything blocked here is still shadow-logged so the Examiner
             # can measure whether these gates help or hurt.
+
+            # TF FLOOR: below ESCALATION_TF_FLOOR for this asset class, don't ask Chev at
+            # all -- the timeframe itself doesn't leave enough room for cost vs R:R (see
+            # comment at ESCALATION_TF_FLOOR's definition). Unknown/unmapped TFs fail open
+            # (escalate as normal) rather than silently blocking.
+            _floor_tf = ESCALATION_TF_FLOOR.get(asset_type)
+            if _floor_tf and primary_tf in TF_SECONDS and _floor_tf in TF_SECONDS \
+                    and TF_SECONDS[primary_tf] < TF_SECONDS[_floor_tf]:
+                print(f"[{datetime.now()}] TF FLOOR — {result['symbol']}/{primary_tf}: "
+                      f"below {asset_type} escalation floor ({_floor_tf}) — not escalated (shadow-logged).")
+                try:
+                    labeller.record_setup(result, asset_type, "NOT_ESCALATED",
+                                         chev_meta={"reason": "tf_below_escalation_floor"})
+                except Exception as _le:
+                    print(f"[labeller] record_setup error (tf_below_escalation_floor): {_le}")
+                continue
+
             _trade_thr, _trade_max_dist = _active_thresholds(asset_type)
             # REMINDER: weekend crypto threshold bump disabled while this is a paper account
             # (thin weekend books/sweeps only matter once real money + real slippage are on
@@ -9094,9 +11261,116 @@ while True:
             gp_str   = " | ★ GOLDEN POCKET" if result.get("in_golden_pocket") else ""
             print(f"[{datetime.now()}] {result['symbol']}/{primary_tf}: score={result['count']:.1f} {result['reasons']}{dist_str}{gp_str} — escalating to Chev")
             balance = get_balance(dashboard_ws)
+            _esc_start_ts = time.time()   # PHASE 11: deliberation_secs -- times the whole
+                                           # escalation (incl. any retries), not just the first call
             chev_response, _chev_messages = ask_chev_to_judge(result, balance, dashboard_ws, timeout=360)
 
             parsed = parse_chev_reply(chev_response)
+            # Captured before any gate below can null parsed["trade"] -- lets the final
+            # POST-with-no-trade branch tell "Chev's reply never had a valid TRADE: line"
+            # apart from "it had one, but SCORE/STRUCT/MTF TAX/GEOMETRY rejected it and
+            # already printed a specific reason" -- those are not the same failure.
+            _trade_originally_parsed = bool(parsed and parsed.get("trade"))
+
+            # PHASE 23: shadow-track every trade proposal the MOMENT it parses as valid --
+            # BEFORE any downstream gate (hallucination/score/struct/mtf-tax/geometry/
+            # gauntlet) can kill it. Without this, a gate-killed proposal had ZERO Examiner
+            # label to ever resolve against (confirmed empirically against real
+            # labels_open/closed.jsonl: zero matches at any time tolerance) -- the Gate
+            # Scoreboard's "n/a" pills were honest, not a join bug, because the label
+            # genuinely never existed. record_setup()'s own is_post check requires the
+            # LITERAL string "POST" to use Chev's real entry/direction (see its docstring)
+            # rather than a generic zone-proxy, so this uses "POST" too -- record_setup's
+            # existing symbol+tf+entry_ref dedup (see its docstring) collapses this into a
+            # no-op for the common case where the same trade later locks in for real, so
+            # nothing is double-counted there. counterfactual_report.py's build_counterfactual()
+            # matches a gate-killed decision to this label by symbol+tf+timestamp only --
+            # never by chev_decision -- since a gate-killed attempt IS what a "POST" shadow
+            # record looks like when the kill happens downstream of Chev's reply.
+            if _trade_originally_parsed:
+                try:
+                    labeller.record_setup(result, asset_type, "POST",
+                                         chev_meta={
+                                             "direction":  parsed["trade"].get("direction"),
+                                             "entry":      parsed["trade"].get("entry"),
+                                             "tags":       parsed["trade"].get("tags"),
+                                             "reason":     parsed.get("reasoning"),
+                                             "trade_type": parsed["trade"].get("trade_type"),
+                                         })
+                except Exception as _le:
+                    print(f"[labeller] record_setup error (PHASE 23 early POST): {_le}")
+
+            # ── Hallucination guard: catches numbers that cannot belong to this chart ──
+            # (a training-era price, or the Chev Prompt's own format example leaking
+            # through). Runs immediately after parsing, before every other gate, so no
+            # later gate does real math (ATR ratios, R:R) on numbers that were never real.
+            if parsed and parsed.get("trade"):
+                _h_cur = result.get("current_price")
+                if _h_cur:
+                    _h_td    = parsed["trade"]
+                    _h_entry = float(_h_td.get("entry") or 0)
+                    _h_sl    = float(_h_td.get("sl")    or 0)
+                    _h_tp    = float(_h_td.get("tp")    or 0)
+                    _h_entry_dist = abs(_h_entry - _h_cur) / _h_cur if _h_entry else 0.0
+                    _h_sl_dist    = abs(_h_sl    - _h_cur) / _h_cur if _h_sl    else 0.0
+                    _h_tp_dist    = abs(_h_tp    - _h_cur) / _h_cur if _h_tp    else 0.0
+                    _h_issues = []
+                    if _h_entry and _h_entry_dist > HALLUCINATION_MAX_ENTRY_DIST:
+                        _h_issues.append(f"entry {_h_entry} is {_h_entry_dist:.1%} from live {_h_cur}")
+                    if _h_sl and _h_sl_dist > HALLUCINATION_MAX_SLTP_DIST:
+                        _h_issues.append(f"sl {_h_sl} is {_h_sl_dist:.1%} from live {_h_cur}")
+                    if _h_tp and _h_tp_dist > HALLUCINATION_MAX_SLTP_DIST:
+                        _h_issues.append(f"tp {_h_tp} is {_h_tp_dist:.1%} from live {_h_cur}")
+
+                    if _h_issues:
+                        _h_correction = (
+                            "HALLUCINATION CHECK — your numbers don't match this chart:\n"
+                            + "\n".join(_h_issues)
+                            + f"\n\nLive price right now is {_h_cur}. These prices cannot belong to this "
+                              f"setup. Re-state the full TRADE: line using real numbers from THIS setup's "
+                              f"data (keeping POST: format), or reply SKIP: <reason> if the setup no "
+                              f"longer qualifies."
+                        )
+                        print(f"[{datetime.now()}] HALLUCINATION CHECK — {result['symbol']}: "
+                              f"{len(_h_issues)} issue(s). Sending correction to Chev.")
+                        _chev_messages.append({"role": "assistant", "content": chev_response})
+                        _chev_messages.append({"role": "user",      "content": _h_correction})
+                        _h_revised_reply = _call_chev(_chev_messages, timeout=180)
+                        _h_ok = False
+                        if _h_revised_reply:
+                            _h_revised_parsed = parse_chev_reply(_h_revised_reply)
+                            if _h_revised_parsed and _h_revised_parsed.get("trade"):
+                                _h_rt      = _h_revised_parsed["trade"]
+                                _h_r_entry = float(_h_rt.get("entry") or 0)
+                                _h_r_sl    = float(_h_rt.get("sl")    or 0)
+                                _h_r_tp    = float(_h_rt.get("tp")    or 0)
+                                _h_r_entry_dist = abs(_h_r_entry - _h_cur) / _h_cur if _h_r_entry else 1.0
+                                _h_r_sl_dist    = abs(_h_r_sl    - _h_cur) / _h_cur if _h_r_sl    else 1.0
+                                _h_r_tp_dist    = abs(_h_r_tp    - _h_cur) / _h_cur if _h_r_tp    else 1.0
+                                if (_h_r_entry_dist <= HALLUCINATION_MAX_ENTRY_DIST
+                                        and _h_r_sl_dist <= HALLUCINATION_MAX_SLTP_DIST
+                                        and _h_r_tp_dist <= HALLUCINATION_MAX_SLTP_DIST):
+                                    _h_ok = True
+                                    parsed = _h_revised_parsed
+                                    chev_response = _h_revised_reply
+                            elif _h_revised_parsed and _h_revised_parsed.get("post") is not None:
+                                # Chev switched to SKIP on revision -- respect it, not a hallucination reject.
+                                _h_ok = True
+                                parsed = _h_revised_parsed
+                                chev_response = _h_revised_reply
+
+                        if not _h_ok:
+                            _h_reason = "HALLUCINATED_LEVELS: " + "; ".join(_h_issues)
+                            print(f"[{datetime.now()}] HALLUCINATION CHECK — {result['symbol']} rejected after retry: {_h_reason}")
+                            _log_chev_decision(
+                                result["symbol"], primary_tf, result["count"], result["reasons"],
+                                "REJECT", _h_reason, (result.get("regime_4h") or {}).get("regime"),
+                                **_trade_metrics_for_log(parsed),
+                                deliberation_secs=round(time.time() - _esc_start_ts, 1)
+                            )
+                            if parsed:
+                                parsed["trade"] = None
+                            continue
 
             # Hard confluence score gate — reject below-threshold trades even if Chev said POST.
             # Uses Dexter's mechanically-verified score, not Chev's self-reported tags.
@@ -9110,7 +11384,9 @@ while True:
                     print(f"[{datetime.now()}] SCORE GATE — {result['symbol']} rejected: {_gate_reason}")
                     _log_chev_decision(
                         result["symbol"], primary_tf, _dexter_score, result["reasons"],
-                        "GATE_REJECT", _gate_reason, (result.get("regime_4h") or {}).get("regime")
+                        "GATE_REJECT", _gate_reason, (result.get("regime_4h") or {}).get("regime"),
+                        **_trade_metrics_for_log(parsed),
+                        deliberation_secs=round(time.time() - _esc_start_ts, 1)
                     )
                     parsed["trade"] = None
 
@@ -9128,7 +11404,9 @@ while True:
                     print(f"[{datetime.now()}] STRUCT GATE — {result['symbol']} rejected: {_struct_msg}")
                     _log_chev_decision(
                         result["symbol"], primary_tf, _dexter_score, result["reasons"],
-                        "STRUCT_REJECT", _struct_msg, (result.get("regime_4h") or {}).get("regime")
+                        "STRUCT_REJECT", _struct_msg, (result.get("regime_4h") or {}).get("regime"),
+                        **_trade_metrics_for_log(parsed),
+                        deliberation_secs=round(time.time() - _esc_start_ts, 1)
                     )
                     parsed["trade"] = None
 
@@ -9158,7 +11436,9 @@ while True:
                         print(f"[{datetime.now()}] MTF TAX — {result['symbol']} rejected: {_ct_msg}")
                         _log_chev_decision(
                             result["symbol"], primary_tf, _dexter_score, result["reasons"],
-                            "MTF_TAX_REJECT", _ct_msg, _regime_str
+                            "MTF_TAX_REJECT", _ct_msg, _regime_str,
+                            **_trade_metrics_for_log(parsed),
+                            deliberation_secs=round(time.time() - _esc_start_ts, 1)
                         )
                         parsed["trade"] = None
                     else:
@@ -9186,9 +11466,14 @@ while True:
                 _sl_dist         = abs(_entry - _sl) if _entry and _sl else 0
                 _geo_issues      = []
 
-                # ATR SL check — minimum SL: 1.0×ATR scalp | 1.5×ATR day | 2.5×ATR swing
+                # Shared with risk_gauntlet.py — same profile, same numbers, so this earlier
+                # sanity check and the gauntlet's real gate never quietly disagree with each
+                # other or drift out of sync with EXPLORATION_MODE (2026-07-05 consolidation).
+                _geo_prof = risk_gauntlet.get_active_profile(EXPLORATION_MODE)
+                _atr_mult = _geo_prof["ATR_FLOOR"].get(_ttype, _geo_prof["ATR_FLOOR"]["day"])
+
+                # ATR SL check — minimum SL: ATR_FLOOR[trade_type] from the active profile
                 if _atr > 0 and _sl_dist > 0 and _entry > 0:
-                    _atr_mult = {"scalp": 1.0, "day": 1.5, "swing": 2.5}.get(_ttype, 1.5)
                     _atr_min  = _atr * _atr_mult
                     _sl_ratio = _sl_dist / _atr_min
                     if _sl_ratio < 0.5:   # red zone — hard reject + retry
@@ -9203,8 +11488,10 @@ while True:
                               f"SL dist {_sl_dist:.5f} is {_sl_ratio:.0%} of ATR minimum "
                               f"({_atr_mult}× ATR = {_atr_min:.5f}) for {_ttype}. May get wicked out.")
 
-                # R:R minimum check — 2.0 for all grades (grade affects position size, not the R:R bar)
-                _min_rr = 2.0
+                # R:R minimum check — flat MIN_NET_RR floor from the active profile (grade affects
+                # position size, not the R:R bar; this pre-check has no tag-win-rate context yet,
+                # so it uses the same flat floor the gauntlet falls back to, not the EV-based one)
+                _min_rr = _geo_prof["MIN_NET_RR"].get(_ttype, _geo_prof["MIN_NET_RR"]["day"])
                 if _sl_dist > 0 and _tp != 0 and _entry > 0:
                     _rr = abs(_tp - _entry) / _sl_dist
                     if _rr < _min_rr:
@@ -9256,7 +11543,7 @@ while True:
                             _r_dist  = abs(_r_entry - _r_sl) if _r_entry and _r_sl else 0
                             _r_rr    = abs(_r_tp - _r_entry) / _r_dist if _r_dist > 0 else 0
                             _r_atr_dist = abs(_r_entry - _r_sl)
-                            _r_atr_ok   = (_r_atr_dist >= _atr * {"scalp": 1.0, "day": 1.5, "swing": 2.5}.get(_ttype, 1.5) * 0.5
+                            _r_atr_ok   = (_r_atr_dist >= _atr * _atr_mult * 0.5
                                            if _atr > 0 else True)
                             if _revised_parsed.get("trade") is None:
                                 # Chev chose to SKIP on revision — accept that
@@ -9281,7 +11568,9 @@ while True:
                     if not _revision_ok:
                         _log_chev_decision(
                             result["symbol"], primary_tf, _dexter_score, result["reasons"],
-                            "GEOMETRY_REJECT", "; ".join(_geo_issues[:1]), _regime_str
+                            "GEOMETRY_REJECT", "; ".join(_geo_issues[:1]), _regime_str,
+                            **_trade_metrics_for_log(parsed),
+                            deliberation_secs=round(time.time() - _esc_start_ts, 1)
                         )
                         parsed["trade"] = None
 
@@ -9292,9 +11581,15 @@ while True:
             if parsed and parsed.get("trade"):
                 _g_grade, _ = _setup_grade(result, asset_type)
                 _g_live     = result.get("current_price") or 0
+                _g_tag_stats = risk_gauntlet.compute_tag_win_rates(
+                    _load_journal(),
+                    window_trades=risk_gauntlet.TAG_WINRATE_WINDOW_TRADES,
+                    smoothing_k=risk_gauntlet.TAG_WINRATE_SMOOTHING_K,
+                )
                 _g_res = risk_gauntlet.run_gauntlet(
                     parsed["trade"], result, balance, _g_live,
-                    asset_type, open_trades, _CRYPTO_CORR_SYMBOLS, _g_grade
+                    asset_type, open_trades, _CRYPTO_CORR_SYMBOLS, _g_grade,
+                    tag_stats=_g_tag_stats, exploration_mode=EXPLORATION_MODE
                 )
                 if _g_res["verdict"] == "REJECT":
                     _g_rc = _g_res["reject_code"]
@@ -9316,7 +11611,8 @@ while True:
                             if _g_rp and _g_rp.get("trade"):
                                 _g_res2 = risk_gauntlet.run_gauntlet(
                                     _g_rp["trade"], result, balance, _g_live,
-                                    asset_type, open_trades, _CRYPTO_CORR_SYMBOLS, _g_grade
+                                    asset_type, open_trades, _CRYPTO_CORR_SYMBOLS, _g_grade,
+                                    tag_stats=_g_tag_stats, exploration_mode=EXPLORATION_MODE
                                 )
                                 if _g_res2["verdict"] == "PASS":
                                     chev_response = _g_revised
@@ -9333,14 +11629,22 @@ while True:
                         if not _g_accepted:
                             _log_chev_decision(
                                 result["symbol"], primary_tf, result["count"], result["reasons"],
-                                "REJECT", _g_rr, (result.get("regime_4h") or {}).get("regime")
+                                "REJECT", _g_rr, (result.get("regime_4h") or {}).get("regime"),
+                                **_trade_metrics_for_log(parsed),
+                                cost_r=_g_res.get("cost_r"), ev_advisory_rr=_g_res.get("ev_advisory_rr"),
+                                enforced_rr_floor=_g_res.get("enforced_rr_floor"),
+                                deliberation_secs=round(time.time() - _esc_start_ts, 1)
                             )
                             _last_escalated[esc_key] = time.time() + skip_cool
                             continue
                     else:
                         _log_chev_decision(
                             result["symbol"], primary_tf, result["count"], result["reasons"],
-                            "REJECT", _g_rr, (result.get("regime_4h") or {}).get("regime")
+                            "REJECT", _g_rr, (result.get("regime_4h") or {}).get("regime"),
+                            **_trade_metrics_for_log(parsed),
+                            cost_r=_g_res.get("cost_r"), ev_advisory_rr=_g_res.get("ev_advisory_rr"),
+                            enforced_rr_floor=_g_res.get("enforced_rr_floor"),
+                            deliberation_secs=round(time.time() - _esc_start_ts, 1)
                         )
                         _last_escalated[esc_key] = time.time() + skip_cool
                         continue
@@ -9365,7 +11669,8 @@ while True:
                     _log_chev_decision(
                         result["symbol"], primary_tf, result["count"], result["reasons"],
                         "FORMAT_ERROR", (chev_response or "")[:200],
-                        (result.get("regime_4h") or {}).get("regime")
+                        (result.get("regime_4h") or {}).get("regime"),
+                        deliberation_secs=round(time.time() - _esc_start_ts, 1)
                     )
             elif parsed["post"]:
                 if parsed.get("trade"):
@@ -9374,49 +11679,9 @@ while True:
                     send_telegram_alert(tg_msg)
                     print(f"[{datetime.now()}] Posted to Telegram: {tg_msg}")
                 if parsed.get("trade"):
-                    conf_prices = {}
                     td = parsed["trade"]
-
-                    # --- Support / Resistance ---
-                    # Only Chev's explicitly provided level. No Dexter fallback.
-                    if td.get("chev_sr_level"):
-                        conf_prices["SR_S"] = round(td["chev_sr_level"], 5)
-
-                    # --- Fibonacci ---
-                    # Only drawn if Chev gave both the swing high and swing low.
-                    if td.get("chev_fib_high") and td.get("chev_fib_low"):
-                        fh, fl = td["chev_fib_high"], td["chev_fib_low"]
-                        rng = fh - fl
-                        conf_prices["FB_50"]     = round(fh - rng * 0.500, 5)
-                        conf_prices["FB_618"]    = round(fh - rng * 0.618, 5)
-                        conf_prices["FB_65"]     = round(fh - rng * 0.650, 5)
-                        conf_prices["FB_786"]    = round(fh - rng * 0.786, 5)
-                        conf_prices["FB_HIGH_P"] = round(fh, 5)
-                        conf_prices["FB_LOW_P"]  = round(fl, 5)
-
-                    # --- Volume Profile ---
-                    # Only drawn if Chev gave a specific start date for the range.
-                    if td.get("chev_vp_start"):
-                        try:
-                            import calendar as _cal
-                            vp_dt = datetime.strptime(td["chev_vp_start"].strip()[:10], "%Y-%m-%d")
-                            conf_prices["VP_START_T"] = int(_cal.timegm(vp_dt.timetuple()))
-                            conf_prices["VP_END_T"]   = int(time.time())
-                        except Exception as _e:
-                            print(f"[Dexter] VP start parse error ({td['chev_vp_start']}): {_e}")
-
-                    # --- RSI Divergence ---
-                    # Chev marks the two RSI swing pivots by date. System draws the RSI trendline
-                    # on the RSI panel AND the matching price trendline on the main chart.
-                    for _rdi_key, _conf_key in [("chev_rsi_div_t1", "RSI_DIV_T1"), ("chev_rsi_div_t2", "RSI_DIV_T2")]:
-                        if td.get(_rdi_key):
-                            try:
-                                import calendar as _cal
-                                _rdi_dt = datetime.strptime(td[_rdi_key].strip()[:10], "%Y-%m-%d")
-                                conf_prices[_conf_key] = int(_cal.timegm(_rdi_dt.timetuple()))
-                            except Exception as _e:
-                                print(f"[Dexter] RSI div parse error ({td[_rdi_key]}): {_e}")
-                    new_trade = log_new_trade(worksheet, dashboard_ws, result["symbol"], item["type"], parsed["trade"], result["current_price"], confluence_prices=conf_prices)
+                    conf_prices = _build_confluence_prices(td)
+                    new_trade = log_new_trade(worksheet, dashboard_ws, result["symbol"], item["type"], parsed["trade"], result["current_price"], confluence_prices=conf_prices, primary_tf=result.get("primary_tf"), regime_at_proposal=(result.get("regime_4h") or {}).get("regime"))
                     new_trade["reasoning"]      = parsed["trade"].get("reasoning") or ""
                     new_trade["structure_4h"]  = parsed.get("structure_4h", "")
                     new_trade["invalidation"]  = parsed.get("invalidation", "")
@@ -9515,7 +11780,13 @@ while True:
                     _log_chev_decision(
                         result["symbol"], primary_tf, result["count"], result["reasons"],
                         "POST", parsed.get("telegram_message", ""),
-                        (result.get("regime_4h") or {}).get("regime")
+                        (result.get("regime_4h") or {}).get("regime"),
+                        detail=parsed.get("reasoning", ""),
+                        **_trade_metrics_for_log(parsed),
+                        cost_r=(_g_res.get("cost_r") if _g_res else None),
+                        ev_advisory_rr=(_g_res.get("ev_advisory_rr") if _g_res else None),
+                        enforced_rr_floor=(_g_res.get("enforced_rr_floor") if _g_res else None),
+                        deliberation_secs=round(time.time() - _esc_start_ts, 1)
                     )
                     try:
                         _td = parsed.get("trade") or {}
@@ -9532,16 +11803,24 @@ while True:
                     except Exception as _le:
                         print(f"[labeller] record_setup error (POST): {_le}")
                 else:
-                    print(f"[{datetime.now()}] Chev posted but TRADE: line missing/invalid.")
+                    if _trade_originally_parsed:
+                        print(f"[{datetime.now()}] {result['symbol']}/{primary_tf}: POST rejected upstream "
+                              f"(see gate message above) — not logged as a new trade.")
+                    else:
+                        print(f"[{datetime.now()}] Chev posted but TRADE: line missing/invalid.")
                 _last_escalated[esc_key] = time.time() + post_cool
             else:
                 _last_escalated[esc_key] = time.time() + skip_cool
                 _skip_reason = parsed.get("skip_reason", "no reason captured") if parsed else "no reason captured"
                 print(f"[{datetime.now()}] Chev skipped {result['symbol']}/{primary_tf}: {_skip_reason}")
+                _skip_reasoning = (parsed.get("reasoning", "") if parsed else "")
+                _skip_missing   = (parsed.get("what_was_missing", "") if parsed else "")
+                _skip_detail    = (_skip_reasoning + (f"\n\nWhat was missing: {_skip_missing}" if _skip_missing else "")).strip()
                 _log_chev_decision(
                     result["symbol"], primary_tf, result["count"], result["reasons"],
                     "SKIP", _skip_reason,
-                    (result.get("regime_4h") or {}).get("regime")
+                    (result.get("regime_4h") or {}).get("regime"),
+                    detail=_skip_detail
                 )
                 try:
                     labeller.record_setup(result, asset_type, "SKIP",
@@ -9556,4 +11835,5 @@ while True:
             except Exception as _le:
                 print(f"[labeller] record_setup error (below_threshold): {_le}")
 
+    _last_scan_completed_ts = time.time()   # PHASE 12: this iteration ran to completion
     time.sleep(CHECK_INTERVAL_SECONDS)

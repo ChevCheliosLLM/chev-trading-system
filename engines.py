@@ -138,8 +138,9 @@ class TrendlineFit:
     slope_norm: float   # slope per ATR per bar (for display/comparison)
     slope_raw: float    # actual slope in price/bar units (for evaluation — computing price at bar X)
     intercept: float    # y-intercept in price units
-    r_squared: float    # 0.0–1.0 fit quality
+    r_squared: float    # 0.0–1.0 fit quality (ATR-tolerant — see _GEOM_ATR_TOLERANCE)
     touch_count: int    # number of swing points used to fit
+    within_tolerance_count: int = 0  # of those, how many fell inside the noise tolerance
 
 
 @dataclass
@@ -969,6 +970,14 @@ def run_state_engine(legs: List[Leg], df: pd.DataFrame, lookback: int = 6,
 # Never:  name patterns, access market state, access auction
 # ─────────────────────────────────────────────────────────────────────────────
 
+# A swing point within this many ATRs of the fitted trendline counts as a clean
+# touch, not a broken fit -- ordinary wicks/fakeouts shouldn't score the same as
+# a genuine structural violation. Capped as a fraction of the CURRENT channel
+# width so a converging triangle near its apex doesn't get a tolerance wider
+# than the whole remaining pattern.
+_GEOM_ATR_TOLERANCE       = 0.3
+_GEOM_TOLERANCE_WIDTH_CAP = 0.30
+
 def run_geometry_engine(swings: List[SwingPoint], df: pd.DataFrame,
                          lookback: int = 50,
                          profile: Optional[AssetProfile] = None) -> GeometryReport:
@@ -999,6 +1008,15 @@ def run_geometry_engine(swings: List[SwingPoint], df: pd.DataFrame,
 
     upper = _fit_trendline(highs, atr)
     lower = _fit_trendline(lows,  atr)
+
+    # Re-score fit quality with a width-capped noise tolerance (slope/intercept are
+    # pure OLS and don't depend on tolerance, so this only refines r_squared).
+    _un = _price_at(upper, n - 1)
+    _ln = _price_at(lower, n - 1)
+    _channel_width_now = max(abs(_un - _ln), 1e-10)
+    _tol_price = min(_GEOM_ATR_TOLERANCE * atr, _GEOM_TOLERANCE_WIDTH_CAP * _channel_width_now)
+    upper = _fit_trendline(highs, atr, tolerance_price=_tol_price)
+    lower = _fit_trendline(lows,  atr, tolerance_price=_tol_price)
 
     # Compression: ratio of current gap to initial gap
     start_bar = min(s.index for s in recent)
@@ -1083,7 +1101,7 @@ def run_geometry_engine(swings: List[SwingPoint], df: pd.DataFrame,
     )
 
 
-def _fit_trendline(swings: List[SwingPoint], atr: float) -> TrendlineFit:
+def _fit_trendline(swings: List[SwingPoint], atr: float, tolerance_price: Optional[float] = None) -> TrendlineFit:
     if len(swings) < 2:
         avg_price = swings[0].price if swings else 0.0
         return TrendlineFit(slope_norm=0.0, slope_raw=0.0, intercept=avg_price,
@@ -1103,9 +1121,16 @@ def _fit_trendline(swings: List[SwingPoint], atr: float) -> TrendlineFit:
     intercept = y_mean - slope_raw * x_mean
 
     y_pred = slope_raw * xs + intercept
-    ss_res = float(np.sum((ys - y_pred) ** 2))
+    resid  = ys - y_pred
+    # ATR-scaled noise tolerance: a swing within `tol` of the fitted line counts as
+    # a perfect touch (ordinary wick/fakeout), not a broken fit. Only the distance
+    # beyond that tolerance counts against fit quality.
+    tol = tolerance_price if tolerance_price is not None else _GEOM_ATR_TOLERANCE * atr
+    adj_resid = np.sign(resid) * np.maximum(0.0, np.abs(resid) - tol)
+    ss_res = float(np.sum(adj_resid ** 2))
     ss_tot = float(np.sum((ys - y_mean) ** 2))
     r2 = max(0.0, 1.0 - ss_res / max(ss_tot, 1e-10))
+    within_tol = int(np.sum(np.abs(resid) <= tol))
 
     return TrendlineFit(
         slope_norm=round(slope_raw / max(atr, 1e-10), 6),
@@ -1113,6 +1138,7 @@ def _fit_trendline(swings: List[SwingPoint], atr: float) -> TrendlineFit:
         intercept=round(intercept, 8),
         r_squared=round(r2, 3),
         touch_count=len(swings),
+        within_tolerance_count=within_tol,
     )
 
 
@@ -1686,11 +1712,20 @@ def _score_hypothesis(name: str, bias: str,
     opt_score  = len(met_opt) / max(len(optional), 1) if optional else 0.0
     base_conf  = req_score * 0.65 + opt_score * 0.15 + geometry.measurement_quality * 0.20
 
-    # Weakest-link confidence propagation — the chain is only as strong as its weakest link
+    # Confidence blend: a catastrophic single component (e.g. a genuinely dead
+    # market) still disqualifies outright, but short of that, one moderate-but-not-
+    # terrible ingredient shouldn't cap an otherwise strong hypothesis the way a
+    # strict min() does. Pattern-match (base_conf) is weighted highest since it's
+    # closest to "is this actually the thing it claims to be."
     geom_conf  = geometry.confidence
     state_conf = state.confidence
     auc_conf   = auction.confidence if auction else 0.8
-    confidence = max(0.0, min(1.0, min(base_conf, geom_conf, state_conf, auc_conf)))
+    _CATASTROPHIC_FLOOR = 0.15
+    if min(base_conf, geom_conf, state_conf, auc_conf) < _CATASTROPHIC_FLOOR:
+        confidence = min(base_conf, geom_conf, state_conf, auc_conf)
+    else:
+        confidence = (base_conf * 0.40 + geom_conf * 0.20 + state_conf * 0.20 + auc_conf * 0.20)
+    confidence = max(0.0, min(1.0, confidence))
 
     # Build diagnostic fields
     because = ([f"[REQ] {_CONDITION_DESCRIPTIONS.get(r, r)}" for r in met_req] +
@@ -1773,7 +1808,12 @@ def run_opportunity_engine(hypotheses: List[Hypothesis], auction: Optional[Activ
                             current_price: float) -> Optional[Opportunity]:
     """
     Synthesize the top actionable opportunity from auction + hypothesis.
-    Returns None if no setup clears the B-quality threshold.
+    Returns None only if there's no real, tradeable setup at all (top hypothesis
+    confidence < 0.35, neutral bias, or a FAILED auction) -- that's the one binary
+    validity gate. Past that gate, `quality` (A+/A/B/C) and `confluence_score` are
+    both returned, but only `confluence_score` (continuous 0-100) should drive any
+    sizing/decision logic -- `quality` is a cosmetic label for dashboards/logs only,
+    not a gate. See handoff.txt / the Opportunity Engine rework notes for why.
     """
     if not hypotheses or not auction:
         return None
@@ -1981,8 +2021,19 @@ def format_survey_for_chev(survey: MarketSurvey) -> str:
         elif g.breakout_dn:
             vol_mult = g.vol_at_breakout / max(g.avg_vol, 1e-10)
             lines.append(f"  ⚡ BREAKOUT DOWN confirmed | Volume {vol_mult:.1f}× avg")
-        lines.append(f"  Meas. quality: {g.measurement_quality:.0%} | "
+        _fit_lbl = ("CLEAN" if g.measurement_quality >= 0.75 else
+                    "ACCEPTABLE" if g.measurement_quality >= 0.45 else "POOR")
+        _tot_touches = g.upper.touch_count + g.lower.touch_count
+        _tol_touches = g.upper.within_tolerance_count + g.lower.within_tolerance_count
+        lines.append(f"  Meas. quality: {g.measurement_quality:.0%} [{_fit_lbl}] | "
                      f"Sample: {g.sample_size} swing points | Confidence: {g.confidence:.0%}")
+        if _fit_lbl == "POOR":
+            lines.append(f"  Fit note    : {_tol_touches}/{_tot_touches} swings within normal ATR "
+                         f"noise tolerance — the rest deviate beyond that, a real structural concern.")
+        else:
+            lines.append(f"  Fit note    : {_tol_touches}/{_tot_touches} swings within normal ATR "
+                         f"noise tolerance — {_fit_lbl.lower()}, ordinary wick/fakeout texture, "
+                         f"not a strike against this setup on its own.")
         lines.append("")
 
     # ── Active Auction ────────────────────────────────────────────────────────
@@ -2043,8 +2094,9 @@ def format_survey_for_chev(survey: MarketSurvey) -> str:
     if survey.opportunity:
         o = survey.opportunity
         lines += [
-            f"OPPORTUNITY [{o.quality}] — {o.hypothesis_name} | {o.bias} | "
-            f"Score: {o.confluence_score:.0f}/100:",
+            f"OPPORTUNITY — {o.hypothesis_name} | {o.bias} | "
+            f"Conviction: {o.confluence_score:.0f}/100 (letter tag: {o.quality}, display only — "
+            f"size continuously off the 0-100 score, don't gate off the letter):",
             f"  Entry zone    : {o.entry_zone[0]:.6f} – {o.entry_zone[1]:.6f}",
             f"  Invalidation  : {o.invalidation_price:.6f} | Target: {o.target_price:.6f}",
             f"  Structural R:R: {o.structural_rr:.1f}R | Profile: {o.reward_profile}",

@@ -70,6 +70,39 @@
     overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
   }
   .tb-row2::-webkit-scrollbar { display: none; }
+  /* PHASE 12: vitals strip -- mobile-first via auto-fit grid, no @media needed (none exist
+     elsewhere in this file); at 380px width six 100px-min tiles naturally wrap to two rows. */
+  #vitalsStrip {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 6px; padding: 6px 10px; background: #0d0f1b;
+    border-bottom: 1px solid rgba(255,255,255,0.05); flex-shrink: 0;
+  }
+  .vitalsTile {
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
+    border-radius: var(--r-sm); padding: 4px 8px; text-align: center; min-width: 0;
+  }
+  .vitalsTile .vtLabel {
+    font-size: 8px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--txt3);
+    font-family: 'Inter', sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .vitalsTile .vtVal {
+    font-size: 12px; font-weight: 700; font-family: 'Share Tech Mono', monospace;
+    color: var(--txt1); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .vitalsTile.good .vtVal { color: var(--green); }
+  .vitalsTile.warn .vtVal { color: var(--gold); }
+  .vitalsTile.bad  .vtVal { color: var(--red); }
+  #vitalsStrip #vtUnavailable { display: none; }
+  #vitalsStrip.vitalsUnavailableMode > .vitalsTile:not(#vtUnavailable) { display: none; }
+  #vitalsStrip.vitalsUnavailableMode > #vtUnavailable { display: block; grid-column: 1 / -1; }
+  /* PHASE 12: freshness stamps -- tiny "updated Xs ago" markers observing each panel's own
+     last-successful-fetch time; never alters any panel's fetching logic. */
+  .freshStamp {
+    font-size: 8px; font-family: 'Share Tech Mono', monospace; color: var(--txt3);
+    white-space: nowrap; margin-left: 4px; display: inline-block;
+  }
+  .freshStamp.warn { color: var(--gold); }
+  .freshStamp.bad  { color: var(--red); }
   #topbar::after {
     content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 1px;
     background: linear-gradient(90deg, transparent, rgba(212,175,55,0.15), transparent);
@@ -96,6 +129,11 @@
     transition: background 0.12s;
   }
   .iconBtn:hover { background: rgba(255,255,255,0.07); }
+  /* Added 2026-07-05 — #objectTreeToggle had no active-state rule at all (unlike its
+     sibling icon buttons), so it looked permanently grey regardless of whether the
+     Drawings panel was open. Generic on .iconBtn so any icon-only toggle button
+     benefits, not just this one. */
+  .iconBtn.active { background: rgba(212,175,55,0.15); color: var(--gold); }
   .iconBtn svg { width: 15px; height: 15px; }
 
   /* ---------- Body layout ---------- */
@@ -199,6 +237,14 @@
     border-radius: var(--r-xs); transition: all 0.12s; flex-shrink: 0;
   }
   .removeBtn:hover { color: var(--red); background: rgba(242,54,69,0.08); }
+
+  .starBtn {
+    background: none; border: none; color: var(--txt3); opacity: 0.35;
+    font-size: 11px; cursor: pointer; padding: 2px 3px; line-height: 1;
+    border-radius: var(--r-xs); transition: all 0.12s; flex-shrink: 0;
+  }
+  .starBtn:hover { opacity: 0.8; color: var(--gold); }
+  .starBtn.active { opacity: 1; color: var(--gold); }
 
   #addRow { padding: 7px 10px; }
   #addRow button {
@@ -461,6 +507,43 @@
   .objColor { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
   .objLabel { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .objSectionLabel { padding:4px 10px 2px; font-size:9px; color:#5d6068; letter-spacing:.5px; text-transform:uppercase; border-top:1px solid #1e222d; margin-top:2px; }
+
+  /* ---------- Chart Tool Popup (Fib/RSI, added 2026-07-05) ---------- */
+  /* In-chart corner card, same visual language as #objectTree — replaces the old
+     button-anchored dropdowns that got clipped by the panel's right edge. Anchored
+     to #chartWrap (position:relative), bottom-left — clear of #priceInfo (top-left)
+     and #tradeOverlayBar/#overlayAnalysisPanel (top-right, only shown for an active
+     trade idea) and #objectTree (bottom-right). */
+  #chartToolPopup {
+    display: none; position: absolute; bottom: 12px; left: 16px; z-index: 120;
+    width: 300px; max-height: 360px; overflow-y: auto;
+    background: #131722; border: 1px solid #2a2e39; border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    font-family: "Share Tech Mono", monospace;
+    /* Explicit size here because it cascades to .rsi-tf-row/.rsi-tf-label/.rsi-tf-type
+       below, none of which set their own font-size — they used to inherit 10px from
+       the old #rsiTfDropdown container, which no longer exists. Without this, they
+       fell back to the page's much larger ambient default, causing everything to
+       wrap/overflow inside the narrow popup (the "squished" text). */
+    font-size: 11px;
+  }
+  #chartToolPopup.open { display: block; }
+  .ctpHeader {
+    display:flex; align-items:center; padding: 9px 12px;
+    font-size:11px; color:#d4af37; text-transform:uppercase; letter-spacing:0.06em;
+    border-bottom:1px solid #1e222d; font-weight:600;
+  }
+  .ctpClose { margin-left:auto; cursor:pointer; color:#5d6068; font-size:15px; }
+  .ctpClose:hover { color:#f23645; }
+  #ctpFibBody, #ctpRsiBody { display: none; padding: 8px 10px; }
+  #ctpFibBody.shown, #ctpRsiBody.shown { display: block; }
+  #ctpFibBody label {
+    display: flex; align-items: center; gap: 8px;
+    color: #9598a1; padding: 6px 3px; cursor: pointer; white-space: nowrap; font-size: 12px;
+  }
+  #ctpFibBody label:hover { color: #d4af37; }
+  #ctpFibBody input[type=checkbox] { accent-color: #d4af37; cursor: pointer; width: 13px; height: 13px; }
+  #ctpFibBody .drop-sep { border-top: 1px solid #1e222d; margin: 6px 0; }
   .objEye, .objDel { background:none; border:none; color:#5d6068; cursor:pointer; padding:2px 4px; font-size:11px; line-height:1; }
   .objEye:hover { color:#d1d4dc; }
   .objDel:hover { color:#f23645; }
@@ -827,21 +910,36 @@
   .layerClear { background: none; border: none; color: #5d6068; cursor: pointer; font-size: 11px; padding: 2px 4px; flex-shrink: 0; }
   .layerClear:hover { color: #f23645; }
   .layersToolSep { padding: 6px 14px 3px; font-size: 9px; color: #5d6068; font-family: 'Share Tech Mono', monospace; text-transform: uppercase; letter-spacing: 0.08em; border-top: 1px solid #1e222d; flex-shrink: 0; margin-top: 4px; }
-  .layersToolGrid { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px 12px; flex-shrink: 0; }
+  /* Restyled 2026-07-05: was a wrapping grid of vertical-stack cards — Kev
+     preferred the row style of #layersList above (colored dot + label, one per
+     row), so this is now a vertical stack of horizontal rows instead. Same
+     .layerToolBtn class, same ids on every child — no JS changed, only the shape. */
+  .layersToolGrid { display: flex; flex-direction: column; padding: 2px 0 8px; flex-shrink: 0; }
   .layerToolBtn {
-    display: flex; flex-direction: column; align-items: center;
-    background: #13152a; border: 1px solid #252840; border-radius: 5px;
-    padding: 5px 10px 4px; min-width: 62px; cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
+    display: flex; flex-direction: row; align-items: center; gap: 9px;
+    background: transparent; border: none; border-bottom: 1px solid rgba(255,255,255,0.04);
+    border-radius: 0; padding: 7px 14px; cursor: default;
+    transition: background 0.15s;
   }
-  .layerToolBtn:hover { border-color: #d4af37; background: #1a1c38; }
-  .layerToolBtn.active { border-color: #d4af37; background: #1a1c38; }
+  .layerToolBtn:hover { background: var(--s1); }
+  /* Was background:#1a1c38 — nearly identical to the default, so "on" was barely
+     distinguishable from "off" (2026-07-05 fix: a real gold tint + glow). */
+  .layerToolBtn.active { background: rgba(212,175,55,0.14); box-shadow: inset 0 0 0 1px rgba(212,175,55,0.3); }
+  .toolDot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  /* Hide/show checkbox per tool row (added 2026-07-05) — brought over from the old
+     #layersList's per-layer checkbox now that that list is gone. Disabled (and
+     visually dimmed via :disabled) until that tool actually has something to hide,
+     except ATR, which has no chart drawing to toggle — its checkbox instead
+     controls whether the persistent info readout is shown at all. */
+  .toolVis { accent-color: #d4af37; width: 12px; height: 12px; cursor: pointer; flex-shrink: 0; }
+  .toolVis:disabled { opacity: 0.3; cursor: default; }
   .layerToolBtn .ltbName {
-    font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 13px;
-    color: #9598a1; letter-spacing: 0.06em; transition: color 0.12s;
+    font-family: 'Share Tech Mono', monospace; font-weight: 700; font-size: 11px;
+    color: #9598a1; letter-spacing: 0.04em; transition: color 0.12s;
+    max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .layerToolBtn.active .ltbName { color: #d4af37; }
-  .layerToolBtn .ltbDesc { font-family: 'Share Tech Mono', monospace; font-size: 8px; color: #4a4e68; margin-top: 2px; white-space: nowrap; }
+  .layerToolBtn .ltbDesc { font-family: 'Share Tech Mono', monospace; font-size: 9px; color: #4a4e68; margin-left: auto; padding-left: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
 
   /* CHAT pane */
   #chatPane { flex-direction: row; padding: 0; overflow: hidden; }
@@ -1127,15 +1225,18 @@
   }
   .radarCard {
     background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md);
-    padding: 9px 10px; cursor: pointer; transition: all 0.12s;
+    padding: 9px 10px; transition: all 0.12s; cursor: pointer;
   }
-  .radarCard:hover { background: var(--s2); border-color: var(--border2); }
+  .radarCard:hover { background: var(--s2); border-color: rgba(212,175,55,0.3); }
   .radarCard.bull { border-top: 2px solid var(--green); }
   .radarCard.bear { border-top: 2px solid var(--red); }
   .radarCard.range { border-top: 2px solid var(--gold); }
+  .radarCard.idle  { border-top: 2px solid var(--border2); }
   .radarCard.scanning { opacity: 0.5; animation: radarPulse 1s ease infinite; }
+  .radarCard.cooling { cursor: not-allowed; }
+  .radarCard.cooling .radarCardTop { opacity: 0.55; }
   @keyframes radarPulse { 0%,100%{opacity:0.5} 50%{opacity:0.9} }
-  .radarCardTop { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+  .radarCardTop { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; border-radius: var(--r-xs); transition: all 0.12s; }
   .radarSym { font-family: 'Inter', sans-serif; font-weight: 700; font-size: 10px; color: var(--txt1); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .radarBias {
     font-family: 'Inter', sans-serif; font-weight: 700; font-size: 8px;
@@ -1144,6 +1245,7 @@
   .radarBias.bull { color: var(--green); background: rgba(8,153,129,0.12); }
   .radarBias.bear { color: var(--red);   background: rgba(242,54,69,0.12); }
   .radarBias.range { color: var(--gold); background: var(--gold-dim); }
+  .radarBias.idle  { color: var(--txt3); background: rgba(255,255,255,0.04); }
   .radarConf { font-family: 'Inter', sans-serif; font-weight: 700; font-size: 10px; }
   .radarConf.high  { color: var(--green); }
   .radarConf.mid   { color: var(--gold); }
@@ -1154,6 +1256,16 @@
   .radarConfFill.bull  { background: var(--green); }
   .radarConfFill.bear  { background: var(--red); }
   .radarConfFill.range { background: var(--gold); }
+  .radarCard:has(.radarHypoSlot .ideaCard) { grid-column: 1 / -1; }
+  .radarHypoSlot:not(:empty) { margin-top: 8px; }
+  .radarHypoLoading, .radarHypoError {
+    font-size: 9px; font-family: 'Share Tech Mono', monospace; padding: 6px 2px; color: var(--txt3);
+  }
+  .radarHypoError { color: var(--red); }
+  .radarHypoTagLabel { font-size: 8px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; margin: 2px 0 4px; }
+  .radarHypoMeta { font-size: 8px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; margin-top: 4px; }
+  .radarHypoReask { color: var(--gold); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  .radarHypoReask:hover { opacity: 0.8; }
   #radarEmpty { text-align: center; padding: 30px 20px; color: var(--txt3); font-size: 10px; font-family: 'Share Tech Mono', monospace; }
   #radarScanBtn { flex: 1; }
   #radarProgress { font-size: 9px; color: var(--txt2); font-family: 'Share Tech Mono', monospace; }
@@ -1443,6 +1555,301 @@
   }
   #cmdFooter span { display: flex; align-items: center; gap: 4px; }
 
+  /* ===== STRATEGY DASHBOARD (added 2026-07-05) ===== */
+  #strategyOverlay {
+    position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.72);
+    backdrop-filter: blur(3px); display: none; align-items: center; justify-content: center;
+  }
+  #strategyOverlay.open { display: flex; }
+  #strategyPanel {
+    width: 94vw; height: 92vh; max-width: 1500px;
+    background: linear-gradient(160deg, #10121f 0%, #0b0c16 100%);
+    border: 1px solid rgba(212,175,55,0.18); border-radius: var(--r-xl);
+    box-shadow: 0 24px 80px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.03);
+    display: flex; flex-direction: column; overflow: hidden;
+    animation: cmdFadeIn 0.15s ease;
+  }
+  #stratHeader {
+    display: flex; align-items: center; gap: 10px; padding: 14px 18px;
+    border-bottom: 1px solid rgba(255,255,255,0.06); flex-shrink: 0;
+    background: rgba(212,175,55,0.03);
+  }
+  #stratHeader img { width: 22px; height: 22px; }
+  #stratTitle { font-size: 15px; font-weight: 700; color: var(--gold); letter-spacing: 0.02em; }
+  #stratSub { font-size: 11px; color: var(--txt2); font-family: 'Share Tech Mono', monospace; }
+  #stratModeBadge {
+    margin-left: auto; font-family: 'Share Tech Mono', monospace; font-size: 10.5px;
+    padding: 5px 11px; border-radius: var(--r-pill); border: 1px solid rgba(212,175,55,0.3);
+    background: rgba(212,175,55,0.08); color: var(--gold); white-space: nowrap;
+    cursor: pointer; transition: background 0.12s, border-color 0.12s;
+  }
+  #stratModeBadge:hover { background: rgba(212,175,55,0.16); border-color: rgba(212,175,55,0.55); }
+  #stratCloseBtn {
+    width: 28px; height: 28px; border-radius: var(--r-sm); background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08); color: var(--txt2); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0;
+    transition: background 0.12s, color 0.12s;
+  }
+  #stratCloseBtn:hover { background: rgba(242,54,69,0.15); color: var(--red); border-color: rgba(242,54,69,0.4); }
+  #stratTabs {
+    display: flex; gap: 2px; padding: 0 14px; border-bottom: 1px solid rgba(255,255,255,0.05);
+    flex-shrink: 0; background: rgba(0,0,0,0.15);
+  }
+  .stratTab {
+    padding: 10px 16px; font-size: 12px; color: var(--txt2); cursor: pointer;
+    border-bottom: 2px solid transparent; transition: color 0.12s, border-color 0.12s;
+    font-family: 'Inter', sans-serif; user-select: none;
+  }
+  .stratTab:hover { color: var(--txt1); }
+  .stratTab.active { color: var(--gold); border-bottom-color: var(--gold); }
+  #stratBody { flex: 1; overflow-y: auto; padding: 18px; min-height: 0; }
+  .stratPane { display: none; }
+  .stratPane.active { display: block; animation: cmdFadeIn 0.12s ease; }
+
+  /* Quiet-system alert */
+  #stratQuietAlert {
+    display: none; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 14px;
+    background: rgba(242,54,69,0.08); border: 1px solid rgba(242,54,69,0.3); border-radius: var(--r-md);
+    color: #ff8a95; font-size: 12.5px; font-family: 'Inter', sans-serif;
+  }
+  #stratQuietAlert.show { display: flex; }
+
+  /* Scorecard strip */
+  .stratScoreRow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 18px; }
+  .stratScoreCard {
+    background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md);
+    padding: 12px 14px;
+  }
+  .stratScoreCard .k { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--txt2); font-family: 'Inter', sans-serif; }
+  .stratScoreCard .v { font-size: 20px; font-weight: 700; color: var(--txt1); font-family: 'Share Tech Mono', monospace; margin-top: 4px; }
+  .stratScoreCard .v.good { color: var(--green); }
+  .stratScoreCard .v.bad  { color: var(--red); }
+
+  .stratSectionLabel {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--txt2);
+    font-family: 'Inter', sans-serif; font-weight: 600; margin: 20px 0 10px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
+  }
+  .stratSectionLabel:first-child { margin-top: 0; }
+
+  /* PHASE 21: Learn tab. The old Learning Mode toggle is gone -- (i) icons are always
+     visible everywhere and deep-link into the Learn pane instead of popping a tooltip.
+     The Glossary (concepts + tag registry) is now a real .stratPane, so it inherits
+     #stratBody's working overflow-y:auto instead of being clipped by #strategyPanel's
+     fixed height (PHASE 17's bug: it lived outside #stratBody as a plain sibling). */
+  .stratLearnIcon {
+    display: inline-flex; width: 14px; height: 14px; border-radius: 50%;
+    background: rgba(155,89,182,0.18); color: #b39ddb; border: 1px solid rgba(155,89,182,0.45);
+    font-size: 9.5px; line-height: 1; align-items: center; justify-content: center;
+    cursor: pointer; flex-shrink: 0; font-family: 'Inter', sans-serif; font-weight: 700;
+    user-select: none;
+  }
+  .stratLearnIcon:hover { background: rgba(155,89,182,0.3); }
+
+  #stratLearnSections { margin-bottom: 22px; }
+  .learnEntry { padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04); scroll-margin-top: 12px; }
+  .learnEntry:last-child { border-bottom: none; }
+  .learnEntry .gName { font-size: 12px; font-weight: 700; color: var(--gold); font-family: 'Inter', sans-serif; }
+  .learnEntry .gCode { font-size: 9px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; margin-left: 6px; }
+  .learnEntry .gPoints { font-size: 9px; color: #b39ddb; font-family: 'Share Tech Mono', monospace; margin-left: 6px; }
+  .learnEntry .gDef { font-size: 11px; color: var(--txt2); font-family: 'Inter', sans-serif; margin-top: 3px; line-height: 1.5; }
+  .learnEntry .gHow { font-size: 10.5px; color: var(--txt3); font-family: 'Inter', sans-serif; margin-top: 3px; font-style: italic; }
+  /* Persistent highlight after a deep-link jump -- same violet accent as the rest of
+     Learning Mode's UI. Stays lit (survives a Definition/Story Time toggle, which
+     rebuilds this list's HTML) until you click the highlighted entry itself to clear it. */
+  .learnEntry.learnPinned { background: rgba(155,89,182,0.22); cursor: pointer; transition: background 0.25s ease-out; }
+
+  #glossarySearch {
+    width: 100%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 12px;
+    background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-sm);
+    color: var(--txt1); font-family: 'Inter', sans-serif; font-size: 12px;
+  }
+
+  /* Live feed cards */
+  #stratFeedFilters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+  .stratFeedCard {
+    display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; margin-bottom: 6px;
+    background: var(--s1); border: 1px solid var(--border); border-left: 3px solid var(--border2);
+    border-radius: var(--r-sm); font-family: 'Inter', sans-serif; position: relative; overflow: hidden;
+  }
+  .stratFeedCard.isSkip {
+    border-left-color: var(--red);
+    background: linear-gradient(90deg, rgba(242,54,69,0.15) 0%, var(--s1) 40%);
+  }
+  .stratFeedCard.isPost {
+    border-left-color: var(--green);
+    background: linear-gradient(90deg, rgba(8,153,129,0.15) 0%, var(--s1) 40%);
+  }
+  .stratFeedCard.isReject {
+    border-left-color: #ff8a3d;
+    background: linear-gradient(90deg, rgba(255,138,61,0.13) 0%, var(--s1) 40%);
+  }
+  .stratFeedCard .stratEmoji { width: 20px; height: 20px; flex-shrink: 0; margin-top: 1px; }
+  .stratFeedCard .stratFeedMain { flex: 1; min-width: 0; }
+  .stratFeedCard .stratFeedTop { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; flex-wrap: wrap; }
+  .stratFeedCard .stratSym { font-weight: 700; font-size: 12.5px; color: var(--txt1); }
+  .stratFeedCard .stratTf { font-size: 10px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; }
+  .stratFeedCard .stratDecPill {
+    font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: var(--r-pill);
+    text-transform: uppercase; letter-spacing: 0.05em; font-family: 'Share Tech Mono', monospace;
+  }
+  .stratDecPill.SKIP { background: rgba(242,54,69,0.15); color: #ff8a95; }
+  .stratDecPill.POST { background: rgba(8,153,129,0.18); color: #5fd6bc; }
+  .stratDecPill.REJECT, .stratDecPill.GATE_REJECT, .stratDecPill.STRUCT_REJECT,
+  .stratDecPill.MTF_TAX_REJECT, .stratDecPill.GEOMETRY_REJECT, .stratDecPill.FORMAT_ERROR {
+    background: rgba(255,138,61,0.15); color: #ffb27a;
+  }
+  .stratFeedCard .stratScore { font-size: 10px; color: var(--txt2); font-family: 'Share Tech Mono', monospace; margin-left: auto; }
+  .stratFeedCard .stratReason { font-size: 12px; color: var(--txt1); line-height: 1.5; }
+  .stratFeedCard .stratDetail {
+    font-size: 11px; color: var(--txt2); line-height: 1.5; margin-top: 4px;
+    padding-top: 4px; border-top: 1px dashed rgba(255,255,255,0.06);
+  }
+  .stratVagueTag {
+    font-size: 8.5px; color: var(--gold); background: rgba(212,175,55,0.1);
+    border: 1px solid rgba(212,175,55,0.3); border-radius: var(--r-pill);
+    padding: 1px 6px; margin-left: auto; font-family: 'Share Tech Mono', monospace;
+  }
+  .stratFeedCard .stratTs { font-size: 9.5px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; margin-top: 3px; }
+
+  /* PHASE 7B-4: feed-card shadow badges -- reuses .stratDecPill's shape/sizing (pill,
+     9px mono, small padding) but with a dashed violet border, the same quarantine accent
+     as the rest of the shadow section, so it never reads as a real decision pill. */
+  .stratShadowBadge {
+    font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: var(--r-pill);
+    font-family: 'Share Tech Mono', monospace; border: 1px dashed rgba(147,112,219,0.5);
+  }
+  .stratShadowBadge.dodged  { background: rgba(8,153,129,0.12); color: #5fd6bc; }
+  .stratShadowBadge.missed  { background: rgba(242,54,69,0.12); color: #ff8a95; }
+  .stratShadowBadge.pending { background: rgba(255,255,255,0.04); color: var(--txt3); }
+
+  /* Funnel */
+  .stratFunnelRow { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+  .stratFunnelLabel { width: 190px; flex-shrink: 0; font-size: 11.5px; color: var(--txt1); font-family: 'Inter', sans-serif; }
+  .stratFunnelBarWrap { flex: 1; background: var(--s2); border-radius: var(--r-xs); height: 20px; overflow: hidden; position: relative; }
+  .stratFunnelBar { height: 100%; border-radius: var(--r-xs); transition: width 0.3s ease; }
+  .stratFunnelCount { width: 54px; text-align: right; font-size: 12px; font-family: 'Share Tech Mono', monospace; color: var(--txt1); flex-shrink: 0; }
+
+  /* Reason breakdown / tag leaderboard bars (shared style) */
+  .stratBarRow { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .stratBarLabel { width: 170px; flex-shrink: 0; font-size: 11.5px; color: var(--txt1); font-family: 'Inter', sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stratBarTrack { flex: 1; background: var(--s2); border-radius: var(--r-xs); height: 16px; overflow: hidden; }
+  .stratBarFill { height: 100%; border-radius: var(--r-xs); }
+  .stratBarVal { width: 64px; text-align: right; font-size: 11px; font-family: 'Share Tech Mono', monospace; color: var(--txt2); flex-shrink: 0; }
+
+  /* Heatmap */
+  /* PHASE 25: 6 four-hour blocks instead of 24 hour columns. */
+  #stratHeatmap { display: grid; grid-template-columns: 34px repeat(6, 1fr); gap: 2px; margin-top: 6px; }
+  .stratHeatCell { aspect-ratio: 1; border-radius: 3px; background: var(--s2); }
+  .stratHeatHourLabel, .stratHeatDayLabel { font-size: 8px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; text-align: center; }
+  .stratHeatDayLabel { text-align: right; padding-right: 4px; align-self: center; }
+
+  /* Grade / R-multiple mini bars */
+  .stratGradeGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px,1fr)); gap: 10px; }
+  .stratGradeCard { background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 12px; text-align: center; }
+  .stratGradeCard .g { font-size: 11px; color: var(--txt2); font-family: 'Inter', sans-serif; }
+  .stratGradeCard .wr { font-size: 18px; font-weight: 700; font-family: 'Share Tech Mono', monospace; margin-top: 2px; }
+  .stratGradeCard .n  { font-size: 9.5px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; }
+
+  #stratEquityChart { width: 100%; height: 220px; }
+
+  /* PHASE 13: system-over-time charts -- same LightweightCharts sizing convention as the
+     equity curve above, stacked one per row (mobile-first, no side-by-side layout needed). */
+  .tsChart { width: 100%; height: 160px; margin-bottom: 10px; }
+  .tsAnnotTip {
+    position: absolute; z-index: 20; pointer-events: none; background: #10121f;
+    border: 1px solid rgba(255,255,255,0.12); border-radius: var(--r-sm); padding: 5px 8px;
+    font-size: 10px; font-family: 'Inter', sans-serif; color: var(--txt1); white-space: nowrap;
+    display: none; box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+  }
+
+  /* Raw table */
+  .stratRawCaption { font-size: 10.5px; color: var(--txt3); font-family: 'Inter', sans-serif; font-style: italic; margin-bottom: 8px; }
+  #stratRawTable { width: 100%; border-collapse: collapse; font-family: 'Share Tech Mono', monospace; font-size: 11px; }
+  #stratRawTable th {
+    text-align: left; padding: 7px 8px; color: var(--txt2); font-size: 9.5px; text-transform: uppercase;
+    letter-spacing: 0.06em; border-bottom: 1px solid var(--border2); position: sticky; top: 0; background: #10121f;
+  }
+  #stratRawTable td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); color: var(--txt1); vertical-align: top; }
+  #stratRawTable tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* PHASE 18: Indicator Scoreboard table. Horizontal scroll on the wrapper (not the whole
+     panel) so 6 columns survive a 380px viewport without breaking anything else. */
+  #stratScoreboardTable { width: 100%; min-width: 460px; border-collapse: collapse; font-family: 'Share Tech Mono', monospace; font-size: 11px; }
+  #stratScoreboardTable th {
+    text-align: left; padding: 7px 8px; color: var(--txt2); font-size: 9.5px; text-transform: uppercase;
+    letter-spacing: 0.06em; border-bottom: 1px solid var(--border2); white-space: nowrap;
+  }
+  #stratScoreboardTable th[data-sort] { cursor: pointer; user-select: none; }
+  #stratScoreboardTable th[data-sort]:hover { color: var(--txt1); }
+  #stratScoreboardTable th .sbSortArrow { opacity: 0.6; margin-left: 3px; }
+  #stratScoreboardTable td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); color: var(--txt1); vertical-align: middle; }
+  #stratScoreboardTable tr:hover td { background: rgba(255,255,255,0.02); }
+  #stratScoreboardTable tr.dimRow td { opacity: 0.4; }
+  .sbIndicatorName { font-family: 'Inter', sans-serif; font-size: 11px; }
+  .sbIndicatorCode { font-size: 8.5px; color: var(--txt3); margin-left: 5px; }
+  .sbSpark { display: flex; align-items: flex-end; gap: 1.5px; height: 20px; width: 64px; }
+  .sbSparkBar { width: 3px; border-radius: 1px; min-height: 2px; flex-shrink: 0; }
+  /* PHASE 7B-2's quarantine convention (violet, dashed) applied at cell scale -- a shadow
+     number can never be mistaken for a real green/red/gold one, even inside a dense table. */
+  .sbShadowWr {
+    display: inline-block; padding: 1px 6px; border: 1px dashed rgba(147,112,219,0.5);
+    border-radius: var(--r-sm); color: #b39ddb; background: rgba(147,112,219,0.06); font-size: 10px;
+  }
+
+  .stratEmptyState { color: var(--txt3); font-size: 12px; font-family: 'Inter', sans-serif; padding: 20px; text-align: center; }
+
+  /* PHASE 7B-2: Shadow Outcomes (counterfactual) — visually quarantined from real stats.
+     Deliberately its own accent hue (violet), unused elsewhere on the page, so shadow
+     numbers can never be mistaken for real green/red/gold performance data at a glance. */
+  .stratShadowSection {
+    margin-top: 16px; padding: 14px; border: 1px dashed rgba(147,112,219,0.4);
+    border-radius: var(--r-md); background: rgba(147,112,219,0.04);
+  }
+  .stratShadowSection .stratSectionLabel:first-child { margin-top: 0; color: #b39ddb; }
+  .stratShadowCaveat {
+    font-size: 10.5px; color: var(--txt2); font-family: 'Inter', sans-serif; font-style: italic;
+    margin-bottom: 12px; line-height: 1.5;
+  }
+  .stratShadowCoverage {
+    font-size: 11px; color: var(--txt2); font-family: 'Share Tech Mono', monospace;
+    margin: 2px 0 14px; text-align: center;
+  }
+  .stratBarSplit { display: flex; height: 100%; }
+  .stratBarSplit .right   { background: var(--green); }
+  .stratBarSplit .wrong   { background: var(--red); }
+  .stratBarSplit .pending { background: var(--txt3); }
+  #stratShadowGateGrid .wr.na { color: var(--txt3); font-size: 14px; }
+  /* PHASE 24: shadow leaderboard rows now carry a full plain-English phrase ("If taken:
+     won 71% · would've made +8.28R · from 73 setups") -- too long to share a line with
+     the label+bar at 380px. Scoped ONLY to these two shadow containers (the real
+     #stratTagBars/#stratComboBars rows are untouched, same PHASE 7B-3 isolation as
+     before). The row wraps so the phrase drops to its own line under the label+bar; the
+     phrase's own fragments ALSO wrap independently, so nothing is ever cramped or
+     truncated at any width -- no media query, same flexbox-reflow convention the rest of
+     this page already uses. */
+  #stratShadowTagBars .stratBarRow, #stratShadowComboBars .stratBarRow { flex-wrap: wrap; row-gap: 4px; }
+  #stratShadowTagBars .stratBarVal, #stratShadowComboBars .stratBarVal {
+    width: 100%; flex-basis: 100%; text-align: left; color: var(--txt2);
+    display: flex; flex-wrap: wrap; gap: 3px 8px; margin-top: 1px;
+  }
+  #stratShadowTagBars .stratBarVal .svLead, #stratShadowComboBars .stratBarVal .svLead { color: var(--txt3); }
+  #stratShadowTagBars .stratBarVal .svFrag, #stratShadowComboBars .stratBarVal .svFrag { white-space: nowrap; }
+  /* PHASE 7B-4: hand-rolled sparkline (no charting library — matches the funnel/heatmap's
+     own hand-rolled-div convention rather than the equity curve's LightweightCharts one,
+     since this is a glanceable trend strip, not an interactive chart). */
+  .stratSparkRow { display: flex; align-items: flex-end; gap: 5px; height: 50px; margin-top: 6px; }
+  .stratSparkBar { flex: 1; min-height: 2px; border-radius: 2px 2px 0 0; background: var(--red); transition: height 0.3s ease; }
+  .stratSparkLabels { display: flex; gap: 5px; margin-top: 3px; }
+  .stratSparkLabels span { flex: 1; text-align: center; font-size: 8px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; }
+  .stratFilterPill {
+    font-size: 10.5px; padding: 4px 10px; border-radius: var(--r-pill); cursor: pointer;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); color: var(--txt2);
+    font-family: 'Inter', sans-serif; transition: all 0.12s;
+  }
+  .stratFilterPill:hover { color: var(--txt1); }
+  .stratFilterPill.active { background: rgba(212,175,55,0.15); color: var(--gold); border-color: rgba(212,175,55,0.4); }
+
   /* Performance stats bar */
   #perfSection { flex-shrink: 0; border-top: 1px solid rgba(255,255,255,0.04); }
   .perfBar {
@@ -1497,6 +1904,184 @@
     </div>
   </div>
 
+  <div id="strategyOverlay">
+    <div id="strategyPanel" role="dialog" aria-label="Strategy Dashboard">
+      <div id="stratHeader">
+        <img src="emoji/fire.png" alt="" onerror="this.style.display='none'">
+        <div>
+          <div id="stratTitle">STRATEGY — Chev's Edge</div>
+          <div id="stratSub">Live confluence, R:R, and every call he's made — the numbers behind the trash talk. <span class="freshStamp" id="freshStrategy"></span></div>
+        </div>
+        <div id="stratModeBadge" title="Click to flip EXPLORATION_MODE — a real, immediate change">loading…</div>
+        <button id="stratCloseBtn" title="Close (Esc)">✕</button>
+      </div>
+      <div id="stratTabs">
+        <div class="stratTab active" data-spane="overview">Overview</div>
+        <div class="stratTab" data-spane="feed">Chev's Thoughts</div>
+        <div class="stratTab" data-spane="diagnostics">Why It Skips</div>
+        <div class="stratTab" data-spane="performance">Performance</div>
+        <div class="stratTab" data-spane="raw">Raw Log</div>
+        <div class="stratTab" data-spane="learn">📖 Learn</div>
+      </div>
+      <div id="stratBody">
+
+        <!-- ===== OVERVIEW ===== -->
+        <div class="stratPane active" data-spane="overview">
+          <div id="stratQuietAlert"><span>⚠</span> <span id="stratQuietText"></span></div>
+          <div class="stratSectionLabel">🩸 Scorecard (all-time, paper)<span class="stratLearnIcon" data-learn="scorecard" title="What is this?">ⓘ</span></div>
+          <div class="stratScoreRow" id="stratScoreRow">
+            <div class="stratScoreCard"><div class="k">Win Rate</div><div class="v" id="scWinRate">—</div></div>
+            <div class="stratScoreCard"><div class="k">Profit Factor</div><div class="v" id="scProfitFactor">—</div></div>
+            <div class="stratScoreCard"><div class="k">Expectancy / Trade</div><div class="v" id="scExpectancy">—</div></div>
+            <div class="stratScoreCard"><div class="k">Total Closed</div><div class="v" id="scTotalClosed">—</div></div>
+            <div class="stratScoreCard"><div class="k">Net P&L</div><div class="v" id="scTotalPnl">—</div></div>
+          </div>
+          <div class="stratSectionLabel">📈 Equity Curve <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">Your paper account balance over time — every closed trade moves this line.</span><span class="stratLearnIcon" data-learn="equity_curve" title="What is this?">ⓘ</span></div>
+          <div id="stratEquityChart"></div>
+          <div class="stratSectionLabel">🗺️ Setup Volume <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">When opportunities show up — which days and hours (UTC) the scanner finds the most setups.</span><span class="stratLearnIcon" data-learn="setup_volume_heatmap" title="What is this?">ⓘ</span></div>
+          <div id="stratHeatmap"></div>
+        </div>
+
+        <!-- ===== CHEV'S THOUGHTS (live feed) ===== -->
+        <div class="stratPane" data-spane="feed">
+          <div id="stratFeedFilters">
+            <div class="stratFilterPill active" data-filt="ALL">All</div>
+            <div class="stratFilterPill" data-filt="POST">🔥 Posted</div>
+            <div class="stratFilterPill" data-filt="SKIP">🤔 Skipped</div>
+            <div class="stratFilterPill" data-filt="REJECT">🔧 Gate/Gauntlet Rejects</div>
+          </div>
+          <div id="stratFeedList"></div>
+        </div>
+
+        <!-- ===== WHY IT SKIPS (diagnostics) ===== -->
+        <div class="stratPane" data-spane="diagnostics">
+          <div class="stratSectionLabel">🚦 The Funnel (last 24h)<span class="stratLearnIcon" data-learn="funnel" title="What is this?">ⓘ</span></div>
+          <div id="stratFunnel"></div>
+          <div class="stratSectionLabel">🧩 Skip/Reject Reasons (last 24h)<span class="stratLearnIcon" data-learn="skip_reject_reasons" title="What is this?">ⓘ</span></div>
+          <div id="stratReasonBars"></div>
+
+          <!-- PHASE 7B-2: counterfactual shadow outcomes — see counterfactual_report.py /
+               /api/strategy/counterfactual. Visually quarantined (dashed violet border) so
+               these numbers can never be mistaken for real performance. -->
+          <div class="stratShadowSection" id="stratShadowSection">
+            <div class="stratSectionLabel">🕯️ Shadow Outcomes — hypothetical, costs modelled<span class="stratLearnIcon" data-learn="shadow_outcomes" title="What is this?">ⓘ</span></div>
+            <div class="stratShadowCaveat">These are "what-if" numbers from trades we did NOT take. They assume everything went perfectly — treat them as clues for tuning, never as results.</div>
+            <div class="stratScoreRow" style="grid-template-columns: repeat(2, 1fr);">
+              <div class="stratScoreCard">
+                <div class="k">🟢 Bullets Dodged (shadow R)</div>
+                <div class="v good" id="stratShadowDodged">—</div>
+              </div>
+              <div class="stratScoreCard">
+                <div class="k">🔴 Money Left on Table (shadow R)</div>
+                <div class="v bad" id="stratShadowForfeited">—</div>
+              </div>
+            </div>
+            <div class="stratShadowCoverage" id="stratShadowCoverage"></div>
+            <div class="stratSectionLabel">🎰 Gate Scoreboard — downstream kills (shadow WR / shadow R)<span class="stratLearnIcon" data-learn="gate_scoreboard" title="What is this?">ⓘ</span></div>
+            <div class="stratGradeGrid" id="stratShadowGateGrid"></div>
+
+            <!-- PHASE 7B-3: shadow tag/combo leaderboards — skipped/killed setups only,
+                 never merged with or shown in the real Performance pane's leaderboards. -->
+            <div class="stratSectionLabel">🏷️ Shadow Tag Leaderboard <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">— skipped/killed setups only</span><span class="stratLearnIcon" data-learn="shadow_tag_leaderboard" title="What is this?">ⓘ</span></div>
+            <div class="stratShadowCaveat">Skips are ~95% of escalations — a 15–20× multiplier of labeled evidence on which tags precede winning moves. But skipped setups are not a random sample; Chev skipped them for reasons. Evidence Chev may be under-trusting these — leads for review, not verdicts.</div>
+            <div id="stratShadowTagBars"></div>
+            <div class="stratSectionLabel">🧬 Shadow Combo Leaderboard <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">— skipped/killed setups only, greyed out below the shadow trust minimum</span><span class="stratLearnIcon" data-learn="shadow_combo_leaderboard" title="What is this?">ⓘ</span></div>
+            <div id="stratShadowComboBars"></div>
+
+            <!-- PHASE 7B-4: weekly regret trend -- hand-rolled bars (no charting library),
+                 matching the page's existing funnel/heatmap convention. Full history, NOT
+                 scoped to baseline_ts -- see build_weekly_regret() in counterfactual_report.py. -->
+            <div class="stratSectionLabel">📉 Weekly Regret Trend <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">Missed profits by week — what the trades we skipped would have earned. Falling is good.</span><span class="stratLearnIcon" data-learn="weekly_regret_trend" title="What is this?">ⓘ</span></div>
+            <div class="stratSparkRow" id="stratShadowSpark"></div>
+            <div class="stratSparkLabels" id="stratShadowSparkLabels"></div>
+          </div>
+        </div>
+
+        <!-- ===== PERFORMANCE ===== -->
+        <div class="stratPane" data-spane="performance">
+          <div class="stratSectionLabel">🎯 Win Rate by Grade<span class="stratLearnIcon" data-learn="win_rate_by_grade" title="What is this?">ⓘ</span></div>
+          <div class="stratGradeGrid" id="stratGradeGrid"></div>
+          <div class="stratSectionLabel">🏆 Confluence Tag Leaderboard (real win rate)<span class="stratLearnIcon" data-learn="tag_leaderboard" title="What is this?">ⓘ</span></div>
+          <div id="stratTagBars"></div>
+          <div class="stratSectionLabel">🧬 Confluence Combination Leaderboard <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">— greyed out = not enough closed trades to trust yet</span><span class="stratLearnIcon" data-learn="combo_leaderboard" title="What is this?">ⓘ</span></div>
+          <div id="stratComboBars"></div>
+          <div class="stratSectionLabel">📊 Planned R:R Distribution <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">— Dexter's actual cost-adjusted formula, at entry time</span><span class="stratLearnIcon" data-learn="planned_rr_distribution" title="What is this?">ⓘ</span></div>
+          <div id="stratRHist"></div>
+
+          <!-- PHASE 13: system-over-time charts, annotated with system_state.jsonl events.
+               Same LightweightCharts instance the Equity Curve already uses -- no new
+               library. Each chart degrades to a "collecting data since..." note instead of
+               empty axes when there isn't enough structured (PHASE 10/11) data yet. -->
+          <div class="stratSectionLabel">📉 System Over Time<span class="stratLearnIcon" data-learn="system_over_time" title="What is this?">ⓘ</span></div>
+          <div id="tsEmptyNote" class="stratEmptyState" style="display:none"></div>
+          <div id="tsChartsWrap">
+            <div class="stratSectionLabel" style="font-size:10px;opacity:0.75">R:R Pressure — enforced floor, EV-advisory, Chev's proposals (median, min–max band)</div>
+            <div id="tsRrChart" class="tsChart"></div>
+            <div class="stratSectionLabel" style="font-size:10px;opacity:0.75">Threshold vs Flow — escalation-score threshold, escalations/day, surviving POSTs/day</div>
+            <div id="tsFlowChart" class="tsChart"></div>
+            <div class="stratSectionLabel" style="font-size:10px;opacity:0.75">Stop-Distance Reality — median stop_pct (P10–P90 band) vs crypto day-trade cost floor</div>
+            <div id="tsStopChart" class="tsChart"></div>
+          </div>
+
+          <!-- PHASE 18: Indicator Scoreboard -- one row per registry tag: static Points
+               (from CONFLUENCE_SCORES via the registry), real Win Rate (SAME source/field
+               as the Tag Leaderboard above -- never recomputed), a weekly-trend sparkline
+               (PHASE 18's own new /api/strategy/tag_trends), and Shadow WR (quarantine-
+               styled, from the existing counterfactual endpoint). -->
+          <div class="stratSectionLabel">🧰 Indicator Scoreboard<span class="stratLearnIcon" data-learn="indicator_scoreboard" title="What is this?">ⓘ</span></div>
+          <div id="stratScoreboardWrap" style="overflow-x:auto">
+            <table id="stratScoreboardTable">
+              <thead>
+                <tr>
+                  <th data-sort="name" data-label="Indicator">Indicator</th>
+                  <th data-sort="points" data-label="Points">Points</th>
+                  <th data-sort="wr" data-label="Real WR">Real WR</th>
+                  <th>Trend</th>
+                  <th data-sort="shadowWr" data-label="Shadow WR">Shadow WR</th>
+                  <th data-sort="n" data-label="n">n</th>
+                </tr>
+              </thead>
+              <tbody id="stratScoreboardBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ===== RAW LOG ===== -->
+        <div class="stratPane" data-spane="raw">
+          <!-- PHASE 22: the one place codes stay verbatim, on purpose (see Learn). -->
+          <div class="stratRawCaption">Codes here are shown exactly as logged — see the Learn tab for what they mean.</div>
+          <table id="stratRawTable">
+            <thead><tr><th>Time</th><th>Symbol</th><th>TF</th><th>Score</th><th>Decision</th><th>Reason</th><th>Detail</th></tr></thead>
+            <tbody id="stratRawBody"></tbody>
+          </table>
+        </div>
+
+        <!-- ===== LEARN (PHASE 21) =====
+             A real .stratPane -- this is the scroll fix: it inherits #stratBody's working
+             overflow-y:auto instead of being clipped as a plain sibling of #stratBody
+             (PHASE 17's bug). "Sections" is new this phase (one entry per stratSectionLabel,
+             deep-linked from every (i) icon); the Concept/Tag Glossary below it is PHASE 17's
+             content, moved here unchanged. -->
+        <div class="stratPane" data-spane="learn">
+          <!-- PHASE 27: Definition / Story Time toggle -- reuses the existing .pill
+               component, default Definition, remembered per device via localStorage. -->
+          <div style="display:flex; gap:6px; margin-bottom:16px;">
+            <button class="pill active" id="learnModeDef" type="button">Definition</button>
+            <button class="pill" id="learnModeStory" type="button">📖 Story Time</button>
+          </div>
+          <div class="stratSectionLabel">🗺️ Sections</div>
+          <div id="stratLearnSections"></div>
+          <div class="stratSectionLabel">📖 Glossary</div>
+          <input id="glossarySearch" type="text" placeholder="Search the glossary…" autocomplete="off" spellcheck="false">
+          <div id="stratConceptGlossary"></div>
+          <div class="stratSectionLabel" style="margin-top:18px">Confluence Tags</div>
+          <div id="stratTagGlossary"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
   <div id="topbar">
     <!-- ROW 1: identity + timeframe + pinned actions -->
     <div class="tb-row1">
@@ -1518,6 +2103,13 @@
       <button class="pill" data-tf="4h">4h</button>
       <button class="pill" data-tf="1d">1d</button>
       <div class="tb-row1-spacer"></div>
+      <button class="pill iconBtn" id="strategyBtn" title="Strategy Dashboard" onclick="window._openStrategy?.()">
+        <img src="emoji/fire.png" alt="Strategy" style="width:15px;height:15px"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+        <svg style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 3v18h18"/><path d="M18.7 8 12 14.7l-3.5-3.5L3 16.5"/>
+        </svg>
+      </button>
       <button class="pill iconBtn" id="cmdPaletteBtn" title="Command Palette (Ctrl+K)" onclick="window._openCmdPalette?.()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>
@@ -1641,34 +2233,42 @@
           <button class="arsenal-card-btn" id="atrBtn">ATR</button>
           <div class="arsenal-card-desc">Volatility · Stop</div>
         </div>
-        <!-- Fib with TF dropdown -->
-        <div class="arsenal-card" id="fibCard" title="Multi-TF Golden Pocket — where the retracements stack" style="min-width:80px; position:relative">
-          <div class="arsenal-card-drop">
-            <button class="arsenal-card-btn" id="fibStackBtn">Fib</button>
-            <span class="arsenal-drop-arrow" id="fibDropArrow" title="Select timeframes">▾</span>
-          </div>
-          <div class="arsenal-card-desc">Golden Pocket</div>
-          <div id="fibTfDropdown">
-            <label><input type="checkbox" id="fibCk15m" checked> 15m</label>
-            <label><input type="checkbox" id="fibCk1h"  checked> 1h</label>
-            <label><input type="checkbox" id="fibCk4h"  checked> 4h</label>
-            <div class="drop-sep"></div>
-            <label><input type="checkbox" id="fibCkLevels"> All levels (low opacity)</label>
-          </div>
-        </div>
-        <!-- RSI÷ with TF dropdown -->
-        <div class="arsenal-card" id="rsiCard" title="RSI Divergence — momentum doesn't lie" style="min-width:80px; position:relative">
-          <div class="arsenal-card-drop">
-            <button class="arsenal-card-btn" id="rsiDivBtn">RSI÷</button>
-            <span class="arsenal-drop-arrow" id="rsiDropArrow" title="Divergence by timeframe">▾</span>
-          </div>
-          <div class="arsenal-card-desc">Divergence</div>
-          <div id="rsiTfDropdown">
-            <div class="rsi-loading" id="rsiTfLoading">Scanning TFs…</div>
-          </div>
-        </div>
+        <!-- Fib and RSI÷ cards moved to the Layers panel (lyrFibCard/lyrRsiCard) —
+             their config/results now live in the in-chart #chartToolPopup, not a
+             corner dropdown here. This whole topbar Arsenal strip is permanently
+             collapsed (see arsenalToggleBtn handler) so fibCard/rsiCard were dead,
+             unreachable UI even before this — removed 2026-07-05. -->
       </div>
     </div>
+  </div>
+
+  <!-- PHASE 12: vitals strip -- read-only, polls /api/vitals; single grey tile on failure -->
+  <div id="vitalsStrip">
+    <div class="vitalsTile" id="vtHeartbeat">
+      <div class="vtLabel">Heartbeat</div>
+      <div class="vtVal" id="vtHeartbeatVal">—</div>
+    </div>
+    <div class="vitalsTile" id="vtDrought">
+      <div class="vtLabel">Drought</div>
+      <div class="vtVal" id="vtDroughtVal">—</div>
+    </div>
+    <div class="vitalsTile" id="vtSlots">
+      <div class="vtLabel">Slots</div>
+      <div class="vtVal" id="vtSlotsVal">—</div>
+    </div>
+    <div class="vitalsTile" id="vtMode">
+      <div class="vtLabel">Mode</div>
+      <div class="vtVal" id="vtModeVal">—</div>
+    </div>
+    <div class="vitalsTile" id="vtTodayR">
+      <div class="vtLabel">Today R</div>
+      <div class="vtVal" id="vtTodayRVal">—</div>
+    </div>
+    <div class="vitalsTile" id="vtChevLatency">
+      <div class="vtLabel">Chev</div>
+      <div class="vtVal" id="vtChevLatencyVal">—</div>
+    </div>
+    <div class="vitalsTile" id="vtUnavailable"><div class="vtVal">⚠ vitals unavailable</div></div>
   </div>
 
   <div id="body">
@@ -1676,7 +2276,7 @@
     <div id="leftPanel">
       <div id="leftInner">
         <div class="sectionHeader sidebarToggle" onclick="toggleSidebar('watchlist')" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
-          <span>Watchlist</span><span id="watchlistArrow" style="font-size:9px;opacity:0.5">▼</span>
+          <span>Watchlist</span><span class="freshStamp" id="freshWatchlist"></span><span id="watchlistArrow" style="font-size:9px;opacity:0.5">▼</span>
         </div>
         <div id="watchlistGroup">
           <div id="watchlistSearchWrap">
@@ -1729,10 +2329,26 @@
           <div id="rsiObjectList"></div>
         </div>
       </div>
+      <!-- Chart Tool Popup (added 2026-07-05) — shared, persistent, in-chart config/
+           results card for Fib and RSI÷. Replaces the old corner dropdowns, which got
+           clipped by the window edge. Stays open until the X is pressed or the tool
+           itself is toggled off — does not auto-close on outside clicks. -->
+      <div id="chartToolPopup">
+        <div class="ctpHeader"><span id="ctpTitle">Fibonacci</span><span class="ctpClose" id="ctpClose" title="Close">✕</span></div>
+        <div id="ctpFibBody">
+          <label><input type="checkbox" id="fibCk15m"> 15m</label>
+          <label><input type="checkbox" id="fibCk1h" checked> 1h</label>
+          <label><input type="checkbox" id="fibCk4h"> 4h</label>
+          <div class="drop-sep"></div>
+          <label><input type="checkbox" id="fibCkLevels"> All levels (low opacity)</label>
+        </div>
+        <div id="ctpRsiBody"></div>
+      </div>
       <div id="priceInfo">
         <div><span class="sym" id="symLabel">SOLUSDT</span><span class="price" id="priceLabel">--</span></div>
         <div id="ohlcInfo"></div>
         <div id="candleCountdown"></div>
+        <div class="freshStamp" id="freshChart"></div>
       </div>
       <div id="status">Loading...</div>
     </div>
@@ -1884,6 +2500,7 @@
           <img class="accentIcon" src="emoji/hope.png" alt="" style="width:14px;height:14px;opacity:0.9">
           Jane Open <span class="sectionBadge" id="janeOpenBadge" style="display:none"></span>
           <span id="janeBalanceLabel" style="font-size:9px;color:var(--gold);font-family:monospace;opacity:0.8;margin-left:6px"></span>
+          <span class="freshStamp" id="freshTradeMonitor"></span>
         </div>
         <div id="janeTradesEl"><div class="emptyNote chev">Jane's quiet. No live positions.</div></div>
         <div class="tradeSectionHeader"><img class="accentIcon" src="emoji/lifeline.png" alt="" style="width:14px;height:14px;opacity:0.9">Jane Closed</div>
@@ -1982,27 +2599,34 @@
           </div>
         </div>
 
-        <!-- Layer visibility toggles -->
-        <div id="layersList"></div>
-
-        <!-- Analysis tools (same as arsenal strip) -->
-        <div class="layersToolSep">Analysis Tools</div>
+        <!-- Analysis tools — consolidated 2026-07-05: this used to be a separate
+             "Analysis Tools" section below a passive #layersList management list.
+             That list is gone; these rows now do both jobs — click the name to
+             activate/deactivate, use the checkbox to hide/show without clearing
+             (same semantics the old list's checkboxes had, just per-row instead
+             of in a separate list). Same button ids as before, same click behavior. -->
         <div class="layersToolGrid">
           <div class="layerToolBtn" id="lyrSrCard" title="Multi-TF Support & Resistance">
-            <div class="ltbDrop" style="display:flex;align-items:center;gap:3px">
-              <button class="ltbName" id="lyrSrBtn">S/R</button>
-            </div>
+            <input type="checkbox" class="toolVis" id="lyrSrVis" disabled title="Show/hide (only available once drawn)">
+            <span class="toolDot" style="background:#f23645"></span>
+            <button class="ltbName" id="lyrSrBtn">S/R</button>
             <div class="ltbDesc">Multi-TF S&amp;R</div>
           </div>
           <div class="layerToolBtn" id="lyrVpCard" title="Volume Profile">
+            <input type="checkbox" class="toolVis" id="lyrVpVis" disabled title="Show/hide (only available once drawn)">
+            <span class="toolDot" style="background:#2962ff"></span>
             <button class="ltbName" id="lyrVpBtn">VP</button>
-            <div class="ltbDesc">POC · VAH · VAL</div>
+            <div class="ltbDesc" id="lyrVpDesc">POC · VAH · VAL</div>
           </div>
           <div class="layerToolBtn" id="lyrAtrCard" title="ATR volatility">
+            <input type="checkbox" class="toolVis" id="lyrAtrVis" title="Show/hide the ATR readout">
+            <span class="toolDot" style="background:#9598a1"></span>
             <button class="ltbName" id="lyrAtrBtn">ATR</button>
             <div class="ltbDesc">Volatility · Stop</div>
           </div>
           <div class="layerToolBtn" id="lyrFibCard" title="Multi-TF Golden Pocket" style="position:relative">
+            <input type="checkbox" class="toolVis" id="lyrFibVis" disabled title="Show/hide (only available once drawn)">
+            <span class="toolDot" style="background:#d4af37"></span>
             <div class="ltbDrop" style="display:flex;align-items:center;gap:2px">
               <button class="ltbName" id="lyrFibBtn">Fib</button>
               <span style="font-size:9px;color:#5d6068;cursor:pointer" id="lyrFibArrow" title="TF options">▾</span>
@@ -2010,6 +2634,8 @@
             <div class="ltbDesc">Golden Pocket</div>
           </div>
           <div class="layerToolBtn" id="lyrRsiCard" title="RSI Divergence" style="position:relative">
+            <input type="checkbox" class="toolVis" id="lyrRsiVis" disabled title="Show/hide (only available once drawn)">
+            <span class="toolDot" style="background:#9b59b6"></span>
             <div class="ltbDrop" style="display:flex;align-items:center;gap:2px">
               <button class="ltbName" id="lyrRsiBtn">RSI÷</button>
               <span style="font-size:9px;color:#5d6068;cursor:pointer" id="lyrRsiArrow" title="TF options">▾</span>
@@ -2201,8 +2827,6 @@
         if (pane) pane.classList.add('active');
         /* Open panel if closed */
         if (!_rpOpen) window._toggleChevPanel();
-        /* Refresh layers when switching to layers tab */
-        if (targetPane === 'layers' && window.renderLayersPanel) window.renderLayersPanel();
         /* Refresh engine context bar when switching to engine tab */
         if (targetPane === 'engine') {
           var eSym = document.getElementById('engineContextSym');
@@ -2265,10 +2889,33 @@
     } catch(e) {}
     console.warn('[Chev] No backend URL in Firebase. Run `ngrok http 8080` alongside Dexter.');
   }
-  // Wrapper: adds ngrok bypass header when going through a tunnel
+  // PHASE 9: shared-secret auth. One passphrase, entered once per device, sent on
+  // every request via X-Chev-Key. Server only enforces it on mutating routes, so
+  // sending it on read-only calls too is harmless.
+  function getDashboardKey() {
+    let k = localStorage.getItem('chevDashboardKey');
+    if (!k) {
+      k = window.prompt('Enter dashboard key:') || '';
+      if (k) localStorage.setItem('chevDashboardKey', k);
+    }
+    return k;
+  }
+  // Wrapper: adds ngrok bypass header when going through a tunnel, and the dashboard
+  // auth key on every call. A 401/403 clears the stored key so the next attempt
+  // re-prompts, and surfaces a visible note -- never a silent failure.
   function _apiFetch(path, opts = {}) {
-    if (API_BASE) opts.headers = { 'ngrok-skip-browser-warning': 'true', ...(opts.headers || {}) };
-    return fetch(API_BASE + path, opts);
+    const headers = { 'X-Chev-Key': getDashboardKey(), ...(opts.headers || {}) };
+    if (API_BASE) headers['ngrok-skip-browser-warning'] = 'true';
+    opts.headers = headers;
+    return fetch(API_BASE + path, opts).then(res => {
+      if (res.status === 401 || res.status === 403) {
+        localStorage.removeItem('chevDashboardKey');
+        if (window.showNotification) {
+          showNotification('Dashboard key rejected', 'Cleared — try the action again to re-enter it.', 'error', '', 6000);
+        }
+      }
+      return res;
+    });
   }
   localStorage.setItem('chevOpenWebUIKey', 'sk-6f2e0053e0874980b76d019d6e619a01');
   localStorage.setItem('chevOpenWebUIUrl', 'http://localhost:3000/api/chat/completions');
@@ -2420,6 +3067,7 @@
       localStorage.setItem('chevWatchlistGroups', JSON.stringify(d));
       buildWatchlistRows();
       refreshWatchlistPrices();
+      if (typeof _renderRadar === 'function') _renderRadar();
     }
   }).catch(()=>{});
 
@@ -2760,7 +3408,7 @@
 
   function startPolling() {
     if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(pollLatestCandle, currentType === 'crypto' ? 5000 : 15000);
+    pollTimer = setInterval(() => pollLatestCandle().then(() => _markFresh('chart')), currentType === 'crypto' ? 5000 : 15000);
   }
 
   const CANDLE_DURATION_MS = { '15m': 900000, '30m': 1800000, '1h': 3600000, '4h': 14400000, '1d': 86400000 };
@@ -2868,6 +3516,7 @@
             <div class="px" id="px-${cssId(item.symbol)}">--</div>
             <div class="chg" id="chg-${cssId(item.symbol)}">--</div>
           </span>
+          <button class="starBtn${item.starred ? ' active' : ''}" data-star="${item.symbol}" title="Star for Radar">★</button>
           <button class="removeBtn" data-remove="${item.symbol}" title="Remove">×</button>
         </span>
       </div>
@@ -2875,7 +3524,7 @@
 
     watchlistInner.querySelectorAll('.watchRow').forEach(row => {
       row.addEventListener('click', (e) => {
-        if (e.target.classList.contains('removeBtn')) return;
+        if (e.target.classList.contains('removeBtn') || e.target.classList.contains('starBtn')) return;
         currentSymbol = row.dataset.symbol;
         currentType = row.dataset.type;
         drawings = loadDrawings(currentSymbol);
@@ -2895,6 +3544,18 @@
         groups[currentGroup] = groups[currentGroup].filter(p => p.symbol !== btn.dataset.remove);
         saveGroups();
         buildWatchlistRows();
+      });
+    });
+    watchlistInner.querySelectorAll('.starBtn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const item = groups[currentGroup].find(p => p.symbol === btn.dataset.star);
+        if (item) {
+          item.starred = !item.starred;
+          saveGroups();
+          btn.classList.toggle('active', item.starred);
+          if (typeof _renderRadar === 'function') _renderRadar();
+        }
       });
     });
     _filterWatchlist();
@@ -3051,6 +3712,7 @@
   });
 
   buildWatchlistRows();
+  if (typeof _renderRadar === 'function') _renderRadar();
   // Resolve backend URL first (no-op on localhost, reads Firebase config on GitHub Pages),
   // then kick off all API-dependent polling.
   // Dedicated Dexter health ping — independent of all render logic
@@ -3063,18 +3725,211 @@
     }
   }
 
+  // PHASE 12: freshness stamps -- observes each panel's own last-successful-fetch time via
+  // call-site wrapping only; no panel's fetch function body is touched.
+  const _FRESH_INTERVALS_SECS = { chart: 5, watchlist: 3, tradeMonitor: 10, strategy: 25 };
+  const _freshness = {};
+  function _markFresh(name) { _freshness[name] = Date.now(); }
+  function _renderFreshness() {
+    const now = Date.now();
+    for (const name in _FRESH_INTERVALS_SECS) {
+      const elId = 'fresh' + name.charAt(0).toUpperCase() + name.slice(1);
+      const el = document.getElementById(elId);
+      if (!el) continue;
+      const last = _freshness[name];
+      el.classList.remove('warn', 'bad');
+      if (last == null) { el.textContent = ''; continue; }
+      const ageSecs = (now - last) / 1000;
+      el.textContent = ageSecs < 60 ? `${Math.round(ageSecs)}s ago` : `${Math.round(ageSecs / 60)}m ago`;
+      const staleAt = 3 * _FRESH_INTERVALS_SECS[name];
+      if (ageSecs > staleAt * 2) el.classList.add('bad');
+      else if (ageSecs > staleAt) el.classList.add('warn');
+    }
+  }
+  setInterval(_renderFreshness, 2000);
+
+  // PHASE 12: vitals strip -- polls read-only /api/vitals; single grey tile on any failure.
+  async function loadVitals() {
+    try {
+      const res = await _apiFetch('/api/vitals');
+      if (!res.ok) throw new Error('vitals http ' + res.status);
+      _renderVitals(await res.json());
+    } catch (e) {
+      console.warn('[Vitals] load failed', e);
+      _renderVitalsUnavailable();
+    }
+  }
+  function _vitalsSetTile(id, valText, cls) {
+    const tile = document.getElementById(id);
+    const val = document.getElementById(id + 'Val');
+    if (!tile || !val) return;
+    tile.classList.remove('good', 'warn', 'bad');
+    if (cls) tile.classList.add(cls);
+    val.textContent = valText;
+  }
+  function _renderVitals(d) {
+    const strip = document.getElementById('vitalsStrip');
+    if (strip) strip.classList.remove('vitalsUnavailableMode');
+
+    const age = d.last_scan_age_secs;
+    let hbTxt = '—', hbCls = 'bad';
+    if (age != null) {
+      hbTxt = age < 60 ? `${Math.round(age)}s ago` : `${Math.round(age / 60)}m ago`;
+      hbCls = age < 180 ? 'good' : age < 600 ? 'warn' : 'bad';
+    }
+    _vitalsSetTile('vtHeartbeat', hbTxt, hbCls);
+
+    const hrs = d.hours_since_last_surviving_post;
+    let drTxt = 'never', drCls = 'bad';
+    if (hrs != null) {
+      drTxt = hrs < 1 ? `${Math.round(hrs * 60)}m` : `${hrs.toFixed(1)}h`;
+      drCls = hrs < 12 ? 'good' : hrs < 24 ? 'warn' : 'bad';
+    }
+    _vitalsSetTile('vtDrought', drTxt, drCls);
+
+    const s = d.slots || {};
+    const anyFull = Object.values(s).some(x => x.full);
+    const slotsTxt = ['scalp', 'day', 'swing'].filter(k => s[k]).map(k => `${k[0].toUpperCase()}${s[k].open_pending}/${s[k].cap}`).join(' ');
+    _vitalsSetTile('vtSlots', slotsTxt || '—', anyFull ? 'bad' : 'good');
+
+    _vitalsSetTile('vtMode', d.exploration_mode ? 'EXPLORE' : 'NORMAL', d.exploration_mode ? 'warn' : 'good');
+
+    const tr = d.today_realized_r;
+    _vitalsSetTile('vtTodayR', tr != null ? `${tr >= 0 ? '+' : ''}${tr.toFixed(2)}R` : '—', tr == null ? '' : (tr >= 0 ? 'good' : 'bad'));
+
+    const med = d.median_deliberation_secs_24h;
+    _vitalsSetTile('vtChevLatency', med != null ? `${med.toFixed(0)}s` : '—', '');
+  }
+  function _renderVitalsUnavailable() {
+    const strip = document.getElementById('vitalsStrip');
+    if (strip) strip.classList.add('vitalsUnavailableMode');
+  }
+
+  // PHASE 16: shared tag-friendly-name helper. Fetches /api/tag_registry once per page
+  // load and caches it (module-level, not per-panel) -- every render site (Tag Leaderboard,
+  // Combo Leaderboard, both Shadow leaderboards) calls the same friendlyTag()/friendlyCombo()
+  // rather than each keeping its own copy. Unknown codes (a brand-new tag the registry
+  // hasn't been updated for yet) fall back to a plain prettifier -- never breaks.
+  let _tagRegistry = null;
+  let _tagRegistryPromise = null;
+
+  function _prettifyTagFallback(code) {
+    return String(code || '').trim().replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  function _loadTagRegistry() {
+    if (_tagRegistry) return Promise.resolve(_tagRegistry);
+    if (_tagRegistryPromise) return _tagRegistryPromise;
+    _tagRegistryPromise = _apiFetch('/api/tag_registry')
+      .then(r => r.json())
+      .then(d => { _tagRegistry = d.tags || {}; return _tagRegistry; })
+      .catch(e => { console.warn('[TagRegistry] load failed', e); _tagRegistry = {}; return _tagRegistry; });
+    return _tagRegistryPromise;
+  }
+
+  function friendlyTag(code) {
+    const c = String(code || '').trim().toLowerCase();
+    if (_tagRegistry && _tagRegistry[c]) return _tagRegistry[c].name;
+    return _prettifyTagFallback(c);
+  }
+
+  // Combo keys are comma-joined tag codes (compute_combo_win_rates / counterfactual's
+  // _combo_key both use ",".join(sorted_tags)) -- split, map each through friendlyTag(),
+  // join with " + " so e.g. "gp,ema_55,rsi_4h" reads "Golden Pocket + EMA 55 + RSI Divergence (4H)".
+  function friendlyCombo(comboKey) {
+    return String(comboKey || '').split(',').map(t => friendlyTag(t)).filter(Boolean).join(' + ');
+  }
+
+  // PHASE 22: friendly names for decision/reason CODES (distinct from PHASE 16's tag
+  // registry -- this is "why did it die," not "which indicator fired"). Covers every code
+  // actually found by discovery: chev_decisions.jsonl's decision types, the pre-escalation
+  // NOT_ESCALATED shadow-log reasons, counterfactual_report.py's own gate-kill codes
+  // (classify_reject_reason()/DECISION_DIRECT_MAP -- read for reference, never edited;
+  // that file is do-not-touch machinery), and closed-trade close_type values. Raw code is
+  // never invented -- unknown codes fall through to the same prettifier friendlyTag() uses.
+  const REASON_REGISTRY = {
+    // Decision types (chev_decisions.jsonl `decision` field)
+    GATE_REJECT:      "Failed pre-checks (Dexter)",
+    STRUCT_REJECT:     "No usable structure nearby",
+    MTF_TAX_REJECT:    "Against the higher-timeframe trend",
+    GEOMETRY_REJECT:   "Chev's numbers didn't hold up (Geometry)",
+    REJECT:            "Approved by Chev, killed downstream",
+    SKIP:              "Chev passed on it",
+    FORMAT_ERROR:      "Chev's reply wasn't in the right format",
+    POST:              "Chev posted a trade",
+    // Pre-escalation NOT_ESCALATED reasons (labeller.py shadow log, before Chev ever sees it)
+    tf_below_escalation_floor: "Timeframe too small (uneconomic)",
+    below_trade_threshold:     "Confluence score too low",
+    below_threshold:           "Below the cheap first-pass score filter",
+    struct_pregate:            "No structural anchor nearby",
+    too_far_from_level:        "Price hasn't reached the zone yet",
+    conflicting_signals:       "Bullish and bearish signals contradicted",
+    circuit_breaker:           "Daily loss limit hit — paused for the day",
+    cooldown:                  "Same setup re-fired too soon (cooldown)",
+    event_block:               "Paused around a high-impact news release",
+    choppy_regime:             "Market too choppy for a directional edge",
+    // Gate-kill codes (counterfactual_report.py's classify_reject_reason()/
+    // DECISION_DIRECT_MAP -- NOTE: the phase brief named "ATR_SANITY" but the real code
+    // produces DATA_QUALITY for that exact check; mapped under its real name)
+    DATA_QUALITY:  "Numbers failed sanity check",
+    COST_GATE:     "Fees too big for the stop (Cost Gate)",
+    HEAT_CAP:      "Total risk cap reached",
+    CONCURRENCY:   "Trade slots full",
+    PRICE_DRIFT:   "Price moved while Chev decided",
+    NET_RR:        "Reward too small after costs (Net R:R)",
+    CORR_CAP:      "Too many correlated positions open",
+    LIQUIDATION:   "Stop too tight for the leverage used",
+    HALLUCINATED_LEVELS: "Chev's numbers weren't from this chart",
+    OTHER:         "Rejected for another reason",
+    SCORE_GATE:    "Failed pre-checks (Dexter)",
+    STRUCT_GATE:   "No usable structure nearby",
+    MTF_TAX:       "Against the higher-timeframe trend",
+    GEOMETRY:      "Chev's numbers didn't hold up (Geometry)",
+    // Closed-trade close_type (main terminal trade log, outside the Strategy panel)
+    TIME_EXIT: "Closed by time-stop",
+    SL_HIT:    "Stop loss hit",
+    TP_HIT:    "Target hit",
+    SIP_HIT:   "Stopped in profit (SIP)",
+  };
+
+  function friendlyReason(code) {
+    const c = String(code || '').trim();
+    if (REASON_REGISTRY[c]) return REASON_REGISTRY[c];
+    return _prettifyTagFallback(c);
+  }
+
+  // PHASE 27: display-name-only rename, applied at render time so no backend text
+  // (including the TAG_REGISTRY definitions dexter.py serves) ever needs editing or
+  // a restart. "Examiner" is the only one with any live occurrences today (Gate
+  // Scoreboard label + a handful of tag/concept definitions) -- Marc/The Guards
+  // have no existing display strings anywhere on the site, so they're intentionally
+  // left out of this map rather than invented. Internal names (labeller.py, etc.)
+  // are never touched -- this only rewrites prose already destined for the screen.
+  const CHARACTER_DISPLAY = { Examiner: "Mike Ross" };
+  function _applyCharacterNames(text) {
+    if (!text) return text;
+    return String(text)
+      .replace(/\bthe Examiner's\b/g, `${CHARACTER_DISPLAY.Examiner}'s`)
+      .replace(/\bthe Examiner\b/g, CHARACTER_DISPLAY.Examiner)
+      .replace(/\bExaminer's\b/g, `${CHARACTER_DISPLAY.Examiner}'s`)
+      .replace(/\bExaminer\b/g, CHARACTER_DISPLAY.Examiner);
+  }
+
   _resolveApiBase().then(() => {
-    refreshWatchlistPrices();  refreshForexPrices();
-    setInterval(refreshWatchlistPrices, 3000);
+    refreshWatchlistPrices().then(() => _markFresh('watchlist'));  refreshForexPrices();
+    setInterval(() => refreshWatchlistPrices().then(() => _markFresh('watchlist')), 3000);
     setInterval(refreshForexPrices, 1000);
     refreshTradingLogs();
     setInterval(refreshTradingLogs, 5000);
     refreshChevsCorner();
     setInterval(refreshChevsCorner, 30000);
-    refreshJaneTrades();
-    setInterval(refreshJaneTrades, 10000);
+    refreshJaneTrades().then(() => _markFresh('tradeMonitor'));
+    setInterval(() => refreshJaneTrades().then(() => _markFresh('tradeMonitor')), 10000);
     _pingDexter();
     setInterval(_pingDexter, 8000);
+    loadVitals();
+    setInterval(loadVitals, 20000);
+    _loadTagRegistry();
   });
 
   /* ============================================================
@@ -3238,7 +4093,7 @@
             <div class="logRow lastClosedRow" data-pair="${sym}" data-type="${assetType}" data-conf="{}" data-row="" data-entry="${c.entry||''}" data-sl="${c.sl||''}" data-tp="${c.tp||''}" data-direction="${c.direction||''}" data-ts="${openTs}" data-tags="${c.tags||''}" data-status="CLOSED" style="padding-right:4px">
               <span class="logDir">${dirEmoji}</span>
               <span class="logPair">${sym}</span>
-              <span class="logType" style="${ctColor}">${ctLabel}</span>
+              <span class="logType" style="${ctColor}" title="${ct ? esc(friendlyReason(ct)) : ''}">${ctLabel}</span>
               <span class="logLev">closed</span>
               <span class="logPnl ${pnlClass(pnl)}">${resultEmoji} ${fmtPnl(pnl)}</span>
               <button class="logDNABtn" data-dna="${dnaId}" data-sym="${sym}" data-open-ts="${openTs}" title="Why did Chev trade this?">WHY?</button>
@@ -4009,7 +4864,7 @@
         cornerHtml += `<div class="logRow lastClosedRow${isSipClose ? ' sip-closed-bg' : ''}" style="border-left:2px solid rgba(212,175,55,0.45)">
           <span class="logDir">${dirEm}</span>
           <span class="logPair">${c.pair}</span>
-          <span class="logType" style="${ctColor}">${ctLabel}</span>
+          <span class="logType" style="${ctColor}" title="${esc(friendlyReason(ct))}">${ctLabel}</span>
           <span class="logLev">closed</span>
           <span class="logPnl ${isSipClose ? 'sip-closed' : pnlClass(result)}">${em} ${fmtPnl(result)}</span>
         </div>`;
@@ -4739,7 +5594,12 @@
     el.innerHTML = html;
     el.classList.add('show');
     clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(() => el.classList.remove('show'), durationMs);
+    // durationMs <= 0 means persistent — caller (ATR's checkbox-controlled readout,
+    // 2026-07-05) is responsible for hiding it explicitly. Every other caller passes
+    // a positive duration and is unaffected.
+    if (durationMs > 0) {
+      _toastTimer = setTimeout(() => el.classList.remove('show'), durationMs);
+    }
   }
 
   function showNotification(title, msg='', type='info', iconFile='', durationMs=5000) {
@@ -4764,12 +5624,19 @@
   // SR — toggle off if already showing, otherwise fetch and draw
   async function drawSRZones() {
     if (!currentCandles.length) return;
-    const btn = document.getElementById('srAutoBtn');
+    // Target the VISIBLE Layers-panel button/card, not the permanently-hidden legacy
+    // topbar twin — updating the hidden one gave zero visual feedback and never
+    // disabled the button users actually click, which is why rapid clicks used to
+    // fire overlapping duplicate requests (fixed 2026-07-05 across all Arsenal tools).
+    const btn  = document.getElementById('lyrSrBtn');
+    const card = document.getElementById('lyrSrCard');
+    const vis  = document.getElementById('lyrSrVis');
     // Toggle off
     if (drawings.some(d => d._sr)) {
       for (let i = drawings.length-1; i >= 0; i--) { if (drawings[i]._sr) drawings.splice(i,1); }
       saveDrawings(); redrawAll(); updateObjTree();
-      btn.textContent = 'S/R'; btn.classList.remove('active');
+      btn.textContent = 'S/R'; card.classList.remove('active');
+      vis.checked = false; vis.disabled = true;
       return;
     }
     btn.textContent = 'S/R…'; btn.disabled = true;
@@ -4803,7 +5670,8 @@
       _pushZonesToDrawings('_sr', zones, tfSec);
       const total = res.length + sup.length;
       btn.textContent = total ? `S/R (${total})` : 'S/R';
-      btn.classList.add('active');
+      card.classList.add('active');
+      vis.checked = true; vis.disabled = false;
     } catch(e) {
       // JS fallback
       const { res, sup } = _getSRTouches(currentCandles);
@@ -4815,7 +5683,8 @@
       _pushZonesToDrawings('_sr', zones, tfSec);
       const total = resLvls.length + supLvls.length;
       btn.textContent = total ? `S/R (${total})` : 'S/R';
-      btn.classList.add('active');
+      card.classList.add('active');
+      vis.checked = true; vis.disabled = false;
     } finally {
       btn.disabled = false;
     }
@@ -4824,11 +5693,17 @@
   // Volume Profile — POC, VAH, VAL (toggle)
   async function drawVP() {
     if (!currentCandles.length) return;
-    const btn = document.getElementById('vpBtn');
+    const btn  = document.getElementById('lyrVpBtn');
+    const card = document.getElementById('lyrVpCard');
+    const desc = document.getElementById('lyrVpDesc');
+    const vis  = document.getElementById('lyrVpVis');
     if (drawings.some(d => d._vp)) {
       for (let i = drawings.length-1; i >= 0; i--) { if (drawings[i]._vp) drawings.splice(i,1); }
       saveDrawings(); redrawAll(); updateObjTree();
-      btn.textContent = 'VP'; btn.classList.remove('active'); return;
+      btn.textContent = 'VP'; card.classList.remove('active');
+      desc.textContent = 'POC · VAH · VAL';
+      vis.checked = false; vis.disabled = true;
+      return;
     }
     btn.textContent = 'VP…'; btn.disabled = true;
     const tfSec = {'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400}[currentTf]||3600;
@@ -4843,25 +5718,43 @@
       saveDrawings(); redrawAll(); updateObjTree();
       const methodShort = {dual_pivot:'RSI', atr_expansion:'ATR', fractal_fallback:'frac'}[d.anchor_method] || d.anchor_method;
       const anchorActive = d.anchor_active !== false;
+      // Keep the BUTTON label short (this compact layout can't fit a full sentence —
+      // that's what made it "horrible") and put the detail on the description line
+      // underneath instead, where there's room for it.
       if (!anchorActive) {
         const why = {price_returned_to_balance:'price back in range', structure_broken:'structure broken'}[d.anchor_invalidation] || 'stale';
         _showToast(`<span class="tBear">VP anchor is stale (${why}) — showing last detected structure.</span>`, 7000);
-        btn.textContent = `VP ⚠ (${d.candles}c · stale)`;
+        btn.textContent = 'VP ⚠';
+        desc.textContent = `${d.candles}c · stale`;
       } else {
-        btn.textContent = `VP ✓ (${d.candles}c · ${d.anchor_confidence}% ${methodShort}${d.anchor_confirmed ? '' : ' unconf'})`;
+        btn.textContent = 'VP ✓';
+        desc.textContent = `${d.candles}c · ${d.anchor_confidence}% ${methodShort}${d.anchor_confirmed ? '' : ' unconf'}`;
       }
-      btn.classList.add('active');
+      card.classList.add('active');
+      vis.checked = true; vis.disabled = false;
     } catch(e) {
       _showToast(`<span class="tBear">VP — ${e.message}</span>`, 6000);
       btn.textContent = 'VP';
+      desc.textContent = 'POC · VAH · VAL';
     } finally {
       btn.disabled = false;
     }
   }
 
   // ATR — show volatility toast
-  async function showATR() {
-    const btn = document.getElementById('atrBtn');
+  // ATR has no persistent chart drawing to hide/show — unlike S/R, VP, and Fib, there's
+  // nothing tagged in drawings[] to toggle .visible on. So its checkbox IS the on/off
+  // state directly: checked = readout showing (no auto-dismiss timer), unchecked = hidden.
+  // Both the main button and the checkbox itself drive this through _setAtrVisible.
+  async function _setAtrVisible(show) {
+    const btn  = document.getElementById('lyrAtrBtn');
+    const card = document.getElementById('lyrAtrCard');
+    const vis  = document.getElementById('lyrAtrVis');
+    if (!show) {
+      document.getElementById('analysisToast').classList.remove('show');
+      vis.checked = false; btn.textContent = 'ATR'; card.classList.remove('active');
+      return;
+    }
     btn.textContent = 'ATR…'; btn.disabled = true;
     try {
       const r = await _apiFetch(`/api/analysis/atr?symbol=${encodeURIComponent(currentSymbol)}&tf=${currentTf}`);
@@ -4874,14 +5767,25 @@
         <div class="tLine">ATR: <b>${d.atr}</b> &nbsp; Avg(20): ${d.avg_atr}</div>
         <div class="tLine">Ratio: ${d.ratio} — <span class="${stateCol}">${d.state.toUpperCase()}</span></div>
         <div class="tLine tGold">SL 1×: ${d.sl_1atr} &nbsp; SL 1.5×: ${d.sl_1_5atr}</div>
-      `, 10000);
+      `, 0); // 0 = persistent, stays until the checkbox is unchecked
       btn.textContent = 'ATR';
+      vis.checked = true;
+      card.classList.add('active');
     } catch(e) {
       _showToast(`<span class="tBear">ATR — ${e.message}</span>`, 6000);
       btn.textContent = 'ATR';
+      vis.checked = false;
     } finally {
       btn.disabled = false;
     }
+  }
+
+  // Button click: toggle based on current state (matches S/R, VP, Fib, RSI's
+  // click-to-toggle pattern). Name kept as showATR — the Layers-panel wiring
+  // already binds to this exact name.
+  async function showATR() {
+    const vis = document.getElementById('lyrAtrVis');
+    await _setAtrVisible(!vis.checked);
   }
 
   // Multi-TF Fibonacci Golden Pocket
@@ -4896,8 +5800,9 @@
   }
 
   async function _fetchAndDrawFib() {
-    const btn  = document.getElementById('fibStackBtn');
-    const card = document.getElementById('fibCard');
+    const btn  = document.getElementById('lyrFibBtn');
+    const card = document.getElementById('lyrFibCard');
+    const vis  = document.getElementById('lyrFibVis');
     btn.textContent = 'Fib…'; btn.disabled = true;
     const tfSec    = {'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400}[currentTf]||3600;
     const show15m  = document.getElementById('fibCk15m').checked;
@@ -4950,9 +5855,11 @@
       const ovCount = (data.overlaps||[]).filter(ov => ov.tfs.some(t => tfFilter.has(t))).length;
       btn.textContent = ovCount ? `Fib ★${ovCount}` : `Fib (${shown}TF)`;
       card.classList.add('active');
+      vis.checked = true; vis.disabled = false;
     } catch(e) {
       _showToast(`<span class="tBear">Fib — ${e.message}</span>`, 6000);
       btn.textContent = 'Fib'; card.classList.remove('active');
+      vis.checked = false; vis.disabled = true;
     } finally {
       btn.disabled = false;
     }
@@ -4960,38 +5867,53 @@
 
   async function drawFibStack() {
     if (!currentCandles.length) return;
-    const btn  = document.getElementById('fibStackBtn');
-    const card = document.getElementById('fibCard');
-    const dd   = document.getElementById('fibTfDropdown');
+    const btn  = document.getElementById('lyrFibBtn');
+    const card = document.getElementById('lyrFibCard');
     // Toggle off if already drawn
     if (drawings.some(d => d._fib_stack)) {
       _clearFibDrawings();
       btn.textContent = 'Fib'; card.classList.remove('active');
-      dd.classList.remove('open'); return;
+      document.getElementById('lyrFibVis').checked = false;
+      document.getElementById('lyrFibVis').disabled = true;
+      _ctpHide();
+      return;
     }
-    // Check what's selected
+    // Nothing ticked (e.g. left over from unchecking everything last time) — force
+    // 1H rather than silently drawing nothing or making the user hunt for a picker
+    // they didn't ask to see (2026-07-05: default is 1H-only, not "show everything").
     const anySelected = document.getElementById('fibCk15m').checked ||
                         document.getElementById('fibCk1h').checked  ||
                         document.getElementById('fibCk4h').checked;
-    if (!anySelected) {
-      // Nothing ticked — open dropdown so user can choose
-      _positionDropdown(dd, btn);
-      dd.classList.add('open'); return;
-    }
+    if (!anySelected) document.getElementById('fibCk1h').checked = true;
     await _fetchAndDrawFib();
+    _ctpShow('fib');
   }
 
-  // Reactive: redraw when a checkbox changes while fib is active
+  // Reactive: redraw whenever a checkbox changes — deliberately NOT gated on
+  // "does fib already have something drawn." That gate used to make re-checking
+  // a box after clearing everything a no-op: once all boxes were unchecked the
+  // tool looked "off" by this same guard's own definition, so the very next
+  // check-the-box-again change event got silently ignored — ticked the box, drew
+  // nothing (found 2026-07-05, reported as "check them back and they don't show
+  // up"). Every change now just reflects current checkbox state onto the chart,
+  // whether that means going from nothing to something, something to something
+  // else, or something to nothing. The "always show at least 1H" force-default
+  // still applies ONLY to the very first click of the Fib button (drawFibStack),
+  // never here — deliberately unchecking everything stays blank until a box is
+  // checked again, per Kev 2026-07-05.
   ['fibCk15m','fibCk1h','fibCk4h','fibCkLevels'].forEach(id => {
     document.getElementById(id).addEventListener('change', () => {
-      if (drawings.some(d => d._fib_stack)) {
-        _clearFibDrawings();
-        const anySelected = document.getElementById('fibCk15m').checked ||
-                            document.getElementById('fibCk1h').checked  ||
-                            document.getElementById('fibCk4h').checked;
-        if (anySelected) _fetchAndDrawFib();
-        else { document.getElementById('fibStackBtn').textContent = 'Fib';
-               document.getElementById('fibCard').classList.remove('active'); }
+      _clearFibDrawings();
+      const anySelected = document.getElementById('fibCk15m').checked ||
+                          document.getElementById('fibCk1h').checked  ||
+                          document.getElementById('fibCk4h').checked;
+      if (anySelected) {
+        _fetchAndDrawFib();
+      } else {
+        document.getElementById('lyrFibBtn').textContent = 'Fib';
+        document.getElementById('lyrFibCard').classList.remove('active');
+        document.getElementById('lyrFibVis').checked = false;
+        document.getElementById('lyrFibVis').disabled = true;
       }
     });
   });
@@ -5002,8 +5924,10 @@
   async function _clearRsiDivOverlay() {
     for (let i = drawings.length-1; i >= 0; i--) { if (drawings[i]._rsi_div) drawings.splice(i,1); }
     rsiOverlayLines = rsiOverlayLines.filter(l => !l._rsi_div);
-    document.getElementById('rsiCard').classList.remove('active');
-    document.getElementById('rsiTfDropdown').classList.remove('open');
+    document.getElementById('lyrRsiCard').classList.remove('active');
+    document.getElementById('lyrRsiVis').checked = false;
+    document.getElementById('lyrRsiVis').disabled = true;
+    _ctpHide();
     // Do NOT call saveDrawings() — _rsi_div entries are never stored, so there's
     // nothing new to save. A saveDrawings() here would fire the Firebase SSE stream
     // which then replaces drawings[] and wipes any _rsi_div lines we draw next.
@@ -5059,12 +5983,11 @@
   }
 
   async function _rsiTfSelected(tf, divs) {
-    const dropdown = document.getElementById('rsiTfDropdown');
-    // Clear the old _rsi_div lines WITHOUT closing the dropdown
+    // Clear the old _rsi_div lines WITHOUT closing the popup
     for (let i = drawings.length-1; i >= 0; i--) { if (drawings[i]._rsi_div) drawings.splice(i,1); }
     rsiOverlayLines = rsiOverlayLines.filter(l => !l._rsi_div);
     // Highlight the selected row immediately so user gets feedback
-    dropdown.querySelectorAll('.rsi-tf-row').forEach(r => r.classList.toggle('selected', r.dataset.rsiTf === tf));
+    document.getElementById('ctpRsiBody').querySelectorAll('.rsi-tf-row').forEach(r => r.classList.toggle('selected', r.dataset.rsiTf === tf));
     try {
       if (!_indicatorState.rsi) document.getElementById('indRsiBtn').click();
       currentTf = tf;
@@ -5090,19 +6013,21 @@
       redrawAll(); rsiRedrawAll(); updateObjTree();
       // Schedule another redraw one frame later in case chart time scale was still settling
       markDirty();
-      document.getElementById('rsiDivBtn').textContent = `RSI÷ ${tf}`;
-      document.getElementById('rsiCard').classList.add('active');
+      document.getElementById('lyrRsiBtn').textContent = `RSI÷ ${tf}`;
+      document.getElementById('lyrRsiCard').classList.add('active');
+      document.getElementById('lyrRsiVis').checked = true;
+      document.getElementById('lyrRsiVis').disabled = false;
     } catch(e) {
       console.error('[RSI÷]', e);
     } finally {
-      // Guarantee the dropdown stays open regardless of success or failure
-      dropdown.classList.add('open');
+      // Guarantee the popup stays open regardless of success or failure
+      _ctpShow('rsi');
     }
   }
 
   function _buildRsiDropdown(byTf) {
     _rsiDivData = byTf;
-    const el = document.getElementById('rsiTfDropdown');
+    const el = document.getElementById('ctpRsiBody');
     const TFS = ['15m','30m','1h','4h'];
     const CONFIRMED_ICON = {bull:'🟢', bear:'🔴'};
     const FORMING_ICON   = {bull:'🟡', bear:'🟠'};
@@ -5127,23 +6052,39 @@
         _rsiTfSelected(tf, _rsiDivData[tf] || []);
       });
     });
-    el.classList.add('open');
+  }
+
+  // Nearest-to-1H timeframe that actually has a divergence right now — 1H is
+  // preferred outright; if it has none, 30m and 4h are equidistant neighbors, so
+  // 4h wins the tie (higher timeframes are treated as more reliable everywhere
+  // else in this system too). Returns null only if NO timeframe has anything.
+  function _nearestRsiTf(byTf) {
+    const DIST_FROM_1H    = {'15m':2, '30m':1, '1h':0, '4h':1};
+    const TIE_BREAK_ORDER = ['4h','30m','15m'];
+    const withDivs = ['15m','30m','1h','4h'].filter(tf => (byTf[tf]||[]).length > 0);
+    if (!withDivs.length) return null;
+    if (withDivs.includes('1h')) return '1h';
+    let best = null, bestDist = Infinity;
+    withDivs.forEach(tf => {
+      const dist = DIST_FROM_1H[tf];
+      if (dist < bestDist || (dist === bestDist && TIE_BREAK_ORDER.indexOf(tf) < TIE_BREAK_ORDER.indexOf(best))) {
+        best = tf; bestDist = dist;
+      }
+    });
+    return best;
   }
 
   async function showRSIDiv() {
-    const btn = document.getElementById('rsiDivBtn');
-    const dropdown = document.getElementById('rsiTfDropdown');
+    const btn = document.getElementById('lyrRsiBtn');
     // Toggle off
-    if (document.getElementById('rsiCard').classList.contains('active')) {
+    if (document.getElementById('lyrRsiCard').classList.contains('active')) {
       await _clearRsiDivOverlay();
       btn.textContent = 'RSI÷';
-      document.getElementById('rsiCard').classList.remove('active');
-      dropdown.classList.remove('open');
       return;
     }
     btn.textContent = 'RSI÷…'; btn.disabled = true;
-    dropdown.innerHTML = '<div class="rsi-loading">Scanning timeframes…</div>';
-    dropdown.classList.add('open');
+    document.getElementById('ctpRsiBody').innerHTML = '<div class="rsi-loading">Scanning timeframes…</div>';
+    _ctpShow('rsi');
     try {
       const r = await _apiFetch(`/api/analysis/rsi_div?symbol=${encodeURIComponent(currentSymbol)}&tf=all`);
       if (!r.ok) throw new Error(`Dexter ${r.status} — restart Dexter if this persists`);
@@ -5152,23 +6093,26 @@
       _buildRsiDropdown(d.by_tf || {});
       const totalFound = Object.values(d.by_tf||{}).reduce((s,a)=>s+a.length,0);
       btn.textContent = totalFound ? `RSI÷ (${totalFound})` : 'RSI÷';
+      // Auto-select: 1H if it has a divergence, else the nearest TF that does —
+      // click the button, something appears right away, no manual picking needed.
+      const autoTf = _nearestRsiTf(d.by_tf || {});
+      if (autoTf) await _rsiTfSelected(autoTf, (d.by_tf||{})[autoTf] || []);
     } catch(e) {
       _showToast(`<span class="tBear">RSI÷ — ${e.message}</span>`, 6000);
       btn.textContent = 'RSI÷';
-      dropdown.classList.remove('open');
     } finally {
       btn.disabled = false;
     }
   }
 
-  document.getElementById('srAutoBtn').addEventListener('click', () => {
-    drawSRZones();
-    setTimeout(() => document.getElementById('srCard').classList.toggle('active', drawings.some(d => d._sr)), 80);
-  });
+  document.getElementById('srAutoBtn').addEventListener('click', drawSRZones);
   document.getElementById('vpBtn').addEventListener('click', drawVP);
   document.getElementById('atrBtn').addEventListener('click', showATR);
-  document.getElementById('fibStackBtn').addEventListener('click', drawFibStack);
-  // rsiDivBtn click handled via _rsiOpenDropdown below
+  // Fib/RSI main-button + arrow clicks are wired later alongside the rest of the
+  // Layers-panel tool buttons (see the lyr* wiring block) — the old topbar
+  // fibStackBtn/rsiDivBtn/fibDropArrow/rsiDropArrow buttons this used to bind to
+  // were removed 2026-07-05 (dead, permanently-hidden legacy UI; see arsenalToggleBtn
+  // below — nothing has re-opened that topbar strip in a long time).
 
   // Arsenal button → opens LAYERS tab in right intel panel
   document.getElementById('arsenalToggleBtn').addEventListener('click', () => {
@@ -5180,56 +6124,22 @@
     if (layersTab) layersTab.click();
   });
 
-  // Position a fixed dropdown below its trigger element
-  function _positionDropdown(dropdown, trigger) {
-    const r = trigger.getBoundingClientRect();
-    dropdown.style.top  = (r.bottom + 4) + 'px';
-    dropdown.style.left = r.left + 'px';
+  // ---- Chart Tool Popup (Fib/RSI, added 2026-07-05) ----
+  // Shared in-chart card, replacing the old button-anchored dropdowns that got
+  // clipped by the panel's edge. Deliberately does NOT auto-close on outside
+  // clicks — it stays open until the X is pressed or the tool itself is toggled
+  // off, so you can freely click around the chart while it's showing.
+  function _ctpShow(which) {
+    const pop = document.getElementById('chartToolPopup');
+    document.getElementById('ctpTitle').textContent = which === 'fib' ? 'Fibonacci' : 'RSI Divergence';
+    document.getElementById('ctpFibBody').classList.toggle('shown', which === 'fib');
+    document.getElementById('ctpRsiBody').classList.toggle('shown', which === 'rsi');
+    pop.classList.add('open');
   }
-
-  // Fib TF dropdown arrow
-  document.getElementById('fibDropArrow').addEventListener('click', e => {
-    e.stopPropagation();
-    const dd = document.getElementById('fibTfDropdown');
-    const willOpen = !dd.classList.contains('open');
-    dd.classList.toggle('open', willOpen);
-    if (willOpen) _positionDropdown(dd, e.currentTarget);
-  });
-
-  // RSI dropdown arrow (same as main button — scan all TFs)
-  document.getElementById('rsiDropArrow').addEventListener('click', e => {
-    e.stopPropagation();
-    _rsiOpenDropdown(e.currentTarget);
-  });
-
-  // RSI main button — position dropdown then scan
-  document.getElementById('rsiDivBtn').addEventListener('click', e => {
-    _rsiOpenDropdown(e.currentTarget);
-  });
-
-  function _rsiOpenDropdown(trigger) {
-    const dd = document.getElementById('rsiTfDropdown');
-    _positionDropdown(dd, trigger);
-    showRSIDiv();
+  function _ctpHide() {
+    document.getElementById('chartToolPopup').classList.remove('open');
   }
-
-  // Close dropdowns on outside click
-  document.addEventListener('click', e => {
-    if (!e.target.closest('#fibCard') && !e.target.closest('#fibTfDropdown'))
-      document.getElementById('fibTfDropdown').classList.remove('open');
-    // Only auto-close the RSI÷ dropdown when RSI overlay is NOT active.
-    // When active (trade idea open, lines on chart), the user dismisses it
-    // by clicking the RSI÷ button again — chart clicks should not close it.
-    const rsiActive = document.getElementById('rsiCard').classList.contains('active');
-    if (!rsiActive && !e.target.closest('#rsiCard') && !e.target.closest('#rsiTfDropdown'))
-      document.getElementById('rsiTfDropdown').classList.remove('open');
-  });
-
-  // VP card active state (VP button already has its own listener above; this syncs the card)
-  document.getElementById('vpBtn').addEventListener('click', () => {
-    setTimeout(() => document.getElementById('vpCard').classList.toggle('active', drawings.some(d => d._vp)), 80);
-  });
-  // ---- End shared SR ----
+  document.getElementById('ctpClose').addEventListener('click', _ctpHide);
 
   function _buildChartContext() {
     const lines = [];
@@ -5332,9 +6242,15 @@
       const primeMsg = { role: 'assistant', content: 'Understood. I have full drawing capability on this chart via chevdraw blocks. I will draw when asked.' };
       const res = await fetch('/api/chev_chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Chev-Key': getDashboardKey() },
         body: JSON.stringify({ model: getChevModelId(), messages: [systemMsg, primeMsg, ...chat.messages.map(m => ({ role: m.role, content: m.content }))] }),
       });
+      if (res.status === 401 || res.status === 403) {
+        localStorage.removeItem('chevDashboardKey');
+        chat.messages.push({ role: 'assistant', content: 'Dashboard key rejected — try sending again to re-enter it.' });
+        renderMessages();
+        return;
+      }
       const data = await res.json();
       const rawReply = data.choices[0].message.content;
       const cleanReply = _applyChevDrawings(rawReply);
@@ -6345,6 +7261,1129 @@
     window._closeCmdPalette = closePalette;
   })();
 
+  /* ===== STRATEGY DASHBOARD (added 2026-07-05) ===== */
+  (function() {
+    const overlay = document.getElementById('strategyOverlay');
+    let refreshTimer = null;
+    let feedFilter = 'ALL';
+    let equityChart = null, equitySeries = null;
+
+    const EMOJI = {
+      POST: 'emoji/fire.png', SKIP: 'emoji/lets-see.png',
+      REJECT: 'emoji/wrench.png', GATE_REJECT: 'emoji/wrench.png',
+      STRUCT_REJECT: 'emoji/wrench.png', MTF_TAX_REJECT: 'emoji/wrench.png',
+      GEOMETRY_REJECT: 'emoji/wrench.png', FORMAT_ERROR: 'emoji/oh-no.png',
+    };
+    function emojiFor(dec) { return EMOJI[dec] || 'emoji/lets-see.png'; }
+    function cardClassFor(dec) {
+      if (dec === 'POST') return 'isPost';
+      if (dec === 'SKIP') return 'isSkip';
+      return 'isReject';
+    }
+    function winRateColor(pct) {
+      // 0% -> red, 50% -> gold-ish, 100% -> green. Simple 2-stop lerp around 50.
+      if (pct >= 50) {
+        const t = Math.min((pct - 50) / 50, 1);
+        return `rgb(${Math.round(212 - t*204)}, ${Math.round(175 + t*(153-175))}, ${Math.round(55 + t*(129-55))})`;
+      }
+      const t = Math.min((50 - pct) / 50, 1);
+      return `rgb(${Math.round(212 + t*(242-212))}, ${Math.round(175 - t*(175-54))}, ${Math.round(55 + t*(69-55))})`;
+    }
+    let _tagStatsCache = null;
+    async function _ensureTagStats() {
+      if (_tagStatsCache) return _tagStatsCache;
+      try {
+        const r = await _apiFetch('/api/strategy/performance');
+        const d = await r.json();
+        _tagStatsCache = d.tag_stats || {};
+      } catch(e) { _tagStatsCache = {}; }
+      return _tagStatsCache;
+    }
+    function fmtTs(ts) {
+      if (!ts) return '';
+      return ts.replace(' ', ' · ').slice(5); // drop year, MM-DD · HH:MM:SS
+    }
+    function esc(s) { return (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+    async function openStrategy() {
+      overlay.classList.add('open');
+      await loadAll();
+      _markFresh('strategy');
+      if (refreshTimer) clearInterval(refreshTimer);
+      refreshTimer = setInterval(() => loadAll().then(() => _markFresh('strategy')), 25000);
+    }
+    function closeStrategy() {
+      overlay.classList.remove('open');
+      if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    }
+
+    async function loadAll() {
+      await Promise.all([loadMode(), loadFeed(), loadFunnel(), loadPerformance(), loadHeatmap(), loadShadow(), loadTimeseries(), loadScoreboard()]);
+      // Runs only after BOTH loadFunnel (renders the bars) and loadShadow (populates
+      // _shadowBucketsCache) have settled -- no race between the two, regardless of which
+      // resolves first.
+      applyShadowSplitsToReasonBars();
+      // PHASE 7B-4: re-render the feed once more now that _shadowResolvedItemsCache is
+      // guaranteed populated (loadFeed and loadShadow ran concurrently above, so the very
+      // first paint this cycle may have missed badges -- renderFeed is a cheap, idempotent,
+      // pure-DOM-from-globals function, safe to call twice).
+      renderFeed();
+    }
+
+    async function loadMode() {
+      try {
+        const r = await _apiFetch('/api/strategy/mode');
+        const d = await r.json();
+        const badge = document.getElementById('stratModeBadge');
+        if (d.exploration_mode) {
+          badge.textContent = `⚡ EXPLORATION — R:R ${d.profile.MIN_NET_RR.day}:1 day · heat cap ${d.profile.MAX_TOTAL_HEAT}%`;
+        } else {
+          badge.textContent = `🔒 NORMAL — R:R ${d.profile.MIN_NET_RR.day}:1 day · heat cap ${d.profile.MAX_TOTAL_HEAT}%`;
+        }
+      } catch (e) { console.warn('[Strategy] mode load failed', e); }
+    }
+
+    async function toggleExploration() {
+      const badge = document.getElementById('stratModeBadge');
+      const goingTo = badge.textContent.includes('EXPLORATION') ? 'NORMAL (strict, real-money-appropriate)' : 'EXPLORATION (loose, paper data-collection)';
+      if (!confirm(`Flip live risk posture to ${goingTo}?\n\nThis changes ATR floor, cost gate, R:R, heat/correlation/concurrency caps immediately for every trade Dexter judges from now on — not just cosmetic.`)) return;
+      try {
+        const r = await _apiFetch('/api/strategy/toggle_exploration', { method: 'POST' });
+        const d = await r.json();
+        badge.textContent = d.exploration_mode
+          ? `⚡ EXPLORATION — R:R ${d.profile.MIN_NET_RR.day}:1 day · heat cap ${d.profile.MAX_TOTAL_HEAT}%`
+          : `🔒 NORMAL — R:R ${d.profile.MIN_NET_RR.day}:1 day · heat cap ${d.profile.MAX_TOTAL_HEAT}%`;
+      } catch (e) { console.warn('[Strategy] toggle failed', e); alert('Toggle failed — check Dexter is running.'); }
+    }
+
+    let _lastFeedData = [];
+    async function loadFeed() {
+      try {
+        const r = await _apiFetch('/api/strategy/feed?hours=48&limit=400');
+        const d = await r.json();
+        _lastFeedData = d.decisions || [];
+        renderQuietAlert(_lastFeedData);
+        renderFeed();
+        renderRawTable(_lastFeedData);
+      } catch (e) { console.warn('[Strategy] feed load failed', e); }
+    }
+
+    function renderQuietAlert(decisions) {
+      const alertEl = document.getElementById('stratQuietAlert');
+      const now = Date.now();
+      const posts = decisions.filter(d => d.decision === 'POST');
+      const lastPostTs = posts.length ? new Date(posts[0].ts.replace(' ', 'T')).getTime() : null;
+      const hoursSincePost = lastPostTs ? (now - lastPostTs) / 3600000 : null;
+      if (hoursSincePost === null || hoursSincePost > 12) {
+        document.getElementById('stratQuietText').textContent =
+          hoursSincePost === null
+            ? "No POSTs in the last 48 hours of logs — could be genuinely quiet conditions, could be worth checking the live gates."
+            : `${hoursSincePost.toFixed(1)}h since Chev's last POST — check whether that's a quiet market or a stuck gate.`;
+        alertEl.classList.add('show');
+      } else {
+        alertEl.classList.remove('show');
+      }
+    }
+
+    // ── PHASE 7B-4: feed-card shadow badge matching ───────────────────────────
+    // Pure, side-effect-free, testable standalone (paste-run in the browser console --
+    // see handoff.txt PHASE 7B-4 section for the exact fixture arrays used to verify
+    // this before it was wired into renderFeed()).
+
+    // chev_decisions.jsonl uses "YYYY-MM-DD HH:MM:SS" (implicit UTC, no T/Z);
+    // resolved_items (sourced from labels_closed.jsonl via labeller's _now_iso()) uses
+    // "YYYY-MM-DDTHH:MM:SSZ" (explicit UTC). Normalizes both to epoch millis.
+    function _shadowParseTs(ts) {
+      if (!ts) return NaN;
+      const iso = ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z';
+      return Date.parse(iso);
+    }
+
+    // Longest EXPIRY_HOURS (swing=48h) plus margin -- inside this window since the skip,
+    // "no match yet" is a timing fact (the shadow barrier walk hasn't had time to resolve),
+    // not a guessed outcome. Outside it with still no match, stay silent (silence over
+    // guesses) rather than imply an outcome that may have been NO_FILL/VOID/dropped.
+    const SHADOW_UNRESOLVED_GRACE_MS = 48 * 3600 * 1000;
+
+    // Matches one feed record (a SKIP decision, {symbol, tf, ts, ...}) to a resolved_items
+    // entry by symbol + tf + timestamp within +/-5 minutes (closest match wins). Returns
+    // {kind:'dodged', shadow_r} / {kind:'missed', shadow_r} / {kind:'unresolved'} / null.
+    function shadowBadgeForSkip(d, resolvedItems, nowMs) {
+      nowMs = (nowMs != null) ? nowMs : Date.now();
+      const dTs = _shadowParseTs(d.ts);
+      if (isNaN(dTs)) return null;
+      const FIVE_MIN = 5 * 60 * 1000;
+      let best = null, bestDelta = Infinity;
+      (resolvedItems || []).forEach(item => {
+        if (item.symbol !== d.symbol || item.tf !== d.tf) return;
+        const itemTs = _shadowParseTs(item.ts);
+        if (isNaN(itemTs)) return;
+        const delta = Math.abs(itemTs - dTs);
+        if (delta <= FIVE_MIN && delta < bestDelta) { best = item; bestDelta = delta; }
+      });
+      if (best) {
+        return best.verdict === 'right'
+          ? { kind: 'dodged', shadow_r: best.shadow_r }
+          : { kind: 'missed', shadow_r: best.shadow_r };
+      }
+      if ((nowMs - dTs) < SHADOW_UNRESOLVED_GRACE_MS) return { kind: 'unresolved' };
+      return null;   // silence over guesses
+    }
+
+    function _shadowBadgeHtml(badge) {
+      if (badge.kind === 'dodged') {
+        return `<span class="stratShadowBadge dodged" title="Shadow outcome: this skip would have LOST ${Math.abs(badge.shadow_r).toFixed(2)}R net — correctly dodged.">✓ dodged ${badge.shadow_r.toFixed(1)}R</span>`;
+      }
+      if (badge.kind === 'missed') {
+        return `<span class="stratShadowBadge missed" title="Shadow outcome: this skip would have WON +${badge.shadow_r.toFixed(2)}R net — real edge forfeited.">✗ missed +${badge.shadow_r.toFixed(1)}R</span>`;
+      }
+      return `<span class="stratShadowBadge pending" title="Shadow outcome not resolved yet.">⏳ unresolved</span>`;
+    }
+
+    function renderFeed() {
+      const list = document.getElementById('stratFeedList');
+      const filtered = _lastFeedData.filter(d => {
+        if (feedFilter === 'ALL') return true;
+        if (feedFilter === 'REJECT') return !['POST','SKIP'].includes(d.decision);
+        return d.decision === feedFilter;
+      }).slice(0, 150);
+      if (!filtered.length) { list.innerHTML = '<div class="stratEmptyState">Nothing here yet.</div>'; return; }
+      list.innerHTML = filtered.map(d => {
+        const _vagueTag = (d.decision === 'SKIP' || d.decision === 'POST') && d.specific === false
+          ? '<span class="stratVagueTag" title="No specific number/level cited">⚠ vague</span>' : '';
+        const _detailHtml = d.detail ? `<div class="stratDetail">${esc(d.detail).replace(/\n/g, '<br>')}</div>` : '';
+        // PHASE 7B-4: shadow badge on resolved SKIP cards only -- silently absent (no
+        // badge at all) if _shadowResolvedItemsCache hasn't loaded yet or no match/grace
+        // window applies; re-rendered once more after loadShadow settles (see loadAll).
+        const _badge = d.decision === 'SKIP' ? shadowBadgeForSkip(d, _shadowResolvedItemsCache) : null;
+        const _badgeHtml = _badge ? _shadowBadgeHtml(_badge) : '';
+        return `
+        <div class="stratFeedCard ${cardClassFor(d.decision)}">
+          <img class="stratEmoji" src="${emojiFor(d.decision)}" alt="" onerror="this.style.display='none'">
+          <div class="stratFeedMain">
+            <div class="stratFeedTop">
+              <span class="stratSym">${esc(d.symbol)}</span>
+              <span class="stratTf">${esc(d.tf)}</span>
+              <span class="stratDecPill ${esc(d.decision)}" title="${esc(friendlyReason(d.decision))}">${esc(d.decision)}</span>
+              <span class="stratScore">score ${d.dexter_score ?? '—'}</span>
+              ${_vagueTag}
+              ${_badgeHtml}
+            </div>
+            <div class="stratReason">${esc(d.reason)}</div>
+            ${_detailHtml}
+            <div class="stratTs">${fmtTs(d.ts)} ${d.regime_4h ? '· ' + esc(d.regime_4h) : ''}</div>
+          </div>
+        </div>
+      `;
+      }).join('');
+    }
+
+    function renderRawTable(decisions) {
+      const body = document.getElementById('stratRawBody');
+      body.innerHTML = decisions.slice(0, 500).map(d => `
+        <tr>
+          <td>${fmtTs(d.ts)}</td><td>${esc(d.symbol)}</td><td>${esc(d.tf)}</td>
+          <td>${d.dexter_score ?? ''}</td><td>${esc(d.decision)}</td><td>${esc(d.reason)}</td>
+          <td>${esc(d.detail || '')}</td>
+        </tr>
+      `).join('');
+    }
+
+    async function loadFunnel() {
+      try {
+        const r = await _apiFetch('/api/strategy/funnel?hours=24');
+        const d = await r.json();
+        const stages = [
+          { label: 'Not escalated (pre-gates)', count: d.not_escalated_total, color: 'var(--txt3)' },
+          { label: 'Escalated to Chev', count: d.escalated_total, color: 'var(--blue)' },
+          { label: '↳ POST', count: d.decisions.POST || 0, color: 'var(--green)' },
+          { label: '↳ SKIP', count: d.decisions.SKIP || 0, color: 'var(--red)' },
+          { label: '↳ Gate/Gauntlet rejects', count: Object.entries(d.decisions).filter(([k])=>!['POST','SKIP'].includes(k)).reduce((s,[,v])=>s+v,0), color: '#ff8a3d' },
+          { label: 'Actually opened', count: d.opened, color: 'var(--gold)' },
+        ];
+        const max = Math.max(1, ...stages.map(s => s.count));
+        document.getElementById('stratFunnel').innerHTML = stages.map(s => `
+          <div class="stratFunnelRow">
+            <div class="stratFunnelLabel">${s.label}</div>
+            <div class="stratFunnelBarWrap"><div class="stratFunnelBar" style="width:${(s.count/max*100).toFixed(1)}%;background:${s.color}"></div></div>
+            <div class="stratFunnelCount">${s.count}</div>
+          </div>
+        `).join('');
+
+        const reasons = { ...d.not_escalated, ...d.decisions };
+        delete reasons.POST;
+        const sorted = Object.entries(reasons).sort((a,b) => b[1]-a[1]).slice(0, 12);
+        const rmax = Math.max(1, ...sorted.map(([,v]) => v));
+        document.getElementById('stratReasonBars').innerHTML = sorted.length
+          ? sorted.map(([k,v]) => `
+              <div class="stratBarRow">
+                <div class="stratBarLabel" title="${esc(k)}">${esc(friendlyReason(k))}</div>
+                <div class="stratBarTrack"><div class="stratBarFill" style="width:${(v/rmax*100).toFixed(1)}%;background:var(--red)"></div></div>
+                <div class="stratBarVal">${v}</div>
+              </div>
+            `).join('')
+          : '<div class="stratEmptyState">No rejections in this window.</div>';
+      } catch (e) { console.warn('[Strategy] funnel load failed', e); }
+    }
+
+    /* ── PHASE 7B-2: Shadow Outcomes (counterfactual) ──────────────────────────
+       Self-contained fetch + render, same 25s poll cadence as every other pane
+       (see loadAll/openStrategy). A fetch failure degrades quietly -- never
+       throws past its own try/catch, never breaks the rest of the diagnostics pane.
+       Read-only: /api/strategy/counterfactual never touches Chev/journal/Sheets/
+       Firebase, and this code never reads or writes the REAL performance pane's
+       objects/functions (loadPerformance, _tagStatsCache, etc.) -- separate cache,
+       separate DOM ids, separate render path throughout. */
+    let _shadowBucketsCache = null;
+    let _shadowResolvedItemsCache = null;   // PHASE 7B-4: for feed-card badge matching
+
+    // Maps the OLDER /api/strategy/funnel reason keys (a mix of fine-grained
+    // NOT_ESCALATED reasons and coarse decision-type names) onto the counterfactual
+    // endpoint's bucket keys, so the existing reason bars can be matched without
+    // forking either endpoint's data model.
+    const SHADOW_DECISION_TO_GATE_KEY = {
+      'MTF_TAX_REJECT':  'GATE-MTF_TAX',
+      'STRUCT_REJECT':   'GATE-STRUCT_GATE',
+      'GATE_REJECT':     'GATE-SCORE_GATE',
+      'GEOMETRY_REJECT': 'GATE-GEOMETRY',
+    };
+    const SHADOW_SKIP_KEYS = ['SKIP - invalidation', 'SKIP - R:R', 'SKIP - other'];
+    // Every downstream-kill bucket the bare "REJECT" funnel bar aggregates (the ones
+    // NOT already broken out into their own funnel bar via the map above).
+    const SHADOW_BARE_REJECT_KEYS = [
+      'GATE-COST_GATE', 'GATE-PRICE_DRIFT', 'GATE-CONCURRENCY', 'GATE-HEAT_CAP',
+      'GATE-DATA_QUALITY', 'GATE-NET_RR', 'GATE-CORR_CAP', 'GATE-LIQUIDATION',
+      'GATE-HALLUCINATED_LEVELS', 'GATE-OTHER',
+    ];
+
+    // PHASE 7B-3: shadow-specific trust minimums (deliberately separate from the real
+    // leaderboards' own thresholds -- MIN_COMBO_N=5 above, tag filter n>=3 in
+    // loadPerformance -- shadow samples come from ~95% of escalations, a much larger
+    // pool, so a higher tag minimum is warranted). Keyed on `resolved`, never on `n`
+    // (which includes still-open records with no outcome yet).
+    const SHADOW_MIN_TAG_N   = 10;
+    const SHADOW_MIN_COMBO_N = 5;
+
+    // Shared renderer for both shadow leaderboards — same bar-row visual language as the
+    // real Tag/Combo leaderboards (winRateColor, .stratBarRow/.stratBarFill), sorted by
+    // total shadow R descending per spec, greyed out below the resolved-n minimum (same
+    // opacity/grey-track convention as the real Combo leaderboard). Never reads from or
+    // writes to d.tag_stats/d.combo_stats/_tagStatsCache — entirely separate data path.
+    function renderShadowLeaderboard(elId, entries, kind, minN) {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      const nameKey = kind === 'tag' ? 'tag' : 'combo';
+      const sorted = [...entries].sort((a, b) => b.total_r - a.total_r).slice(0, kind === 'combo' ? 15 : 40);
+      if (!sorted.length) {
+        el.innerHTML = `<div class="stratEmptyState">No shadow ${kind} data in this window.</div>`;
+        return;
+      }
+      el.innerHTML = sorted.map(s => {
+        const trusted = s.resolved >= minN;
+        // PHASE 24: plain-English phrasing -- "If taken: won 71% · would've made +8.28R ·
+        // from 73 setups" -- same underlying numbers as before (shadow_wr/total_r/resolved),
+        // wording only. The win-rate fragment gets its own honest phrase when there's no
+        // resolved data yet, rather than a bare "n/a" sitting next to a real R figure.
+        const wrFrag = s.shadow_wr != null ? `won ${s.shadow_wr.toFixed(0)}%` : 'win rate not yet known';
+        const rFrag  = `would've made ${s.total_r >= 0 ? '+' : ''}${s.total_r.toFixed(2)}R`;
+        const nFrag  = `from ${s.resolved} setup${s.resolved === 1 ? '' : 's'}`;
+        const barW  = s.shadow_wr != null ? s.shadow_wr.toFixed(1) : 0;
+        const barColor = !trusted ? 'var(--txt3)' : (s.shadow_wr != null ? winRateColor(s.shadow_wr) : 'var(--txt3)');
+        // PHASE 16: friendly display text; raw code stays in the title for cross-referencing logs.
+        const label = kind === 'tag' ? friendlyTag(s[nameKey]) : friendlyCombo(s[nameKey]);
+        const fullPhrase = `If taken: ${wrFrag} · ${rFrag} · ${nFrag}`;
+        return `
+          <div class="stratBarRow" style="opacity:${trusted ? 1 : 0.4}">
+            <div class="stratBarLabel" title="${esc(s[nameKey])}">${esc(label)}</div>
+            <div class="stratBarTrack"><div class="stratBarFill" style="width:${barW}%;background:${barColor}"></div></div>
+            <div class="stratBarVal" title="${esc(fullPhrase)}">
+              <span class="svLead">If taken:</span>
+              <span class="svFrag">${esc(wrFrag)}</span>
+              <span class="svFrag">${esc(rFrag)}</span>
+              <span class="svFrag">${esc(nFrag)}${trusted ? '' : ' ⚠'}</span>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    // PHASE 7B-4: hand-rolled sparkline (no charting library, matching the funnel/heatmap's
+    // own hand-rolled-div convention). `weekly` is build_weekly_regret()'s full-history,
+    // NOT baseline-scoped list of {week_start, forfeited_r, dodged_r, n_resolved}, oldest
+    // first. Bar height is proportional to forfeited_r only (the metric named in the spec);
+    // an empty week renders as a near-flat bar, an honest data point, not an error.
+    function renderShadowSparkline(weekly) {
+      const bars = document.getElementById('stratShadowSpark');
+      const labels = document.getElementById('stratShadowSparkLabels');
+      if (!bars || !labels) return;
+      if (!weekly.length) {
+        bars.innerHTML = '<div class="stratEmptyState">No weekly data yet.</div>';
+        labels.innerHTML = '';
+        return;
+      }
+      const max = Math.max(1, ...weekly.map(w => w.forfeited_r));
+      bars.innerHTML = weekly.map(w => {
+        const pct = Math.max(2, (w.forfeited_r / max * 100));
+        return `<div class="stratSparkBar" style="height:${pct.toFixed(1)}%"
+                     title="week of ${esc(w.week_start)} — forfeited ${w.forfeited_r >= 0 ? '+' : ''}${w.forfeited_r.toFixed(2)}R, dodged +${w.dodged_r.toFixed(2)}R, n=${w.n_resolved}"></div>`;
+      }).join('');
+      labels.innerHTML = weekly.map(w => `<span>${esc(w.week_start.slice(5))}</span>`).join('');
+    }
+
+    function _shadowSumSplits(keys, bucketsByKey) {
+      const out = { right: 0, wrong: 0, pending: 0 };
+      let any = false;
+      keys.forEach(k => {
+        const b = bucketsByKey[k];
+        if (!b) return;
+        any = true;
+        out.right   += b.verdict_split.right;
+        out.wrong   += b.verdict_split.wrong;
+        out.pending += b.verdict_split.pending;
+      });
+      return any ? out : null;
+    }
+
+    function _shadowSplitForReasonKey(reasonKey, bucketsByKey) {
+      if (reasonKey === 'SKIP')   return _shadowSumSplits(SHADOW_SKIP_KEYS, bucketsByKey);
+      if (reasonKey === 'REJECT') return _shadowSumSplits(SHADOW_BARE_REJECT_KEYS, bucketsByKey);
+      if (SHADOW_DECISION_TO_GATE_KEY[reasonKey]) {
+        const b = bucketsByKey[SHADOW_DECISION_TO_GATE_KEY[reasonKey]];
+        return b ? b.verdict_split : null;
+      }
+      const b = bucketsByKey[reasonKey];   // direct match -- NOT_ESCALATED reasons (cooldown, etc.)
+      return b ? b.verdict_split : null;
+    }
+
+    async function loadShadow() {
+      try {
+        const [r] = await Promise.all([_apiFetch('/api/strategy/counterfactual'), _loadTagRegistry()]);
+        const d = await r.json();
+        _shadowBucketsCache = d.buckets || [];
+        _shadowResolvedItemsCache = d.resolved_items || [];
+
+        const dodged = d.headline.dodged_r, forfeited = d.headline.forfeited_r;
+        document.getElementById('stratShadowDodged').textContent    = (dodged >= 0 ? '+' : '') + dodged.toFixed(2) + 'R';
+        document.getElementById('stratShadowForfeited').textContent = (forfeited >= 0 ? '+' : '') + forfeited.toFixed(2) + 'R';
+        document.getElementById('stratShadowCoverage').textContent =
+          `${d.coverage.resolved} of ${d.coverage.total} resolved`;
+
+        const gateBuckets = (d.buckets || [])
+          .filter(b => b.key.startsWith('GATE-'))
+          .sort((a, b) => Math.abs(b.total_r) - Math.abs(a.total_r));
+        document.getElementById('stratShadowGateGrid').innerHTML = gateBuckets.length
+          ? gateBuckets.map(b => {
+              const wrTxt = b.shadow_wr != null ? b.shadow_wr.toFixed(0) + '%' : 'n/a';
+              const rTxt  = b.shadow_wr != null ? (b.total_r >= 0 ? '+' : '') + b.total_r.toFixed(1) + 'R' : 'n/a';
+              const _gateCode = b.key.replace('GATE-', '');   // PHASE 22: friendly name from the raw code, not the mechanically title-cased label
+              return `
+                <div class="stratGradeCard">
+                  <div class="g" title="${esc(_gateCode)}">${esc(friendlyReason(_gateCode))}</div>
+                  <div class="wr ${b.shadow_wr == null ? 'na' : (b.shadow_wr >= 50 ? 'good' : 'bad')}">${wrTxt}</div>
+                  <div class="n">n=${b.n} · shadow WR ${wrTxt} · shadow R ${rTxt}${b.shadow_wr == null ? ` (no ${CHARACTER_DISPLAY.Examiner} record)` : ''}</div>
+                </div>`;
+            }).join('')
+          : '<div class="stratEmptyState">No downstream gate-kills in this window.</div>';
+
+        renderShadowLeaderboard('stratShadowTagBars', d.shadow_tags || [], 'tag', SHADOW_MIN_TAG_N);
+        renderShadowLeaderboard('stratShadowComboBars', d.shadow_combos || [], 'combo', SHADOW_MIN_COMBO_N);
+        renderShadowSparkline(d.weekly || []);
+      } catch (e) {
+        console.warn('[Strategy] shadow load failed', e);
+        _shadowBucketsCache = null;
+        _shadowResolvedItemsCache = null;
+        const cov = document.getElementById('stratShadowCoverage');
+        if (cov) cov.textContent = 'shadow data unavailable';
+        ['stratShadowDodged', 'stratShadowForfeited'].forEach(id => {
+          const el = document.getElementById(id); if (el) el.textContent = '—';
+        });
+        const spark = document.getElementById('stratShadowSpark');
+        const sparkLbl = document.getElementById('stratShadowSparkLabels');
+        if (spark) spark.innerHTML = '';
+        if (sparkLbl) sparkLbl.innerHTML = '';
+        const grid = document.getElementById('stratShadowGateGrid');
+        if (grid) grid.innerHTML = '';
+        ['stratShadowTagBars', 'stratShadowComboBars'].forEach(id => {
+          const el = document.getElementById(id); if (el) el.innerHTML = '';
+        });
+      }
+    }
+
+    // Upgrades the reason bars loadFunnel() already rendered with a green/red/grey
+    // verdict split INSIDE each bar's existing width -- run only after both loadFunnel
+    // and loadShadow have settled (see loadAll). A reason with no matching shadow bucket
+    // is left exactly as loadFunnel rendered it.
+    function applyShadowSplitsToReasonBars() {
+      if (!_shadowBucketsCache) return;
+      const bucketsByKey = {};
+      _shadowBucketsCache.forEach(b => { bucketsByKey[b.key] = b; });
+
+      document.querySelectorAll('#stratReasonBars .stratBarRow').forEach(row => {
+        const labelEl = row.querySelector('.stratBarLabel');
+        const trackEl = row.querySelector('.stratBarTrack');
+        const fillEl  = trackEl ? trackEl.querySelector('.stratBarFill') : null;
+        if (!labelEl || !trackEl || !fillEl) return;   // already upgraded or unexpected markup -- skip
+        const reasonKey = labelEl.getAttribute('title') || labelEl.textContent;
+        const vs = _shadowSplitForReasonKey(reasonKey, bucketsByKey);
+        if (!vs) return;   // no matching bucket -- leave the bar exactly as it is today
+        const tot = vs.right + vs.wrong + vs.pending;
+        if (tot <= 0) return;
+        const outerWidth = fillEl.style.width;   // preserve the bar's existing outer proportion
+        const rPct = vs.right   / tot * 100;
+        const wPct = vs.wrong   / tot * 100;
+        const pPct = 100 - rPct - wPct;
+        trackEl.innerHTML = `
+          <div class="stratBarSplit" style="width:${outerWidth}"
+               title="shadow verdict — ${vs.right} right (dodged) / ${vs.wrong} wrong (forfeited) / ${vs.pending} pending or no ${CHARACTER_DISPLAY.Examiner} record">
+            <div class="right"   style="width:${rPct.toFixed(1)}%"></div>
+            <div class="wrong"   style="width:${wPct.toFixed(1)}%"></div>
+            <div class="pending" style="width:${pPct.toFixed(1)}%"></div>
+          </div>`;
+      });
+    }
+
+    async function loadPerformance() {
+      try {
+        const [r] = await Promise.all([_apiFetch('/api/strategy/performance'), _loadTagRegistry()]);
+        const d = await r.json();
+        _tagStatsCache = d.tag_stats || _tagStatsCache;
+        document.getElementById('scWinRate').textContent = d.total_closed ? d.win_rate.toFixed(1) + '%' : '—';
+        document.getElementById('scWinRate').className = 'v ' + (d.win_rate >= 50 ? 'good' : 'bad');
+        document.getElementById('scProfitFactor').textContent = d.profit_factor != null ? d.profit_factor.toFixed(2) : '—';
+        document.getElementById('scProfitFactor').className = 'v ' + (d.profit_factor >= 1.5 ? 'good' : d.profit_factor != null && d.profit_factor < 1 ? 'bad' : '');
+        document.getElementById('scExpectancy').textContent = '$' + d.expectancy.toFixed(2);
+        document.getElementById('scExpectancy').className = 'v ' + (d.expectancy >= 0 ? 'good' : 'bad');
+        document.getElementById('scTotalClosed').textContent = d.total_closed;
+        document.getElementById('scTotalPnl').textContent = (d.total_pnl >= 0 ? '+$' : '-$') + Math.abs(d.total_pnl).toFixed(2);
+        document.getElementById('scTotalPnl').className = 'v ' + (d.total_pnl >= 0 ? 'good' : 'bad');
+
+        // Grade grid
+        const gEntries = Object.entries(d.grade_stats).sort((a,b) => b[1].n - a[1].n);
+        document.getElementById('stratGradeGrid').innerHTML = gEntries.length
+          ? gEntries.map(([g, gs]) => `
+              <div class="stratGradeCard">
+                <div class="g">${esc(g).toUpperCase()}</div>
+                <div class="wr" style="color:${winRateColor(gs.win_rate)}">${gs.win_rate}%</div>
+                <div class="n">n=${gs.n}</div>
+              </div>
+            `).join('')
+          : '<div class="stratEmptyState">No graded trades yet.</div>';
+
+        // Tag leaderboard
+        const tEntries = Object.entries(d.tag_stats).filter(([,s]) => s.n >= 3).sort((a,b) => b[1].win_rate - a[1].win_rate);
+        document.getElementById('stratTagBars').innerHTML = tEntries.length
+          ? tEntries.map(([tag, s]) => `
+              <div class="stratBarRow">
+                <div class="stratBarLabel" title="${esc(tag)}">${esc(friendlyTag(tag))}</div>
+                <div class="stratBarTrack"><div class="stratBarFill" style="width:${(s.win_rate*100).toFixed(1)}%;background:${winRateColor(s.win_rate*100)}"></div></div>
+                <div class="stratBarVal">${(s.win_rate*100).toFixed(0)}% (n=${s.n})</div>
+              </div>
+            `).join('')
+          : '<div class="stratEmptyState">Not enough closed trades per tag yet.</div>';
+
+        // Confluence COMBINATION leaderboard — same idea as tags, one level more specific.
+        // Real sample sizes are thin (checked against actual data: almost everything is
+        // n=1-2) — shown anyway, dimmed, so it's visible as it accumulates rather than
+        // hidden until some day it's "ready."
+        const MIN_COMBO_N = 5;
+        const cEntries = Object.entries(d.combo_stats || {}).sort((a,b) => b[1].n - a[1].n).slice(0, 15);
+        document.getElementById('stratComboBars').innerHTML = cEntries.length
+          ? cEntries.map(([combo, s]) => {
+              const trusted = s.n >= MIN_COMBO_N;
+              return `<div class="stratBarRow" style="opacity:${trusted ? 1 : 0.4}">
+                <div class="stratBarLabel" title="${esc(combo)}">${esc(friendlyCombo(combo))}</div>
+                <div class="stratBarTrack"><div class="stratBarFill" style="width:${(s.win_rate*100).toFixed(1)}%;background:${trusted ? winRateColor(s.win_rate*100) : 'var(--txt3)'}"></div></div>
+                <div class="stratBarVal">${(s.win_rate*100).toFixed(0)}% (n=${s.n})${trusted ? '' : ' ⚠'}</div>
+              </div>`;
+            }).join('')
+          : '<div class="stratEmptyState">No multi-tag combinations logged yet.</div>';
+
+        // Planned R:R histogram (Dexter's real cost-adjusted formula, positive-only range)
+        renderRHist(d.planned_rrs || []);
+
+        // Equity curve
+        renderEquityCurve(d.equity_curve || []);
+      } catch (e) { console.warn('[Strategy] performance load failed', e); }
+    }
+
+    function renderRHist(rrs) {
+      const edges = [0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5];
+      const buckets = edges.map((lo, i) => ({ lo, hi: edges[i+1] ?? Infinity, count: 0 }));
+      rrs.forEach(r => { const b = buckets.find(b => r >= b.lo && r < b.hi); if (b) b.count++; });
+      const max = Math.max(1, ...buckets.map(b => b.count));
+      const el = document.getElementById('stratRHist');
+      if (!rrs.length) { el.innerHTML = '<div class="stratEmptyState">No R:R data yet.</div>'; return; }
+      el.innerHTML = buckets.map(b => {
+        const label = b.hi === Infinity ? `≥ ${b.lo}:1` : `${b.lo}:1 – ${b.hi}:1`;
+        const color = b.lo >= 2 ? 'var(--green)' : b.lo >= 1 ? 'var(--gold)' : 'var(--red)';
+        return `<div class="stratBarRow">
+          <div class="stratBarLabel">${label}</div>
+          <div class="stratBarTrack"><div class="stratBarFill" style="width:${(b.count/max*100).toFixed(1)}%;background:${color}"></div></div>
+          <div class="stratBarVal">${b.count}</div>
+        </div>`;
+      }).join('');
+    }
+
+    function renderEquityCurve(curve) {
+      const el = document.getElementById('stratEquityChart');
+      if (!curve.length) { el.innerHTML = '<div class="stratEmptyState">No closed trades yet — equity curve will appear here.</div>'; return; }
+      if (!equityChart) {
+        el.innerHTML = '';
+        equityChart = LightweightCharts.createChart(el, {
+          autoSize: true,
+          layout: { background: { color: 'transparent' }, textColor: '#787b86' },
+          grid: { vertLines: { color: 'rgba(255,255,255,0.03)' }, horzLines: { color: 'rgba(255,255,255,0.03)' } },
+          rightPriceScale: { borderColor: '#2a2e39' },
+          timeScale: { borderColor: '#2a2e39', timeVisible: true },
+        });
+        equitySeries = equityChart.addAreaSeries({
+          lineColor: '#d4af37', topColor: 'rgba(212,175,55,0.25)', bottomColor: 'rgba(212,175,55,0.0)', lineWidth: 2,
+        });
+      }
+      // PHASE 25: `t` is now a real UNIX epoch (one point per 4h bucket boundary, backend-
+      // computed) instead of a date-only string -- LightweightCharts' numeric time mode,
+      // required for sub-day granularity (its "business day" string mode can only
+      // represent a whole calendar day).
+      const seen = new Set();
+      const data = curve.map(pt => ({ time: pt.t, value: pt.cum_pnl })).filter(pt => {
+        if (pt.time == null || seen.has(pt.time)) return false; // lightweight-charts needs unique/ascending time keys
+        seen.add(pt.time); return true;
+      });
+      equitySeries.setData(data);
+      equityChart.timeScale().fitContent();
+    }
+
+    // PHASE 13: system-over-time charts. Same LightweightCharts instance the equity curve
+    // above already uses -- no new library. Each chart is built once then updated via
+    // setData()/setMarkers() on every loadAll() cycle (25s), matching the equity curve's
+    // own lazy-init-then-reuse pattern.
+    let tsRrChart = null, tsRrFloor = null, tsRrAdvisory = null, tsRrMedian = null, tsRrMin = null, tsRrMax = null;
+    let tsFlowChart = null, tsFlowThreshold = null, tsFlowEsc = null, tsFlowPosts = null;
+    let tsStopChart = null, tsStopMedian = null, tsStopP10 = null, tsStopP90 = null;
+
+    async function loadTimeseries() {
+      try {
+        // PHASE 25: bucket_hours=4 explicit (matches the route's own default -- spelled
+        // out here so intent is visible at the call site, not just implied server-side).
+        const r = await _apiFetch('/api/strategy/timeseries?days=30&bucket_hours=4');
+        renderTimeseries(await r.json());
+      } catch (e) { console.warn('[Strategy] timeseries load failed', e); }
+    }
+
+    function _tsHasData(d) {
+      return (d.rr_pressure || []).some(p => p.proposed_median != null || p.ev_advisory != null || p.enforced_floor != null)
+          || (d.threshold || []).length > 0;
+    }
+
+    // PHASE 25: rows now carry a real epoch (`t`) per bucket instead of a day-string, so
+    // matching an annotation to a bucket is a floor-to-bucket-boundary computation instead
+    // of exact-string equality. An event whose own bucket isn't present in THIS chart's
+    // data is simply not markable on THIS chart (no synthesis of a bucket that doesn't
+    // exist) -- it may still show on another chart whose data does have that bucket.
+    function _tsMarkersFor(annotations, availableEpochs, bucketSecs) {
+      const have = new Set(availableEpochs);
+      return annotations
+        .map(a => ({ t: Math.floor(a.t / bucketSecs) * bucketSecs, summary: a.summary }))
+        .filter(a => have.has(a.t))
+        .map(a => ({ time: a.t, position: 'aboveBar', color: '#2962ff', shape: 'arrowDown', text: a.summary }));
+    }
+
+    function _tsBaseChartOpts() {
+      return {
+        autoSize: true,
+        layout: { background: { color: 'transparent' }, textColor: '#787b86', fontSize: 10 },
+        grid: { vertLines: { color: 'rgba(255,255,255,0.03)' }, horzLines: { color: 'rgba(255,255,255,0.03)' } },
+        rightPriceScale: { borderColor: '#2a2e39' },
+        // PHASE 25: was timeVisible:false (daily buckets only needed a date). Sub-day
+        // buckets need the time shown too -- relying on LightweightCharts' own adaptive
+        // tick formatter (it already switches between date-only and date+time labels
+        // depending on zoom) rather than a custom tickMarkFormatter.
+        timeScale: { borderColor: '#2a2e39', timeVisible: true },
+      };
+    }
+
+    function renderRrPressureChart(rows, annotations, bucketSecs) {
+      const el = document.getElementById('tsRrChart');
+      const epochs = rows.map(r => r.t);
+      if (!tsRrChart) {
+        tsRrChart = LightweightCharts.createChart(el, _tsBaseChartOpts());
+        tsRrMax     = tsRrChart.addLineSeries({ color: 'rgba(120,123,134,0.5)', lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        tsRrMin     = tsRrChart.addLineSeries({ color: 'rgba(120,123,134,0.5)', lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        tsRrAdvisory = tsRrChart.addLineSeries({ color: '#2962ff', lineWidth: 2, lastValueVisible: true, priceLineVisible: false, title: 'EV-advisory' });
+        tsRrFloor   = tsRrChart.addLineSeries({ color: '#f23645', lineWidth: 1, lineType: LightweightCharts.LineType.WithSteps, lastValueVisible: true, priceLineVisible: false, title: 'Enforced floor' });
+        tsRrMedian  = tsRrChart.addLineSeries({ color: '#d4af37', lineWidth: 2, lastValueVisible: true, priceLineVisible: false, title: "Chev's proposals" });
+      }
+      const _ser = (key) => rows.filter(r => r[key] != null).map(r => ({ time: r.t, value: r[key] }));
+      tsRrMax.setData(_ser('proposed_max'));
+      tsRrMin.setData(_ser('proposed_min'));
+      tsRrAdvisory.setData(_ser('ev_advisory'));
+      tsRrFloor.setData(_ser('enforced_floor'));
+      const medianData = _ser('proposed_median');
+      tsRrMedian.setData(medianData);
+      tsRrMedian.setMarkers(_tsMarkersFor(annotations, epochs, bucketSecs));
+      tsRrChart.timeScale().fitContent();
+    }
+
+    function renderFlowChart(flowRows, thresholdRows, annotations, bucketSecs) {
+      const el = document.getElementById('tsFlowChart');
+      const epochs = flowRows.map(r => r.t);
+      if (!tsFlowChart) {
+        tsFlowChart = LightweightCharts.createChart(el, _tsBaseChartOpts());
+        tsFlowThreshold = tsFlowChart.addLineSeries({
+          color: 'rgba(212,175,55,0.8)', lineWidth: 1, lineType: LightweightCharts.LineType.WithSteps,
+          priceScaleId: 'left', lastValueVisible: true, priceLineVisible: false, title: 'Score threshold',
+        });
+        tsFlowChart.priceScale('left').applyOptions({ borderColor: '#2a2e39', visible: true });
+        tsFlowEsc = tsFlowChart.addHistogramSeries({ color: 'rgba(120,123,134,0.5)', priceScaleId: 'right', lastValueVisible: false, priceLineVisible: false });
+        tsFlowPosts = tsFlowChart.addLineSeries({ color: '#089981', lineWidth: 2, priceScaleId: 'right', lastValueVisible: true, priceLineVisible: false, title: 'Surviving POSTs' });
+      }
+      tsFlowThreshold.setData(thresholdRows.filter(r => r.score != null).map(r => ({ time: r.t, value: r.score })));
+      tsFlowEsc.setData(flowRows.map(r => ({ time: r.t, value: r.escalations })));
+      const postsData = flowRows.map(r => ({ time: r.t, value: r.posts }));
+      tsFlowPosts.setData(postsData);
+      tsFlowPosts.setMarkers(_tsMarkersFor(annotations, epochs, bucketSecs));
+      tsFlowChart.timeScale().fitContent();
+    }
+
+    function renderStopChart(rows, costFloorPct, annotations, bucketSecs) {
+      const el = document.getElementById('tsStopChart');
+      const epochs = rows.filter(r => r.n > 0).map(r => r.t);
+      if (!tsStopChart) {
+        tsStopChart = LightweightCharts.createChart(el, _tsBaseChartOpts());
+        tsStopP90 = tsStopChart.addLineSeries({ color: 'rgba(120,123,134,0.5)', lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        tsStopP10 = tsStopChart.addLineSeries({ color: 'rgba(120,123,134,0.5)', lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        tsStopMedian = tsStopChart.addLineSeries({ color: '#d4af37', lineWidth: 2, lastValueVisible: true, priceLineVisible: false, title: 'Median stop %' });
+      }
+      const _ser = (key) => rows.filter(r => r.n > 0 && r[key] != null).map(r => ({ time: r.t, value: r[key] }));
+      tsStopP90.setData(_ser('p90'));
+      tsStopP10.setData(_ser('p10'));
+      const medianData = _ser('median_stop_pct');
+      tsStopMedian.setData(medianData);
+      tsStopMedian.setMarkers(_tsMarkersFor(annotations, epochs, bucketSecs));
+      if (tsStopMedian._costFloorLine) { try { tsStopMedian.removePriceLine(tsStopMedian._costFloorLine); } catch(e){} }
+      if (costFloorPct != null) {
+        tsStopMedian._costFloorLine = tsStopMedian.createPriceLine({
+          price: costFloorPct, color: '#f23645', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed,
+          axisLabelVisible: true, title: 'cost floor',
+        });
+      }
+      tsStopChart.timeScale().fitContent();
+    }
+
+    function renderTimeseries(d) {
+      const wrap = document.getElementById('tsChartsWrap');
+      const note = document.getElementById('tsEmptyNote');
+      if (!_tsHasData(d)) {
+        wrap.style.display = 'none';
+        note.style.display = 'block';
+        note.textContent = d.earliest_structured_ts
+          ? `Collecting data since ${d.earliest_structured_ts} — check back after a few more days of escalations.`
+          : "No structured data yet — appears after Dexter's next restart (PHASE 10/11 fields aren't live in this running process yet).";
+        return;
+      }
+      wrap.style.display = '';
+      note.style.display = 'none';
+      const annotations = d.annotations || [];
+      const bucketSecs = (d.bucket_hours || 4) * 3600;
+      renderRrPressureChart(d.rr_pressure || [], annotations, bucketSecs);
+      renderFlowChart(d.flow || [], d.threshold || [], annotations, bucketSecs);
+      renderStopChart(d.stop_reality || [], d.crypto_day_cost_floor_pct, annotations, bucketSecs);
+    }
+
+    // ===== PHASE 18: INDICATOR SCOREBOARD =====
+    // One row per registry tag (all 123, so "never used yet" tools are visible too, not
+    // just ones with real trades). Real WR reuses /api/strategy/performance's tag_stats --
+    // the SAME field the Tag Leaderboard reads -- never recomputed here. Shadow WR reuses
+    // the existing counterfactual endpoint. Trend is the one NEW backend piece (PHASE 18's
+    // own /api/strategy/tag_trends).
+    const SCOREBOARD_MIN_N = 3;   // same trust threshold the Tag Leaderboard already uses
+    let _scoreboardRows = [];
+    let _scoreboardSort = { col: 'points', dir: 'desc' };   // Points desc by default, per spec
+
+    // PHASE 23: each of the 4 sources fails INDEPENDENTLY now -- the original version
+    // wrapped all four fetches in one shared try/catch, so a single failing endpoint
+    // (e.g. a not-yet-restarted Dexter still missing /api/strategy/tag_trends -- 404 ->
+    // non-JSON body -> .json() throws) zeroed out the WHOLE table instead of just the one
+    // column that source feeds. Points/Indicator always render from the registry alone;
+    // Real WR/Shadow WR/Trend individually degrade to "--" only for whichever source
+    // actually failed. An empty section is the bug; thin or partially-missing data is not.
+    async function loadScoreboard() {
+      const [regRes, perfRes, shadowRes, trendsRes] = await Promise.allSettled([
+        _loadTagRegistry(),
+        _apiFetch('/api/strategy/performance').then(r => r.json()),
+        _apiFetch('/api/strategy/counterfactual').then(r => r.json()),
+        _apiFetch('/api/strategy/tag_trends').then(r => r.json()),
+      ]);
+
+      const registry = regRes.status === 'fulfilled' ? regRes.value : {};
+      if (regRes.status === 'rejected') console.warn('[Strategy] scoreboard: registry load failed', regRes.reason);
+
+      const tagStats = (perfRes.status === 'fulfilled' && perfRes.value.tag_stats) || {};
+      if (perfRes.status === 'rejected') console.warn('[Strategy] scoreboard: performance load failed', perfRes.reason);
+
+      const shadowByTag = {};
+      if (shadowRes.status === 'fulfilled') {
+        (shadowRes.value.shadow_tags || []).forEach(s => { shadowByTag[s.tag] = s; });
+      } else {
+        console.warn('[Strategy] scoreboard: counterfactual load failed', shadowRes.reason);
+      }
+
+      const trendsByTag = (trendsRes.status === 'fulfilled' && trendsRes.value.tags) || {};
+      if (trendsRes.status === 'rejected') console.warn('[Strategy] scoreboard: tag_trends load failed', trendsRes.reason);
+
+      const tbody = document.getElementById('stratScoreboardBody');
+      const codes = Object.keys(registry);
+      if (!codes.length) {
+        // Only a genuinely-failed registry produces a truly empty table -- nothing else
+        // to show Points/Indicator from at all.
+        if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="stratEmptyState">Indicator registry unavailable — check the console.</td></tr>';
+        return;
+      }
+
+      _scoreboardRows = codes.map(code => {
+        const t = registry[code];
+        const real = tagStats[code];
+        const sh = shadowByTag[code];
+        return {
+          code, name: t.name, points: t.points,
+          wr: real ? real.win_rate : null, n: real ? real.n : 0,
+          shadowWr: sh ? sh.shadow_wr : null,
+          trend: trendsByTag[code] || [],
+        };
+      });
+      renderScoreboard();
+    }
+
+    function _sbCompare(a, b, col, dir) {
+      const mul = dir === 'asc' ? 1 : -1;
+      if (col === 'name') {
+        const av = (a.name || '').toLowerCase(), bv = (b.name || '').toLowerCase();
+        return av < bv ? -mul : av > bv ? mul : 0;
+      }
+      const av = a[col], bv = b[col];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;    // nulls always sort last, regardless of direction
+      if (bv == null) return -1;
+      return (av - bv) * mul;
+    }
+
+    function _sbSparkHTML(trend) {
+      if (!trend || !trend.length) {
+        return '<span style="color:var(--txt3)" title="No closed trades this era yet">—</span>';
+      }
+      const title = trend.map(w => `${w.week}: ${(w.wr * 100).toFixed(0)}% (n=${w.n})`).join(' | ');
+      const bars = trend.map(w => {
+        const h = Math.max(8, w.wr * 100);
+        return `<div class="sbSparkBar" style="height:${h.toFixed(1)}%;background:${winRateColor(w.wr * 100)}"></div>`;
+      }).join('');
+      return `<div class="sbSpark" title="${esc(title)}">${bars}</div>`;
+    }
+
+    function renderScoreboard() {
+      const tbody = document.getElementById('stratScoreboardBody');
+      if (!tbody) return;
+      const { col, dir } = _scoreboardSort;
+      const rows = [..._scoreboardRows].sort((a, b) => _sbCompare(a, b, col, dir));
+      tbody.innerHTML = rows.map(r => {
+        const dim = r.n < SCOREBOARD_MIN_N;
+        // PHASE 23: a tag with zero all-time closed trades is thin data, not a bug -- say
+        // so on hover/tap rather than leaving a bare dash with no explanation.
+        const wrTxt   = r.wr != null ? (r.wr * 100).toFixed(0) + '%' : '—';
+        const wrColor = r.wr != null ? winRateColor(r.wr * 100) : 'var(--txt3)';
+        const wrTitle = r.wr != null ? '' : 'title="No closed trades yet (all-time)"';
+        const shTxt = r.shadowWr != null ? r.shadowWr.toFixed(0) + '%' : '—';
+        return `<tr class="${dim ? 'dimRow' : ''}">
+          <td><span class="sbIndicatorName">${esc(r.name)}</span><span class="sbIndicatorCode">${esc(r.code)}</span></td>
+          <td>${r.points != null ? r.points : '—'}</td>
+          <td style="color:${wrColor}" ${wrTitle}>${wrTxt}</td>
+          <td>${_sbSparkHTML(r.trend)}</td>
+          <td><span class="sbShadowWr">${shTxt}</span></td>
+          <td>${r.n}</td>
+        </tr>`;
+      }).join('');
+      document.querySelectorAll('#stratScoreboardTable th[data-sort]').forEach(th => {
+        const arrow = th.dataset.sort === col ? (dir === 'asc' ? '▲' : '▼') : '';
+        th.innerHTML = esc(th.dataset.label) + (arrow ? ` <span class="sbSortArrow">${arrow}</span>` : '');
+      });
+    }
+
+    document.querySelectorAll('#stratScoreboardTable th[data-sort]').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.sort;
+        if (_scoreboardSort.col === col) {
+          _scoreboardSort.dir = _scoreboardSort.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          _scoreboardSort = { col, dir: col === 'name' ? 'asc' : 'desc' };
+        }
+        renderScoreboard();
+      });
+    });
+
+    async function loadHeatmap() {
+      try {
+        const r = await _apiFetch('/api/strategy/heatmap?days=14');
+        const d = await r.json();
+        const grid = d.grid;
+        // PHASE 25: 6 four-hour blocks (00-04, 04-08, ... 20-24) instead of 24 hour
+        // columns -- block_hours comes from the response but this render path only ever
+        // requests the (now-default) 4h grouping, so blocks.length is always 6 today.
+        const blockHours = d.block_hours || 4;
+        const blocks = [];
+        for (let b = 0; b * blockHours < 24; b++) {
+          const startH = b * blockHours, endH = Math.min(24, startH + blockHours);
+          blocks.push(`${String(startH).padStart(2,'0')}–${String(endH).padStart(2,'0')}`);
+        }
+        const max = Math.max(1, ...grid.flat());
+        const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+        let html = '<div></div>';
+        blocks.forEach(label => html += `<div class="stratHeatHourLabel">${label}</div>`);
+        days.forEach((day, di) => {
+          html += `<div class="stratHeatDayLabel">${day}</div>`;
+          blocks.forEach((label, bi) => {
+            const v = grid[di][bi];
+            const alpha = (v / max) * 0.85 + (v > 0 ? 0.1 : 0);
+            html += `<div class="stratHeatCell" style="background:rgba(212,175,55,${alpha.toFixed(2)})" title="${day} ${label} UTC — ${v} setups"></div>`;
+          });
+        });
+        document.getElementById('stratHeatmap').innerHTML = html;
+      } catch (e) { console.warn('[Strategy] heatmap load failed', e); }
+    }
+
+    // Tab switching. PHASE 21: pulled the actual switch into its own function so the (i)
+    // deep-link handler (further down) can reuse the exact same logic instead of a copy.
+    function _switchStratTab(spane) {
+      document.querySelectorAll('.stratTab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.stratPane').forEach(p => p.classList.remove('active'));
+      document.querySelector(`.stratTab[data-spane="${spane}"]`).classList.add('active');
+      document.querySelector(`.stratPane[data-spane="${spane}"]`).classList.add('active');
+    }
+    document.querySelectorAll('.stratTab').forEach(tab => {
+      tab.addEventListener('click', () => _switchStratTab(tab.dataset.spane));
+    });
+
+    // Feed filter pills
+    document.querySelectorAll('.stratFilterPill').forEach(pill => {
+      pill.addEventListener('click', () => {
+        document.querySelectorAll('.stratFilterPill').forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        feedFilter = pill.dataset.filt;
+        renderFeed();
+      });
+    });
+
+    document.getElementById('stratModeBadge').addEventListener('click', toggleExploration);
+    document.getElementById('stratCloseBtn').addEventListener('click', closeStrategy);
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeStrategy(); });
+    window.addEventListener('keydown', e => { if (e.key === 'Escape' && overlay.classList.contains('open')) closeStrategy(); });
+
+    // ===== PHASE 17/21: LEARN TAB (per-section explanations + Glossary) =====
+    // One entry per section label -- what it shows AND how it's calculated, read from
+    // the actual code that produces each section's data, not folklore. PHASE 21 turned
+    // this from a tap-popup into deep-links: every (i) icon is always visible and jumps
+    // straight to its entry in the Learn tab instead of floating a tooltip in place.
+    const SECTION_TOOLTIPS = {
+      scorecard: "Your all-time paper-trading track record across every closed trade Chev has posted: win rate, profit factor, expectancy per trade, how many trades have closed, and net P&L. This is real performance on the paper account, not a projection — but it's all-time, so a rough early stretch can still weigh on the numbers long after the system has improved.",
+      equity_curve: "Your paper account balance over time — every closed trade moves this line. Each point is the cumulative P&L up to that trade's close; a rising line means the account is growing, a flat or falling stretch means it isn't.",
+      setup_volume_heatmap: "When opportunities show up — which days and hours (UTC) the scanner finds the most setups, over the last 14 days, whether or not they were ever escalated to Chev. Useful for spotting which sessions actually produce activity worth watching.",
+      funnel: "Every 2 minutes Dexter scans the watchlist. This counts how many setups he saw, how many were filtered out before Chev ever saw them, how many he sent to Chev, what Chev decided, and how many survived George's risk checks to actually open — all in the last 24 hours.",
+      skip_reject_reasons: "A breakdown of exactly why setups didn't become trades in the last 24 hours — Chev's own skip reasoning, or which specific gate or gauntlet check rejected it. Longer bars mean that reason is killing more setups; use this to see what's actually holding trades back right now.",
+      shadow_outcomes: "These are \"what-if\" numbers from trades we did NOT take — \"bullets dodged\" (skips that would have lost) versus \"money left on the table\" (skips that would have won). They assume everything went perfectly (fills, no management, no slot limits) — treat them as clues for tuning, never as results, and they never merge into real performance stats.",
+      gate_scoreboard: "Breaks the shadow outcomes down by exactly which gate rejected the setup (cost gate, R:R gate, ATR floor, etc.), showing each gate's own hypothetical win rate and R. Answers \"which specific rule is doing the most damage or the most good.\"",
+      shadow_tag_leaderboard: "Hypothetical win rate per confluence tag, but only from setups that were skipped or killed — a much larger sample than real trades (skips outnumber posts roughly 15-20 to 1). Skipped setups aren't a random sample though — Chev skipped them for a reason — so treat this as leads worth reviewing, not proof.",
+      shadow_combo_leaderboard: "The same hypothetical leaderboard as the Shadow Tag Leaderboard, one level more specific — grouped by the exact combination of tags present, not just one tag at a time. Combinations below the trust minimum are shown greyed out.",
+      weekly_regret_trend: "Missed profits by week — what the trades we skipped would have earned, totalled per week across the system's full history. Falling is good: it means the system is getting better at recognizing good setups it used to pass on.",
+      win_rate_by_grade: "Real win rate on closed trades, grouped by the quality grade (B / A / A+) Dexter assigned when the setup was first evaluated. Higher grades should, over enough trades, show a higher win rate — this is where you can check if that's actually true.",
+      tag_leaderboard: "Real win rate on CLOSED trades, one row per confluence tag Chev cited when he posted the trade. This is actual money-on-the-line performance, not a hypothetical — rows need at least 3 closed trades to show.",
+      combo_leaderboard: "The same real win-rate idea as the Tag Leaderboard, one level more specific — grouped by the exact set of tags Chev cited together, not one at a time. Sample sizes here are thin (most combinations have only 1-2 trades so far), so rows below the trust minimum are shown greyed out rather than hidden.",
+      planned_rr_distribution: "A histogram of the Risk:Reward ratio Dexter actually calculated for each closed trade at the moment it was entered — the same cost-adjusted formula George enforces, not a rough estimate. Shows whether trades are clustering in a healthy R:R range or getting waved through too close to the minimum.",
+      system_over_time: "Three charts tracking how the system's own rules have moved over time, with markers for every restart or settings change: how tight the required Risk:Reward has been (the enforced floor, Chev's actual proposals, and the EV-based advisory number); how the escalation bar relates to how much actually gets escalated and posted; and how far stops have actually been placed versus the real cost floor. This is for spotting whether a tuning change actually helped, not for judging any single trade.",
+      indicator_scoreboard: "The Indicator Scoreboard lines up every confluence tool in one table: its hand-set Points, its real win rate on actual closed trades, a week-by-week trend of that win rate, and — where it exists — the same tool's hypothetical (shadow) win rate on setups nobody took. Sort any column by tapping its header; rows with fewer than 3 closed trades are dimmed, not hidden.",
+    };
+
+    // PHASE 27: same 16 keys as SECTION_TOOLTIPS, retold in-character. Never reproduces
+    // dialogue or scenes from any show -- original text evoking each archetype from
+    // Kev's own Chev Story.txt. Definition mode is the default; this only shows when
+    // Story Time is toggled on.
+    const SECTION_STORY = {
+      scorecard: "Jax doesn't care what anyone predicted — only what actually happened, checked candle by candle against real cost and real slippage. Every closed trade on this account passed through his hands before it counted as a win or a loss. This is his honest ledger, all-time, which means an early rough patch can still drag on it long after things improved.",
+      equity_curve: "This is the line Jax actually keeps — the real balance, after his own honest accounting of every close. It only moves when a trade actually closes and he's confirmed the real number. A flat stretch isn't nothing happening — it's Jax quietly waiting for the next one to resolve.",
+      setup_volume_heatmap: "Dexter never stops scanning, but even he has busier hours than others. This is his own attendance record — which days and hours actually produce something worth a folder, whether or not Chev ever saw it. Some sessions just have more happening than others, and Dexter's the only one who'd know.",
+      funnel: "This is Dexter's own accounting of one night's work — every setup he noticed, everything filtered out before Chev ever saw it, what actually reached Chev's desk, what he decided, and what survived George's checklist to actually open. Most nights end in mostly nothing, and that's exactly how it's supposed to work.",
+      skip_reject_reasons: "Chev doesn't get to just say no — he has to say why, citing something real from the chart, or George has to say exactly which line item failed. This tally is every one of those reasons stacked up over the last day. The longer a bar, the more setups that exact reason is quietly killing right now.",
+      shadow_outcomes: "Mike Ross never lets a skipped setup just disappear — he opens a shadow file on every single one and waits to see, hypothetically, whether it would have won. These numbers assume a clean fill and no real-world friction, so treat them as leads, never as proof. He remembers everything; he just never gets to act on any of it.",
+      gate_scoreboard: "Mike Ross's shadow files, sorted by exactly which of George's checklist items actually stopped the trade. It's the clearest way to see whether one specific rule is doing real work — or quietly costing more than it's saving.",
+      shadow_tag_leaderboard: "Mike Ross's hypothetical win rate, tag by tag, built entirely from setups nobody actually took. There's far more of this data than real trades — skips outnumber posts badly — but Chev skipped each one for a reason, so read this as a lead worth checking, not a verdict.",
+      shadow_combo_leaderboard: "The same shadow ledger Mike Ross keeps, but grouped by the exact combination of tags a setup carried, not one at a time. Thin combinations get greyed out — even his memory needs enough repeats before he'll vouch for a number.",
+      weekly_regret_trend: "Week by week, what Mike Ross's shadow files say the skipped setups would have earned, added up across the system's whole history. A falling line is the good outcome — it means fewer good setups are slipping past everyone into his shadow ledger instead of the real one.",
+      win_rate_by_grade: "The letter grade here is Dexter's own call, made the moment he first saw the setup, before anyone else weighed in. This checks whether his A+ actually beats his A, and his A actually beats his B, once enough real trades have closed to know for sure.",
+      tag_leaderboard: "Jax's honest, real-money ledger, broken down one confluence tag at a time — only counting the tag if Chev actually cited it on a trade that actually closed. Real fills, real costs, real outcome. Needs at least 3 closed trades before Jax will show a row at all.",
+      combo_leaderboard: "The same honest ledger Jax keeps for single tags, but for the exact combination Chev cited together on one trade. Most combinations have barely one or two closes so far, so the thin ones sit greyed out until there's enough to trust.",
+      planned_rr_distribution: "This is the actual Risk:Reward George measured on every closed trade the moment it opened — the real cost-adjusted number, not a rough guess. He's the one who'd tell you if trades keep landing right on his minimum instead of comfortably clear of it.",
+      system_over_time: "George's own numbers don't stay fixed — his required Risk:Reward, his cost ceiling, the bar Dexter has to clear before calling anyone over — all of it can move, and this tracks every one of those moves over time, with a marker for every restart. It's here to check whether a tuning change actually helped, not to judge any one trade.",
+      indicator_scoreboard: "Every tool in Dexter's kit, lined up in one table — his own hand-set Points, its real win rate from Jax's honest ledger, and where Mike Ross has enough shadow data, its hypothetical win rate too. Tap any column to sort it; anything Jax has fewer than 3 real closes on gets dimmed, not hidden.",
+    };
+
+    const CONCEPT_GLOSSARY = [
+      { name: "Confluence Score", def: "A plain number Dexter computes for every setup by adding up points from whichever indicators lined up — support/resistance, Fibonacci levels, RSI divergence, EMAs, chart patterns, and more. Nothing subjective here; it's arithmetic. A setup must clear a minimum score before Dexter will even show it to Chev.", how: "Each matched indicator contributes its own fixed point value (see Confluence Tags below); the score is their sum. The minimum required score depends on the asset (crypto/forex/stock) and whether EXPLORATION_MODE is active.",
+        story: "This is Dexter's own arithmetic, and it really is just addition — a point for a support test, a point for a confirmed divergence, on down the list. Nothing subjective ever enters into it. A setup has to clear his line before he'll even walk it over to Chev's desk." },
+      { name: "Risk:Reward (R:R)", def: "The ratio between how much a trade risks (entry to stop-loss) and how much it targets (entry to take-profit). A 2:1 R:R means the target is twice as far as the stop — if it wins, the reward is twice the risk.", how: "Computed as the target distance divided by the stop distance, both measured from the entry price.",
+        story: "Every setup in the building carries this ratio the moment its numbers are set, whether or not anyone's paying attention to it yet. It's the plainest measure in the whole operation — how far to the target, divided by how far to the stop. George will ask a much harsher version of this same question later." },
+      { name: "Net R:R", def: "The same Risk:Reward ratio, but adjusted for the real cost of trading — fees and slippage on both the entry and exit. A setup can look like a good R:R on paper and still fail Net R:R once those costs are subtracted, especially on tight stops. This is the number George (the risk gauntlet) actually enforces, not the raw R:R.", how: "Net R:R = (reward% − round-trip cost%) ÷ (risk% + round-trip cost%). Costs reduce the effective reward and increase the effective risk at the same time.",
+        story: "This is George's own number, and it's the harsher one — the same ratio, but with real fees and slippage subtracted first. A setup can look fine on Dexter's raw math and still fail George's version once the true cost of getting in and out is counted." },
+      { name: "Shadow Outcomes", def: "Hypothetical results for setups Chev skipped or a gate rejected — what would have happened if the trade had been taken, using the same win/loss labelling method as real trades, with realistic costs modelled in. These numbers never touch the real P&L or real stats; they exist purely to show whether the system is skipping good setups or correctly avoiding bad ones.", how: "Computed by the Examiner (labeller.py) using the same triple-barrier method (does price hit target, stop, or time out first) applied to every setup Dexter evaluates, whether or not it was ever escalated to Chev.",
+        story: "Mike Ross keeps this file on setups nobody actually took — what would have happened, hypothetically, using the exact same win/loss test as a real trade. None of it ever touches the real ledger. It exists purely so someone, eventually, can ask whether good setups are being let go for no good reason." },
+      { name: "Setup Grades (B / A / A+)", def: "A quality tier Dexter assigns to a setup based on how far its confluence score clears the minimum bar, boosted for a trending regime or a peak trading session, and reduced for forex during a low-quality session. There is no \"C\" grade — the floor is B.", how: "Starts from the ratio of the setup's score to the minimum required score (2x+ = A+, 1.5x+ = A, otherwise B), then adjusted up for a trending 4H regime or a peak session, and down for forex in a low-quality session.",
+        story: "Dexter hands out this grade the moment he first sees a setup — B is the floor, there's no grade below it. It gets a bump for a trending market or a peak session, and a small penalty for forex during a quiet one." },
+      { name: "The Funnel Stages", def: "The path every setup takes from \"Dexter noticed it\" to \"a real trade opened,\" in the last 24 hours: setups seen → filtered out before Chev ever sees them (score too low, too far from the level, on cooldown, etc.) → escalated to Chev → Chev's verdict (posted / skipped) → George's gate and gauntlet checks → actually opened. Each stage shows where setups are lost.", how: "Pre-escalation filters come from the Examiner's shadow log; Chev's decisions and George's gate/gauntlet rejections come from the decision log; the opened count comes from the live trade list.",
+        story: "This is Dexter's own accounting of one night, start to finish — everything he saw, everything filtered out before Chev ever looked at it, what reached Chev, what he decided, and what survived George's checklist to actually open. The early filtering numbers come straight from Mike Ross's shadow files, since he's the one watching setups even before Chev does." },
+    ];
+
+    // PHASE 21: order matters for the Sections list -- same order the sections actually
+    // appear in the dashboard (Overview, then Why It Skips, then Performance).
+    const SECTION_ORDER = [
+      'scorecard', 'equity_curve', 'setup_volume_heatmap',
+      'funnel', 'skip_reject_reasons', 'shadow_outcomes', 'gate_scoreboard',
+      'shadow_tag_leaderboard', 'shadow_combo_leaderboard', 'weekly_regret_trend',
+      'win_rate_by_grade', 'tag_leaderboard', 'combo_leaderboard',
+      'planned_rr_distribution', 'system_over_time', 'indicator_scoreboard',
+    ];
+
+    // PHASE 27: light-touch Story Time voice for the 123-tag glossary. Every real
+    // confluence tag belongs to either Dexter (indicators/levels he counts) or Elliot
+    // (shape/pattern/structure -- his six-step geometry process), matching the actual
+    // division of labor in Chev Story.txt. Templated by category rather than one
+    // bespoke paragraph per tag -- that's the "light touch" the phase asked for.
+    function _tagStoryText(name) {
+      const n = (name || '').toLowerCase();
+      if (/triangle|wedge/.test(n))
+        return "Elliot fits his lines through the swings for this one himself — a squeeze or a slope, either way he's measuring it, not guessing at it.";
+      if (/flag|pennant|channel/.test(n))
+        return "Elliot calls this one after walking his six steps in order — swing, leg, state, geometry, auction, then finally a hypothesis.";
+      if (/double top|double bottom|triple top|triple bottom|head & shoulders|rectangle/.test(n))
+        return "Elliot only names this shape once the swing points actually line up to prove it — he's not allowed to just eyeball it.";
+      if (/pattern breakout|pattern \(/.test(n))
+        return "This is Elliot's own confidence number talking — how well the shape actually matched its textbook definition, not a vibe.";
+      if (/market structure/.test(n))
+        return "Elliot reads this one off who's actually in control right now — participation and direction, not a single candle.";
+      if (/open interest|funding/.test(n))
+        return "This one comes in from the derivatives corner, but it lands in Dexter's folder just like everything else.";
+      if (/support|resistance/.test(n))
+        return "Dexter's been counting this level's touches all night — the more times price has bounced off it, the more it earns his attention.";
+      if (/fibonacci|golden pocket/.test(n))
+        return "Dexter measures this one off the swing the same mechanical way every time — no feel, just the ratio.";
+      if (/rsi|divergence/.test(n))
+        return "Dexter's watching the RSI needle argue with price on this one — when they disagree, he takes notice.";
+      if (/ema/.test(n))
+        return "Dexter just watches whether price respects this moving average or plows straight through it.";
+      if (/bollinger/.test(n))
+        return "Dexter tracks this band the same way every cycle — how wide it is, and whether price is testing its edge.";
+      if (/volume|vwap/.test(n))
+        return "Dexter checks where the actual volume traded, not just where price is sitting right now.";
+      if (/candle/.test(n))
+        return "Dexter flags this one straight off the candle shape itself — quick to spot, quick to log.";
+      if (/prior day|opening range|liquidity sweep/.test(n))
+        return "Dexter marks this level mechanically, the same spot every session, no judgment involved.";
+      return "Dexter logs this one the same way he logs everything — quietly, and without an opinion of his own.";
+    }
+
+    // PHASE 27: Definition (default) vs Story Time, remembered per device.
+    let _learnMode = localStorage.getItem('chevLearnMode') === 'story' ? 'story' : 'definition';
+    let _tagRegistryCache = null;
+    // Which section entry (if any) is currently pinned highlighted from an (i) deep-link --
+    // tracked separately from the DOM so it survives _renderLearnContent() rebuilding the
+    // Sections list's HTML on every Definition/Story Time toggle.
+    let _pinnedLearnKey = null;
+
+    async function _renderLearnContent() {
+      const isStory = _learnMode === 'story';
+      document.getElementById('stratLearnSections').innerHTML = SECTION_ORDER.map(key => `
+        <div class="learnEntry${key === _pinnedLearnKey ? ' learnPinned' : ''}" id="learnEntry-${esc(key)}">
+          <div class="gDef">${esc(_applyCharacterNames(isStory ? (SECTION_STORY[key] || SECTION_TOOLTIPS[key]) : SECTION_TOOLTIPS[key]) || '')}</div>
+        </div>`).join('');
+      document.getElementById('stratConceptGlossary').innerHTML = CONCEPT_GLOSSARY.map(c => `
+        <div class="learnEntry">
+          <div class="gName">${esc(c.name)}</div>
+          <div class="gDef">${esc(_applyCharacterNames(isStory ? (c.story || c.def) : c.def))}</div>
+          <div class="gHow">${esc(_applyCharacterNames(c.how))}</div>
+        </div>`).join('');
+      if (!_tagRegistryCache) _tagRegistryCache = await _loadTagRegistry();
+      const registry = _tagRegistryCache;
+      const codes = Object.keys(registry).sort((a, b) => registry[a].name.localeCompare(registry[b].name));
+      document.getElementById('stratTagGlossary').innerHTML = codes.map(code => {
+        const t = registry[code];
+        const ptsTxt = t.points != null ? `${t.points}pt` : 'unscored';
+        const defText = isStory ? _tagStoryText(t.name) : t.definition;
+        return `
+          <div class="learnEntry" data-search="${esc((t.name + ' ' + code).toLowerCase())}">
+            <div class="gName">${esc(t.name)}<span class="gCode">${esc(code)}</span><span class="gPoints">${ptsTxt}</span></div>
+            <div class="gDef">${esc(_applyCharacterNames(defText))}</div>
+            <div class="gHow">${esc(_applyCharacterNames(t.how))}</div>
+          </div>`;
+      }).join('');
+      const q = document.getElementById('glossarySearch').value.trim().toLowerCase();
+      if (q) {
+        document.querySelectorAll('#stratTagGlossary .learnEntry').forEach(el => {
+          el.style.display = (el.dataset.search || '').includes(q) ? '' : 'none';
+        });
+      }
+    }
+
+    function _setLearnMode(mode) {
+      _learnMode = mode;
+      localStorage.setItem('chevLearnMode', mode);
+      document.getElementById('learnModeDef').classList.toggle('active', mode === 'definition');
+      document.getElementById('learnModeStory').classList.toggle('active', mode === 'story');
+      _renderLearnContent();
+    }
+    document.getElementById('learnModeDef').classList.toggle('active', _learnMode === 'definition');
+    document.getElementById('learnModeStory').classList.toggle('active', _learnMode === 'story');
+    document.getElementById('learnModeDef').addEventListener('click', () => _setLearnMode('definition'));
+    document.getElementById('learnModeStory').addEventListener('click', () => _setLearnMode('story'));
+
+    let _learnRendered = false;
+    async function _ensureLearnRendered() {
+      if (_learnRendered) return;
+      _learnRendered = true;
+      await _renderLearnContent();
+    }
+    _ensureLearnRendered();   // cheap and idempotent -- render once, well before any (i) is tapped
+
+    document.getElementById('glossarySearch').addEventListener('input', (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      document.querySelectorAll('#stratTagGlossary .learnEntry').forEach(el => {
+        el.style.display = (!q || (el.dataset.search || '').includes(q)) ? '' : 'none';
+      });
+    });
+
+    // PHASE 21: (i) icons are always visible everywhere now and deep-link into the Learn
+    // tab instead of popping a tooltip -- switch tab, scroll the matching entry into view
+    // (scrollIntoView finds #stratBody's own scrolling ancestor automatically), and pin a
+    // persistent highlight on it (PHASE 27 follow-up: no longer auto-fades, and survives a
+    // Definition/Story Time toggle since _renderLearnContent re-applies it from
+    // _pinnedLearnKey on every render) -- click the highlighted entry itself to clear it.
+    document.getElementById('strategyPanel').addEventListener('click', (e) => {
+      const icon = e.target.closest('.stratLearnIcon');
+      if (icon) {
+        const key = icon.dataset.learn;
+        const entry = document.getElementById('learnEntry-' + key);
+        if (!entry) return;
+        _switchStratTab('learn');
+        entry.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.querySelectorAll('#stratLearnSections .learnEntry.learnPinned').forEach(el => el.classList.remove('learnPinned'));
+        entry.classList.add('learnPinned');
+        _pinnedLearnKey = key;
+        return;
+      }
+      const pinned = e.target.closest('#stratLearnSections .learnEntry.learnPinned');
+      if (pinned) {
+        pinned.classList.remove('learnPinned');
+        _pinnedLearnKey = null;
+      }
+    });
+
+    window._openStrategy = openStrategy;
+    window._closeStrategy = closeStrategy;
+  })();
+
   window.addEventListener('keydown',e=>{
     if ((e.key==='k'||e.key==='K')&&(e.ctrlKey||e.metaKey)) {
       e.preventDefault();
@@ -6770,8 +8809,19 @@
 
   /* ---- Object tree ---- */
   const objTreeEl=document.getElementById('objectTree');
-  document.getElementById('objectTreeToggle').addEventListener('click',()=>objTreeEl.classList.toggle('open'));
-  document.getElementById('objClose').addEventListener('click',()=>objTreeEl.classList.remove('open'));
+  const objTreeToggleBtn=document.getElementById('objectTreeToggle');
+  // 2026-07-05 fix: this button toggled the PANEL's .open class but never touched
+  // its own — with no active-state CSS anywhere for it either, it looked identically
+  // grey whether the Drawings panel was open or closed. Now syncs a class onto the
+  // button itself so it can actually show which state it's in (see .iconBtn.active CSS).
+  objTreeToggleBtn.addEventListener('click',()=>{
+    objTreeEl.classList.toggle('open');
+    objTreeToggleBtn.classList.toggle('active', objTreeEl.classList.contains('open'));
+  });
+  document.getElementById('objClose').addEventListener('click',()=>{
+    objTreeEl.classList.remove('open');
+    objTreeToggleBtn.classList.remove('active');
+  });
 
   function drawingLabel(d) {
     const labels={hline:'H.Line',ray:'Ray',trendline:'Trendline',rect:'Rectangle',fib:'Fibonacci',channel:'Channel',triangle:'Triangle',vp:'Vol Profile',measure:'Measure',pencil:'Pencil'};
@@ -7093,6 +9143,30 @@
   function _loadEngineCache(sym, tf) {
     try {
       const store = JSON.parse(localStorage.getItem(_ENG_CACHE_KEY) || '{}');
+      return store[sym + '|' + tf] || null;
+    } catch(e) { return null; }
+  }
+
+  /* ============================================================
+     HYPOTHETICAL CACHE — Chev's "where would you enter" answers,
+     persisted per symbol+tf so they survive navigating away. Never
+     written server-side (no journal/sheet/telegram) — cache-only.
+     ============================================================ */
+  const _HYPO_CACHE_KEY = '_chev_hypo_v1';
+
+  function _saveHypoCache(sym, tf, data) {
+    try {
+      const store = JSON.parse(localStorage.getItem(_HYPO_CACHE_KEY) || '{}');
+      store[sym + '|' + tf] = { data, ts: Date.now() };
+      const keys = Object.keys(store).sort((a,b) => (store[b].ts||0)-(store[a].ts||0));
+      if (keys.length > 12) keys.slice(12).forEach(k => delete store[k]);
+      localStorage.setItem(_HYPO_CACHE_KEY, JSON.stringify(store));
+    } catch(e) {}
+  }
+
+  function _loadHypoCache(sym, tf) {
+    try {
+      const store = JSON.parse(localStorage.getItem(_HYPO_CACHE_KEY) || '{}');
       return store[sym + '|' + tf] || null;
     } catch(e) { return null; }
   }
@@ -7562,75 +9636,62 @@
   }
 
   /* ============================================================
-     LAYERS TAB — layer visibility toggles
+     LAYERS TAB — per-tool hide/show checkboxes (added 2026-07-05)
+     Replaces the old #layersList passive management list — each Analysis
+     Tools row now owns its own checkbox instead of a separate list managing
+     all of them. See _wireVisCheckbox below and the ATR-specific handling.
      ============================================================ */
-  window.renderLayersPanel = function() {
-    const el = document.getElementById('layersList');
-    if (!el) return;
-    const layers = [
-      { id: '_sr',        label: 'S/R Zones',        color: '#f23645',  icon: '■' },
-      { id: '_vp',        label: 'Volume Profile',    color: '#2962ff',  icon: '■' },
-      { id: '_fib_stack', label: 'Fibonacci GP',      color: '#d4af37',  icon: '■' },
-      { id: '_rsi_div',   label: 'RSI Divergence',    color: '#9b59b6',  icon: '■' },
-      { id: '_chev',      label: "Chev's Drawings",   color: '#d4af37',  icon: '■' },
-    ];
-    let html = '';
-    layers.forEach(function(layer) {
-      const layerDrawings = drawings.filter(function(d) { return d[layer.id]; });
-      const hasDrawings = layerDrawings.length > 0;
-      const allVisible = !hasDrawings || layerDrawings.every(function(d) { return d.visible !== false; });
-      html += '<div class="layerRow' + (hasDrawings ? '' : ' layerEmpty') + '">';
-      html += '<label class="layerCheck"><input type="checkbox" data-layer="' + layer.id + '" ' + (allVisible ? 'checked' : '') + ' ' + (hasDrawings ? '' : 'disabled') + '>';
-      html += '<span class="layerDot" style="background:' + layer.color + '"></span>';
-      html += '<span class="layerLabel">' + layer.label + '</span></label>';
-      html += '<span class="layerCount">' + (hasDrawings ? layerDrawings.length : '') + '</span>';
-      if (hasDrawings) html += '<button class="layerClear" data-layer="' + layer.id + '" title="Clear this layer">✕</button>';
-      html += '</div>';
+  function _wireVisCheckbox(checkboxId, tag) {
+    const chk = document.getElementById(checkboxId);
+    if (!chk) return;
+    chk.addEventListener('change', function() {
+      drawings.forEach(function(d) { if (d[tag]) d.visible = chk.checked; });
+      saveDrawings(); redrawAll(); updateObjTree();
     });
-    el.innerHTML = html;
+  }
+  _wireVisCheckbox('lyrSrVis',  '_sr');
+  _wireVisCheckbox('lyrVpVis',  '_vp');
+  _wireVisCheckbox('lyrFibVis', '_fib_stack');
+  // RSI is deliberately NOT wired through _wireVisCheckbox — _rsi_div drawings are
+  // never persisted (see _clearRsiDivOverlay's comment: saveDrawings() here would
+  // fire the Firebase SSE stream, which replaces drawings[] and wipes them). This
+  // mirrors that same constraint and also needs rsiRedrawAll() for the RSI panel.
+  document.getElementById('lyrRsiVis').addEventListener('change', function() {
+    const checked = this.checked;
+    drawings.forEach(function(d) { if (d._rsi_div) d.visible = checked; });
+    redrawAll(); rsiRedrawAll(); updateObjTree();
+  });
+  // ATR's checkbox IS its on/off state (no chart drawing to toggle visible/hidden
+  // on) — checking it fetches+shows the persistent readout, unchecking hides it.
+  document.getElementById('lyrAtrVis').addEventListener('change', function() {
+    _setAtrVisible(this.checked);
+  });
 
-    el.querySelectorAll('input[data-layer]').forEach(function(chk) {
-      chk.addEventListener('change', function() {
-        const lid = chk.dataset.layer;
-        drawings.forEach(function(d) { if (d[lid]) d.visible = chk.checked; });
-        saveDrawings(); redrawAll(); updateObjTree();
-      });
-    });
-    el.querySelectorAll('.layerClear').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        const lid = btn.dataset.layer;
-        for (let i = drawings.length - 1; i >= 0; i--) { if (drawings[i][lid]) drawings.splice(i, 1); }
-        saveDrawings(); redrawAll(); updateObjTree(); window.renderLayersPanel();
-      });
-    });
-  };
-
-  // Wire LAYERS tab tool buttons to existing Arsenal functions
+  // Wire LAYERS tab tool buttons to existing Arsenal functions. Class toggling
+  // AND the per-row checkbox enable/disable state are both handled synchronously
+  // inside the draw functions themselves (2026-07-05) — no external panel refresh
+  // needed anymore now that #layersList/renderLayersPanel are gone.
+  function _rsiArrowClick() {
+    // If RSI is already showing, just reopen the popup so the user can pick a
+    // different timeframe — don't toggle the whole overlay off.
+    if (document.getElementById('lyrRsiCard').classList.contains('active')) _ctpShow('rsi');
+    else showRSIDiv();
+  }
   (function() {
     const map = [
-      ['lyrSrBtn',  function() { drawSRZones(); setTimeout(function() { document.getElementById('lyrSrCard').classList.toggle('active', drawings.some(function(d) { return d._sr; })); window.renderLayersPanel(); }, 80); }],
-      ['lyrVpBtn',  function() { drawVP();     setTimeout(function() { document.getElementById('lyrVpCard').classList.toggle('active', drawings.some(function(d) { return d._vp; })); window.renderLayersPanel(); }, 80); }],
+      ['lyrSrBtn',  function() { drawSRZones(); }],
+      ['lyrVpBtn',  function() { drawVP(); }],
       ['lyrAtrBtn', function() { showATR(); }],
-      ['lyrFibBtn', function() { drawFibStack(); setTimeout(function() { document.getElementById('lyrFibCard').classList.toggle('active', drawings.some(function(d) { return d._fib_stack; })); window.renderLayersPanel(); }, 100); }],
-      ['lyrRsiBtn', function() { _rsiOpenDropdown(document.getElementById('lyrRsiBtn')); }],
-      ['lyrFibArrow', function(e) { e.stopPropagation(); const dd = document.getElementById('fibTfDropdown'); const willOpen = !dd.classList.contains('open'); dd.classList.toggle('open', willOpen); if (willOpen) _positionDropdown(dd, e.currentTarget); }],
-      ['lyrRsiArrow', function(e) { e.stopPropagation(); _rsiOpenDropdown(e.currentTarget); }],
+      ['lyrFibBtn', function() { drawFibStack(); }],
+      ['lyrRsiBtn', function() { showRSIDiv(); }],
+      ['lyrFibArrow', function(e) { e.stopPropagation(); _ctpShow('fib'); }],
+      ['lyrRsiArrow', function(e) { e.stopPropagation(); _rsiArrowClick(); }],
     ];
     map.forEach(function(pair) {
       const el = document.getElementById(pair[0]);
       if (el) el.addEventListener('click', pair[1]);
     });
   })();
-
-  // Refresh layers panel whenever drawings change (hook into saveDrawings)
-  const _origSaveDrawings = saveDrawings;
-  saveDrawings = function(sym) {
-    _origSaveDrawings(sym);
-    const layersPane = document.getElementById('layersPane');
-    if (layersPane && layersPane.classList.contains('active')) window.renderLayersPanel();
-  };
-
-  window.renderLayersPanel();
 
   /* ============================================================
      SPARKLINES — live mini price charts in watchlist
@@ -7749,64 +9810,58 @@
     return out;
   }
 
+  function _getStarredWatchlistSymbols() {
+    return _getAllWatchlistSymbols().filter(item => item.starred);
+  }
+
   function _radarCardHTML(item, result) {
     const sym  = item.symbol;
     const id   = cssId(sym);
+    const hasResult = !!result;
     const state   = result?.state || result?.market_state;
     const topHyp  = (result?.hypotheses || [])[0];
     const regime  = state?.regime || '';
     const isBull  = regime.includes('BULL');
     const isBear  = regime.includes('BEAR');
-    const biasCls = isBull ? 'bull' : isBear ? 'bear' : 'range';
-    const biasLbl = isBull ? '▲ BULL' : isBear ? '▼ BEAR' : '◆ RANGE';
+    const biasCls = !hasResult ? 'idle' : isBull ? 'bull' : isBear ? 'bear' : 'range';
+    const biasLbl = !hasResult ? 'NOT SCANNED' : isBull ? '▲ BULL' : isBear ? '▼ BEAR' : '◆ RANGE';
     const conf    = topHyp ? Math.round((topHyp.confidence || 0) * 100) : null;
     const confCls = conf == null ? '' : conf >= 65 ? 'high' : conf >= 40 ? 'mid' : 'low';
-    const hypName = topHyp ? (topHyp.name || topHyp.label || '').replace(/_/g, ' ') : 'No data';
+    const hypName = topHyp ? (topHyp.name || topHyp.label || '').replace(/_/g, ' ') : (hasResult ? 'No data' : "Click to ask Chev where he'd enter");
     const logo    = item.type === 'crypto' ? `<img class="logo" src="${iconUrl(item.icon || item.symbol.replace('USDT','').toLowerCase())}" alt="" onerror="this.style.display='none'" style="width:16px;height:16px;border-radius:50%;flex-shrink:0">` : '';
-    return `<div class="radarCard ${biasCls}" data-sym="${sym}" data-type="${item.type||'crypto'}" title="Click to load ${sym}">
-      <div class="radarCardTop">
+    return `<div class="radarCard ${biasCls}" data-sym="${sym}" data-type="${item.type||'crypto'}">
+      <div class="radarCardTop" title="Click to ask Chev where he'd enter this, even if he'd skip it live">
         ${logo}
         <span class="radarSym">${sym.replace('USDT','')}</span>
         <span class="radarBias ${biasCls}">${biasLbl}</span>
-        <span class="radarConf ${confCls}">${conf != null ? conf + '%' : '—'}</span>
+        ${conf != null ? `<span class="radarConf ${confCls}">${conf}%</span>` : ''}
       </div>
       <div class="radarHypName">${hypName}</div>
-      <div class="radarConfBar"><div class="radarConfFill ${biasCls}" style="width:${conf||0}%"></div></div>
+      ${hasResult ? `<div class="radarConfBar"><div class="radarConfFill ${biasCls}" style="width:${conf||0}%"></div></div>` : ''}
+      <div class="radarHypoSlot" id="hypoSlot-${id}"></div>
     </div>`;
   }
 
   function _renderRadar() {
     const grid = document.getElementById('radarGrid');
     if (!grid) return;
-    const items = _getAllWatchlistSymbols();
-    const cards = items.map(item => {
-      const res = _radarResults[item.symbol];
-      return res ? _radarCardHTML(item, res) : '';
-    }).filter(Boolean);
-    if (!cards.length) {
-      grid.innerHTML = '<div id="radarEmpty">No scan yet. Press <b>Scan All</b> to see Chev\'s read on every symbol.</div>';
+    const items = _getStarredWatchlistSymbols();
+    if (!items.length) {
+      grid.innerHTML = '<div id="radarEmpty">★ Star pairs in the watchlist to track them here.</div>';
       return;
     }
-    grid.innerHTML = cards.join('');
+    const tf = document.getElementById('radarTf')?.value || '1h';
+    grid.innerHTML = items.map(item => _radarCardHTML(item, _radarResults[item.symbol])).join('');
     grid.querySelectorAll('.radarCard[data-sym]').forEach(card => {
-      card.addEventListener('click', () => {
-        const sym  = card.dataset.sym;
-        const type = card.dataset.type || 'crypto';
-        currentSymbol = sym; currentType = type;
-        drawings = loadDrawings(currentSymbol); rsiDrawings = loadRsiDrawings(currentSymbol); updateObjTree();
-        _syncDrawings(currentSymbol); _subscribeDrawings(currentSymbol);
-        watchlistInner.querySelectorAll('.watchRow').forEach(r => {
-          r.classList.toggle('active', r.dataset.symbol === sym);
-        });
-        clearChevTools();
-        loadChart(currentSymbol, currentTf, currentType).then(startPolling);
-        // Switch to ENGINE tab and auto-apply cached data
-        document.querySelectorAll('.intelTab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'engine'));
-        document.querySelectorAll('.intelPane').forEach(p => p.classList.toggle('active', p.dataset.pane === 'engine'));
-        const cached = _loadEngineCache(sym, currentTf);
-        if (cached) { _applyEngineData(cached.data, true, cached.ts); }
-        else if (_radarResults[sym]) { _applyEngineData(_radarResults[sym], false, null); }
+      const sym  = card.dataset.sym;
+      const type = card.dataset.type || 'crypto';
+      // The whole pill (card) is the button — not just the symbol text.
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.radarHypoSlot')) return; // let tag pills / re-ask / answer-card handle their own clicks
+        _askChevHypothetical(sym, type, tf, card);
       });
+      const cached = _loadHypoCache(sym, tf);
+      if (cached) _renderHypoSlot(sym, cached.data, cached.ts);
     });
   }
 
@@ -7816,8 +9871,8 @@
     const btn      = document.getElementById('radarScanBtn');
     const progress = document.getElementById('radarProgress');
     const tf       = document.getElementById('radarTf')?.value || '1h';
-    const items    = _getAllWatchlistSymbols();
-    if (!items.length) { if (progress) progress.textContent = 'No symbols in watchlist'; _radarScanning = false; return; }
+    const items    = _getStarredWatchlistSymbols();
+    if (!items.length) { if (progress) progress.textContent = 'No starred symbols — star some in the watchlist first'; _radarScanning = false; return; }
     if (btn) { btn.disabled = true; btn.innerHTML = '<img src="emoji/time.png" alt="" style="width:13px;height:13px;margin-right:5px;opacity:0.85;vertical-align:middle">Scanning...'; }
     // Show skeleton cards
     const grid = document.getElementById('radarGrid');
@@ -7843,6 +9898,180 @@
     if (btn) { btn.disabled = false; btn.innerHTML = '<img src="emoji/tools.png" alt="" style="width:13px;height:13px;margin-right:5px;opacity:0.85;vertical-align:middle">Scan All'; }
     _radarScanning = false;
     showNotification('Radar complete', `${items.length} symbols analyzed on ${tf.toUpperCase()}`, 'success', 'not-bad-2.png', 5000);
+  }
+
+  /* ============================================================
+     RADAR — Chev's hypothetical entry ("where would you enter
+     this, even if you'd skip it live"). Real one-off LLM call,
+     cached client-side only — never posted/logged/traded.
+     ============================================================ */
+  function _hypoIdeaObj(sym, data) {
+    return {
+      row: 'hypo-' + sym,
+      pair: sym,
+      tf: data.tf,
+      direction: data.direction,
+      entry: data.entry, sl: data.sl, tp: data.tp,
+      tags: data.tags,
+      confluence_prices: data.confluence_prices || {},
+      reason: data.reasoning,
+    };
+  }
+
+  function _hypoCardHTML(sym, data, ts) {
+    const isLong  = (data.direction || '').toLowerCase() === 'long';
+    const dirCls  = isLong ? 'long' : 'short';
+    const dirArrow = isLong ? '⬆' : '⬇';
+    const row     = 'hypo-' + sym;
+    const _ps     = _getPillState(row);
+    const tags    = (data.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    const tagChips = tags.map(t => {
+      const stats = _tagStatsCache && _tagStatsCache[t];
+      const trusted = stats && stats.n >= 3;
+      const col  = trusted ? winRateColor(stats.win_rate * 100) : null;
+      const style = col ? ` style="border-color:${col};color:${col}"` : '';
+      const title = stats ? ` title="${Math.round(stats.win_rate*100)}% real win rate (n=${stats.n})"` : '';
+      return `<button class="ideaPill${_ps[t] ? ' active' : ''}" data-tag="${t}" data-row="${row}"${style}${title}>${esc(t)}</button>`;
+    }).join('');
+    const rrChip = data.planned_rr != null
+      ? `<span class="ideaRRChip"><img src="emoji/ruler.png" alt="" style="width:9px;height:9px;margin-right:2px;vertical-align:middle;opacity:0.7">R:R ${data.planned_rr.toFixed(1)}</span>`
+      : '';
+    const wouldTakeChip = data.would_take === true
+      ? `<span class="ideaLevChip" style="background:rgba(8,153,129,0.15);color:var(--green)">WOULD TAKE</span>`
+      : data.would_take === false
+      ? `<span class="ideaLevChip" style="background:rgba(242,54,69,0.15);color:var(--red)">WOULD SKIP</span>` : '';
+    const ago = Math.max(0, Math.round((Date.now() - ts) / 60000));
+    const agoStr = ago < 1 ? 'just now' : ago < 60 ? ago + 'm ago' : Math.round(ago / 60) + 'h ago';
+    const noteHtml = data.reasoning ? `<div class="ideaNote">${String(data.reasoning).replace(/</g, '&lt;')}</div>` : '';
+    const tagLabel = tagChips ? `<div class="radarHypoTagLabel">Tools Chev confirmed (didn't clear the confluence threshold):</div>` : '';
+    return `<div class="ideaCard ${dirCls}" data-row="${row}">
+      <div class="ideaCardTop">
+        <span class="ideaDirBadge ${dirCls}">${dirArrow} ${(data.direction || '').toUpperCase()}</span>
+        <span class="ideaPairName">Hypothetical</span>
+        ${rrChip}${wouldTakeChip}
+      </div>
+      ${tagLabel}
+      ${tagChips ? `<div class="ideaTagRow">${tagChips}</div>` : ''}
+      <div class="ideaPriceRow">
+        <button class="ideaPill ideaPillE${_ps['_E'] ? ' active' : ''}" data-tag="_E" data-row="${row}">E ${data.entry}</button>
+        <button class="ideaPill ideaPillSL${_ps['_SL'] ? ' active' : ''}" data-tag="_SL" data-row="${row}">SL ${data.sl}</button>
+        <button class="ideaPill ideaPillTP${_ps['_TP'] ? ' active' : ''}" data-tag="_TP" data-row="${row}">TP ${data.tp}</button>
+      </div>
+      ${noteHtml}
+      <div class="radarHypoMeta">Asked ${agoStr} · <span class="radarHypoReask">re-ask</span></div>
+    </div>`;
+  }
+
+  function _renderHypoSlot(sym, data, ts) {
+    const slot = document.getElementById('hypoSlot-' + cssId(sym));
+    if (!slot) return;
+    slot.innerHTML = _hypoCardHTML(sym, data, ts);
+    const card = slot.querySelector('.ideaCard');
+    const row  = card.dataset.row;
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.ideaPill') || e.target.closest('.radarHypoReask')) return;
+      selectIdea(_hypoIdeaObj(sym, data));
+    });
+    slot.querySelectorAll('.ideaPill').forEach(pill => {
+      pill.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tag  = pill.dataset.tag;
+        const isOn = !pill.classList.contains('active');
+        pill.classList.toggle('active', isOn);
+        _setPillState(row, tag, isOn);
+        if (String(activeIdeaRow) === row) _applyIdeaPill(_hypoIdeaObj(sym, data), tag, isOn);
+      });
+    });
+    const reaskEl = slot.querySelector('.radarHypoReask');
+    if (reaskEl) {
+      reaskEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const card2 = slot.closest('.radarCard');
+        const type  = card2?.dataset.type || 'crypto';
+        const tf    = document.getElementById('radarTf')?.value || data.tf || '1h';
+        if (card2) _askChevHypothetical(sym, type, tf, card2, true);
+      });
+    }
+  }
+
+  // Per-symbol anti-spam guard: once Chev's asked, ignore repeat clicks for 30s —
+  // regardless of how fast the reply actually comes back — so an eager click
+  // doesn't fire the same "contacting Chev" request over and over.
+  const _hypoCooldownUntil = {};
+
+  async function _askChevHypothetical(sym, type, tf, card, forceRefresh) {
+    const now = Date.now();
+    if (!forceRefresh && now < (_hypoCooldownUntil[sym] || 0)) return; // still cooling down
+    const slot = card.querySelector('.radarHypoSlot') || document.getElementById('hypoSlot-' + cssId(sym));
+
+    if (!forceRefresh) {
+      const cached = _loadHypoCache(sym, tf);
+      if (cached) { _renderHypoSlot(sym, cached.data, cached.ts); return; }
+    }
+
+    _hypoCooldownUntil[sym] = now + 30000;
+    card.classList.add('cooling');
+    setTimeout(() => { card.classList.remove('cooling'); }, 30000);
+
+    // Live elapsed-time ticker — Chev's calls are globally rate-limited (shared with
+    // the live scanner, min ~65s between ANY call to protect the Gemini quota), so an
+    // on-demand ask can sit queued for a while with zero server-side activity. Without
+    // this the UI looks frozen; with it, the wait is at least visibly still alive.
+    const startedAt = Date.now();
+    const tick = () => {
+      if (!slot) return;
+      const secs = Math.round((Date.now() - startedAt) / 1000);
+      const note = secs > 60
+        ? ' — Chev may be mid-conversation with the live scanner (calls are queued, not parallel), this can take a couple minutes'
+        : '';
+      slot.innerHTML = `<div class="radarHypoLoading">💬 Contacting Chev… (${secs}s)${note}</div>`;
+    };
+    tick();
+    const tickTimer = setInterval(tick, 1000);
+    // Client-side safety net: Dexter now bounds its own internal waits (candle fetch 30s,
+    // Chev's reply 200s), so a well-formed response always arrives well under 4 minutes.
+    // If this fires instead, the request never reached Flask at all (dead connection/tunnel).
+    const abortCtrl = new AbortController();
+    const abortTimer = setTimeout(() => abortCtrl.abort(), 240000);
+
+    try {
+      await _ensureTagStats();
+      const r = await _apiFetch('/api/analysis/hypothetical', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: sym, tf }),
+        signal: abortCtrl.signal,
+      });
+      let data;
+      try {
+        data = await r.json();
+      } catch (parseErr) {
+        console.error('[Hypothetical] response was not JSON', r.status, parseErr);
+        clearInterval(tickTimer); clearTimeout(abortTimer);
+        if (slot) slot.innerHTML = `<div class="radarHypoError">Dexter returned an unreadable response (HTTP ${r.status}) — check Dexter's console</div>`;
+        return;
+      }
+      if (!r.ok || data.error) {
+        console.warn('[Hypothetical] error response', r.status, data);
+        clearInterval(tickTimer); clearTimeout(abortTimer);
+        if (slot) slot.innerHTML = `<div class="radarHypoError">${esc(data.error || `HTTP ${r.status}`)}</div>`;
+        return;
+      }
+      data.tf = tf;
+      _saveHypoCache(sym, tf, data);
+      clearInterval(tickTimer); clearTimeout(abortTimer);
+      // "Chev answered" IS this: the loading line is replaced by the full trade card below.
+      _renderHypoSlot(sym, data, Date.now());
+      // Auto-draw entry/SL/TP lines + red/green zones immediately — no extra click needed
+      selectIdea(_hypoIdeaObj(sym, data));
+    } catch (e) {
+      clearInterval(tickTimer); clearTimeout(abortTimer);
+      const timedOut = e.name === 'AbortError';
+      console.error('[Hypothetical] fetch failed', timedOut ? '(client-side 4min abort — request never completed)' : e);
+      if (slot) slot.innerHTML = timedOut
+        ? `<div class="radarHypoError">Timed out after 4 minutes — the request never got a response. Check Dexter's console for errors, or that it's still running.</div>`
+        : `<div class="radarHypoError">Dexter unreachable — ${esc(e.message || 'network error')}</div>`;
+    }
   }
 
   document.addEventListener('DOMContentLoaded', () => {

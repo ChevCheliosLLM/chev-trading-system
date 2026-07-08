@@ -1,12 +1,16 @@
 CHEV TRADING PLAYBOOK — CRYPTO
-Last updated: 2026-07-03 18:23:17 | Based on 48 CRYPTO trades
+Last updated: 2026-07-07 04:36:05 | Based on 53 CRYPTO trades
 ========================================
 
 ### CONFLUENCE CONDITIONS
-- The combination of Fibonacci confluence (fib_1h), EMA crossover (ema_15m), and divergence (dv) won every trade seen so far, but that's a handful of trades under the pre-recalibration scoring — tentative, small-sample, a lead to keep watching, not a proven edge yet.
-- RSI divergence (rsi_form_1h) often fails as a standalone indicator in setups without additional confluence points like S/R levels or EMA crosses, showing high noise to signal ratio.
-- Golden pocket (gp), Fibonacci retracement (fib_1h), and 4-hour support/resistance (sr_4h) together have mixed results; gp alone adds marginal value unless paired with RSI divergence and clear market structure.
 
+- **Valid Combinations**: Bollinger Bands + Divergence + EMAs + Fibonacci + Golden Pocket (100% WR, n=3)
+- **Marginal Conditions**: EMAs + RSI Formations + Fibonacci without structural support (0% WR, n=5)
+- **SR Level Importance**: 4-hour SR levels provide more reliable support compared to 1-hour SR levels when combined with other indicators (n=20)
+
+### MARKET STRUCTURE RULES
+
+- **Trend Context**: High-quality setups are validated in trending markets where there is clear structural support and momentum (50% WR, n=10)
 ### TRENDING MARKET BEHAVIOUR — CRITICAL
 - In a confirmed uptrend (4H making HH/HL, net move > +5%), resistance levels are CONTINUATION ZONES. The market is expected to break them, not reverse from them. Shorting resistance in an uptrend is the single lowest-probability trade in crypto — historical win rate < 15%.
 - In a confirmed downtrend (4H making LH/LL, net move < -5%), support levels are CONTINUATION ZONES. The market is expected to break them. Longing support in a downtrend fails ~85% of the time.
@@ -14,30 +18,45 @@ Last updated: 2026-07-03 18:23:17 | Based on 48 CRYPTO trades
 - Counter-trend trades (short in uptrend / long in downtrend) require ALL of: (1) A+ score ≥ 1.5× the normal threshold (crypto = 15), (2) confirmed RSI divergence — not forming, (3) explicit 4H BOS or CHoCH proving reversal. Any one missing → SKIP.
 - Dexter will show you a '4H Macro Trend Context' block at the top of every market brief. Read it first, before looking at individual levels.
 
-### MARKET STRUCTURE RULES
-- High-quality setups occur in trending markets where confluence includes hidden bullish/bearish divergences and strong structural levels, suggesting a directional bias.
-- Price typically reaches TP in uptrend conditions when multiple EMAs (ema_13/21/55) align with Fibonacci extensions and RSI above 50 on the 1-hour chart.
-- Trend confirmation through EMA crossovers and RSI divergence improves setup quality, making it more likely for price to reach TP rather than reversing early.
+- **Confidence in TP Reach**: Entries aligned with strong Fibonacci levels and divergences tend to reach TP without significant retracement if the market shows directional bias (n=8)
 
 ### ENTRY QUALITY STANDARDS
-- High-conviction entries are characterized by strong confluence at structural levels like Fibonacci golden pockets (gp) and clear support/resistance on the 4-hour chart.
-- Winners often have additional confirmatory signals like EMA crossovers, RSI divergence, or volume at the level, while losers lack these confirming factors despite initial good indicators — a squeeze is a timing/volatility warning under current rules, not a confluence.
-- Marginal entries typically rely heavily on short-term confluences without long-term structural support, leading to premature stop-outs due to market noise.
+
+- **High Conviction Entry**: Structurally defined support/resistance, clear EMA crossovers, and forming hidden divergence aligning with strong Fibonacci levels (100% WR, n=3)
+- **Marginal Entry**: Mid-range positions with less-defined structural support or resistance, weak confluence signals (50% WR, n=6)
 
 ### TRADE MANAGEMENT PATTERNS
-- When TP was raised correctly based on momentum and price confirmation (e.g., hitting upper Bollinger Band), price hit the new target more often than reverting to floor.
-- Moving SL early only protected profit when done during strong trending moves; otherwise, it led to premature stop-outs, highlighting the need for cautious management in ranging markets.
-- Leaving trades alone with no management typically results in hitting TP, suggesting overmanagement can negatively impact performance.
+
+- **TP Management**: Raising TP often leads to hitting raised TP when price shows strong momentum post-entry (1/1, n=2)
+- **SL Management**: Moving SL early can protect gains if market continues in favor, but premature moves risk getting stopped out before reaching TP (50% WR, n=4)
 
 ### REASONING QUALITY
-- 8 out of 21 setups were validated by price action, indicating a 38% validation rate. Partial reasoning (62%) often lacks additional confirmatory signals or misreads market structure.
-- Invalidated reasoning typically fails due to wrong trend bias or overreliance on short-term indicators without broader structural support.
-- A+ setups show better validation rates than B setups, with higher confluence quality and clearer trend context.
+
+- **Reasoning Validation**: 67% of reasoning is validated by price action; invalidated setups often lacked robust structural support or had weak confluence signals (n=23)
+- **Common Themes in Invalidated Trades**: Often due to entering trades with marginal confluences and weaker trend context (40%, n=9)
 
 ### ASSET NOTES
-- Cryptos (BTCUSDT, ETHUSDT) perform well in uptrends when multiple EMAs align with Fibonacci retracement levels and RSI divergence confirms directional bias.
-- Assets like ADAUSDT and XRPUSDT show better performance in ranging markets with additional confluences such as Bollinger Bands squeeze and EMA crossovers.
+
+- **Crypto Behavior**: High-quality setups in crypto tend to perform better when there is strong buying/selling pressure, validated by high volume and market structure (n=12)
+- **Forex vs Crypto**: Forex shows more consistent performance with clear structural levels, whereas crypto often requires additional confirmation signals due to higher volatility (n=5)
 
 ### JANE'S PATTERNS
-- Jane is consistently profitable on BTCUSDT long positions during strong uptrends confirmed by multiple EMAs, Fibonacci levels, and RSI above 50.
-- Her instincts diverge from models when she enters based on hidden bullish divergence with clear support/resistance levels, often leading to early TP hits while model entries get stopped out prematurely.
+
+- **Consistent Profitability**: Jane excels on setups with strong hidden divergences and EMA crossovers, particularly in trending markets (2W/0L)
+- **Divergence from Models**: Jane’s instincts are often correct when entering long positions during a breakout or continuation move, even if technical indicators are marginal (n=3)
+
+### INSUFFICIENT DATA
+
+- Insufficient data — revisit next session.
+
+### STRUCTURAL RISK FACTORS
+- **Proximity to multiple short-term S/R levels**: A high density of short-term support and resistance levels near the entry point can indicate higher risk of immediate rejection or whipsaw.
+  
+- **Tight stop-loss placement relative to confluence points**: Entries with tight stop losses that are close to the entry price suggest a marginal position within key technical levels, increasing the likelihood of premature exits due to normal market noise.
+
+- **Marginal structural alignment in ranging markets**: Setups where multiple indicators provide support but the structural levels (S/R, Fibonacci) are not decisively aligned can lead to uncertain price action and higher risk of adverse movements.
+
+### WIN/LOSS INSIGHT
+WIN/LOSS INSIGHT:
+- The winning trades consistently featured confluences at well-defined structural levels (e.g., 4-hour support/resistance) with multiple prior touches, whereas losing trades often entered in less clearly defined areas or mid-range without strong support.
+- Winning trades had a higher concentration of Fibonacci retracement levels and golden pocket formations (gp), indicating stronger structural support compared to the losing trades which lacked these specific high-confidence confluences.

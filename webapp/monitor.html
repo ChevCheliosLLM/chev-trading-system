@@ -1213,6 +1213,17 @@ function updateModal(trade) {
   closeBtn.textContent = 'Close Trade';
 }
 
+// PHASE 9: shared-secret auth, same localStorage key as index.html (both served
+// from the same origin by Dexter locally, so entering it once covers both pages).
+function getDashboardKey() {
+  let k = localStorage.getItem('chevDashboardKey');
+  if (!k) {
+    k = window.prompt('Enter dashboard key:') || '';
+    if (k) localStorage.setItem('chevDashboardKey', k);
+  }
+  return k;
+}
+
 async function forceCloseTrade() {
   if (!modalTrade) return;
   const btn = document.getElementById('mCloseBtn');
@@ -1223,9 +1234,15 @@ async function forceCloseTrade() {
   try {
     const res = await fetch(`${apiBase}/api/close_trade`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Chev-Key': getDashboardKey() },
       body: JSON.stringify({ symbol: modalTrade.symbol }),
     });
+    if (res.status === 401 || res.status === 403) {
+      localStorage.removeItem('chevDashboardKey');
+      btn.textContent = 'Wrong key — click to retry';
+      btn.disabled = false;
+      return;
+    }
     const data = await res.json();
     if (data.ok) {
       btn.textContent = `Closed · ${data.outcome} ${ data.pnl >= 0 ? '+' : ''}${data.pnl.toFixed(2)}`;

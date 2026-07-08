@@ -1,0 +1,546 @@
+================================================================================
+THE CHEV STORY
+How a hitman, a bookworm, a bouncer, a scribe, an honest man, a scout, and a
+tireless night-shift worker all ended up running one trading desk together.
+================================================================================
+
+A note before we start: everything in this story is true to how the system
+actually works. The characters and personalities are made up to make it easier
+to hold in your head — but what each of them DOES, what they check, what they
+argue about, and what actually went wrong a few hours ago tonight, all really
+happened, exactly as described. Nothing here is exaggerated for drama. The real
+story already had enough drama in it.
+
+
+PART ONE — MEET THE CREW
+================================================================================
+
+DEXTER — the one who never sleeps
+
+Dexter is the night-shift worker. He doesn't sleep, doesn't take breaks, and
+doesn't have opinions of his own. His whole job is to watch — dozens of pairs,
+crypto and forex and stocks, on multiple timeframes, all the time, every few
+seconds. He's counting things: has price touched this support level four times
+before? Is there a Fibonacci retracement sitting here? Is the RSI diverging?
+Did a Bollinger Band just burst?
+
+Dexter isn't smart in the way you'd call a person smart. He's thorough. He adds
+up points for every technical thing he notices — a support test is worth this
+many points, a confirmed divergence is worth that many — and when the total
+crosses a line, he stops watching and starts talking. He walks over to Chev's
+desk with a folder full of everything he noticed and says, essentially, "I
+think there's something here — take a look."
+
+Dexter also runs the whole building, in a sense. He's the one who fetches the
+candle data in the first place, wakes the other characters in this story up
+when they're needed, writes down what happened afterward, and keeps the lights
+on 24 hours a day. Everyone else in this story only exists because Dexter
+calls on them.
+
+  DEXTER'S RULEBOOK, IN ACTUAL NUMBERS:
+  - The line he has to cross before he calls Chev over: 10 points for crypto,
+    8 for forex, 8 for stocks — that's the normal bar. During the current
+    training season (EXPLORATION_MODE), it's temporarily lower: 7 for
+    crypto, 6 for forex, 6 for stocks.
+  - How far price is allowed to be from the actual level he's excited about
+    before he stops caring: 0.75% normally, widened to 1.5% during the
+    training season.
+  - Counter-trend setups (betting against the higher-timeframe trend) get
+    taxed hard: the score needed is 1.5× the normal bar — so during the
+    training season that's roughly 10.5 for crypto instead of 7 — plus a
+    confirmed RSI divergence and a clear break-of-structure are both
+    required, no exceptions.
+
+
+CHEV CHELIOS — the one who actually decides
+
+Chev is the only one in the building with a personality, and it's a loud one —
+built, deliberately, on the character from the Crank movies: a hitman who was
+poisoned and told his heart will stop if he ever slows down. In this building
+that backstory isn't just flavor text, it's a working metaphor for how Chev is
+supposed to think: hesitation is dangerous, a weak setup with nothing backing
+it up is dangerous, and he needs "voltage" — real confluence, real structure —
+or the whole thing falls apart.
+
+Dexter hands Chev a folder. Everyone else in this story (you'll meet them in a
+moment) has already added their own notes to that folder before it reaches
+him. Chev's job is to read all of it, decide whether there's a real trade
+here, and if so, say exactly where he'd get in, where he's wrong, and where
+he's taking profit. If there isn't a real trade, he says so, and — this
+matters a lot, you'll see why later — he's supposed to say exactly WHY, citing
+something real from the chart, not a feeling.
+
+Chev only ever gets ONE reply. He can't ask Dexter follow-up questions in the
+middle of a live decision — everything he needs has to already be in the
+folder. He reads it, and he answers: POST or SKIP.
+
+Chev also has a second, much calmer job that has nothing to do with Dexter.
+Kev — the person who built all of this — talks to Chev directly sometimes,
+just to ask what he thinks about a pair. For that conversation, Chev has his
+own personal sketchbook (a separate little toolkit that fetches candles and
+draws charts) that he uses only when Kev is in the room asking questions
+directly. It's a simpler version of what you're about to meet next — good
+enough for a casual conversation, not wired into the live decision-making at
+all.
+
+  CHEV'S RULEBOOK, IN ACTUAL NUMBERS:
+  - His own hard skip conditions, always in force outside a training
+    season: an "auction" older than 85% of its typical lifespan is too
+    ripe to enter fresh; participation below 25 means the market's too
+    dead for any setup to be valid; a direction score fighting his thesis
+    by more than 50 points means the market is telling him he's wrong;
+    a TRANSITIONING market state means no playbook applies at all, full
+    stop. During a training season, these four stop being automatic vetoes
+    on Dexter's escalations specifically and become sizing/conviction
+    inputs instead — Kev's own chat conversations with Chev are never
+    affected either way.
+  - Suggested risk per trade, by letter grade: roughly 0.75% for a B,
+    1.5% for an A, 2.5% for an A+ — always graded against the FULL normal
+    bar, never the lowered training-season one, which is the actual seatbelt
+    of the whole training season: a lowered entry bar never means bigger
+    size, only smaller.
+  - Leverage ceilings: up to 10× for crypto scalps/day trades (5× for
+    swings), up to 5× for forex/stock scalps/day trades (2× for swings).
+  - As of tonight: once a real Opportunity idea exists at all, he sizes
+    continuously off its 0-100 Conviction number rather than a letter
+    grade — roughly, 70+ supports full size, 40-70 means take it smaller,
+    and below 40 still means take it at minimum size, never an automatic
+    walk-away just because conviction is merely moderate rather than high.
+
+
+ELLIOT — the quiet one who only looks at shape
+
+Elliot doesn't care about news, doesn't care about indicators like RSI, and
+barely even looks at the same things Dexter looks at. Elliot has one obsession:
+the actual SHAPE the price is drawing. Give him a stretch of candles and he'll
+tell you, purely from geometry, what's going on — and he does it in a strict,
+almost ritualistic order, always the same six steps:
+
+  1. SWING — first, find every meaningful peak and valley in the price.
+  2. LEG — then connect those peaks and valleys into "legs," and grade each
+     leg: was that an aggressive, decisive move, or a tired, corrective one?
+  3. STATE — step back and ask: overall, right now, who's actually in
+     control here? He puts a number on it — participation (is anyone
+     showing up to trade this at all) and direction (which way is the crowd
+     leaning) — because a chart with no one trading it is not a chart worth
+     acting on, no matter how pretty it looks.
+  4. GEOMETRY — draw a line along the recent highs, another along the recent
+     lows, and ask: are they squeezing together (a triangle), running
+     parallel (a channel), or spreading apart? This is where Elliot spends
+     most of his time — literally fitting straight lines through the recent
+     swing points and measuring how well they actually fit.
+  5. AUCTION — figure out the "trading range" everyone's currently arguing
+     over — where's the most-traded price, where's the top and bottom of
+     the accepted zone, and how OLD is this range (a very old, "overripe"
+     range is dangerous — it's about to break one way or the other).
+  6. HYPOTHESIS — only now, with all five of the above in hand, does Elliot
+     allow himself a guess: "this looks like a bull flag," or "this looks
+     like an ascending triangle." He's required to name what's FOR that
+     idea and what's AGAINST it, in the same breath — he's not allowed to
+     just tell you the good news.
+
+At the very end, Elliot hands off to one more step — the OPPORTUNITY — which
+takes his single best-guess pattern and turns it into one concrete, actionable
+idea: here's where you'd get in, here's where you'd be proven wrong, here's
+the target, and here's a plain 0-to-100 conviction number for how much he
+actually believes it.
+
+Here's the important thing to understand about Elliot, because it's the whole
+first half of tonight's story: Elliot's conviction number and Dexter's point
+total are computed completely independently of each other, by two different
+sets of eyes looking at two different things. They usually agree. Sometimes
+they don't. And for a while tonight, nobody had noticed that they'd stopped
+listening to each other at all.
+
+  ELLIOT'S RULEBOOK, IN ACTUAL NUMBERS:
+  - Old letter grades (now cosmetic only, no longer a gate): A+ needed 70%+
+    confidence AND a 2.0:1 structural reward-to-risk; A needed 55%+ and
+    1.5:1; B needed 40%+ and 1.0:1; anything less was a C.
+  - His confidence used to be "whichever of four measurements is worst, full
+    stop" — now: if any single measurement falls below a rock-bottom 15%
+    (a genuine red flag, like a dead market), that alone still disqualifies
+    it. Otherwise, the four measurements are blended — the pattern actually
+    matching its own definition counts for 40% of the final number, and the
+    other three (how clean the lines are, how clear the market's mood is,
+    how well-formed the trading range is) share the remaining 60% evenly.
+  - Wick/fakeout forgiveness: any swing point within 0.3× the asset's own
+    average daily wiggle (ATR) of his fitted line now counts as a perfect
+    touch, not a broken pattern — capped so that forgiveness can never
+    swallow more than 30% of however much room is actually left in a
+    narrowing shape, which protects a triangle from getting an unearned
+    pass right near its tip.
+
+
+GEORGE — the bouncer with a calculator
+
+If Chev says "yes, take it," the trade doesn't happen automatically. It goes
+through George first. George doesn't care about chart patterns, doesn't care
+about the story, doesn't care if Chev is excited about it. George cares about
+one thing: money, and whether this specific trade, with these specific
+numbers, is actually a sound bet.
+
+George runs down a checklist, in order, and any one failure stops the trade
+cold:
+
+  - Is the stop-loss on the correct side of the entry at all? (You'd be
+    surprised how often this needs checking.)
+  - Is the stop far enough away, given how much this asset actually moves
+    day to day, that ordinary noise won't take you out by accident?
+  - Are the trading costs — fees, slippage — going to eat an unreasonable
+    chunk of the risk, on a stop this tight?
+  - Given the ACTUAL history of how well this kind of setup performs, is the
+    potential reward big enough to be worth it? (This is the "Net R:R"
+    check, and it's the star of tonight's story — more in Part Three.)
+  - Is the position size sane for the account? Would leverage push this
+    trade dangerously close to a liquidation?
+  - How much is ALREADY at risk across every other open trade — is this new
+    one about to push the whole portfolio too hot?
+  - Are there already too many trades open in the same direction on
+    correlated assets (several coins that all move together, say)?
+  - Is there already the maximum number of this TYPE of trade (day trades,
+    swings) open at once?
+  - Is the price data even fresh, or has it gone stale?
+
+Only if every single one of these passes does George actually let the trade
+through — and even then, he's the one who does the final math on position
+size, adjusting Chev's numbers if leverage needs capping.
+
+George has one important character trait worth knowing: he treats a trade's
+weakest reason as the whole verdict. If a setup has five great things going
+for it and one mediocre one, George grades the WHOLE trade by the mediocre
+one. It's meant to protect against being fooled by a pile of decent-but-not-
+great evidence — but as you'll see, that same instinct is exactly what got
+George into trouble tonight.
+
+  GEORGE'S RULEBOOK, IN ACTUAL NUMBERS:
+  - Stop-distance floor (as a multiple of the asset's own ATR): normally
+    1.0× for a scalp, 1.2× for a day trade, 1.5× for a swing. During the
+    training season, those relax to 0.6× / 0.7× / 1.0×.
+  - Cost ceiling (how much of your risk trading costs are allowed to eat):
+    normally 20% / 25% / 30% for scalp / day / swing. Training season:
+    35% / 40% / 45%.
+  - The flat reward-to-risk floor, before any history is factored in:
+    normally 2.0:1 / 1.8:1 / 2.5:1. Training season: 1.3:1 / 1.2:1 / 1.6:1.
+    There's also a hard absolute minimum that never lets go even when the
+    smart version below is being generous: 1.1:1 / 1.1:1 / 1.3:1 normally,
+    0.8:1 / 0.8:1 / 1.0:1 during the training season.
+  - The SMART version of that reward-to-risk check — the one this whole
+    story is really about — only kicks in once a tag has at least 10 closed
+    trades on record. Below that, it just uses the flat floor above. Once
+    it does kick in: take the worst-performing tag on the trade, take its
+    win rate, work out the breakeven ratio that win rate implies, and then
+    add a 15% safety cushion on top of that breakeven number. That's the
+    bar the trade has to clear.
+  - AS OF TONIGHT: that win-rate number itself no longer means "every trade
+    this tag has ever been part of, forever." It now means "this tag's most
+    recent 35 trades, whenever they happened" — so a good tag that trades
+    rarely is never punished just for being infrequent, and old results
+    eventually age out on their own as new ones come in. On top of that, a
+    thin sample gets gently pulled toward the overall average — with a
+    strength equivalent to 10 imaginary "average" trades mixed in — so a
+    tag's very first handful of results can't swing its grade to an extreme
+    all by themselves the way they used to.
+  - Portfolio heat cap (total risk allowed across every open trade at once):
+    8% normally, 25% during the training season.
+  - Correlation cap (same-direction trades on assets that move together):
+    2 normally, 3 during the training season.
+  - Concurrency cap (how many day trades / swings can be open at the same
+    time): 1 day / 2 swing normally, 2 day / 3 swing during the training
+    season.
+
+
+THE EXAMINER — the one who never forgets, and never lets go
+
+Here's a character most people don't even know is in the building, because he
+never talks to Chev directly. The Examiner watches every single setup Dexter
+ever raises — not just the ones Chev takes, ALL of them, including every
+single skip — and quietly keeps a shadow file on each one.
+
+For every setup, the Examiner asks a simple question and waits for the answer,
+however long it takes: if someone HAD taken this trade, right now, at this
+price, would it have hit the target first, hit the stop first, or just run out
+the clock without doing either? This is called "triple-barrier" tracking —
+three doors, and the Examiner waits to see which one price walks through.
+
+Once enough of these shadow records resolve, the Examiner can answer a much
+bigger question: out of every trade that's ever been tagged "near a support
+level," how many actually would have won? Out of every trade tagged "at a
+golden pocket Fibonacci level," how many actually won? This becomes the tag-
+by-tag win-rate record that both Kev's own dashboard AND George both lean on.
+
+The Examiner's whole value is that he remembers EVERYTHING, forever, and never
+edits the past. Which sounds like a virtue right up until it becomes a
+problem — and it did, tonight. More in Part Three.
+
+  THE EXAMINER'S RULEBOOK, IN ACTUAL NUMBERS:
+  - A setup only counts as "touched" once price comes within 0.1% of the
+    entry, or a quarter of an ATR, whichever is bigger.
+  - How long he'll wait before calling it a timeout instead of a win or
+    loss: 2 hours for a scalp, 6 hours for a day trade, 48 hours for a
+    swing — the same clock Chev's own trade-type expiries run on.
+  - He won't report a tag's win rate as trustworthy until it has at least
+    30 "effective" resolved samples, and won't suggest adjusting anything's
+    importance based on a tag until it has at least 50.
+
+
+MARC — the honest one
+
+Marc's entire job is refusing to let anyone lie to themselves about outcomes,
+including by accident. When a trade closes, it would be easy to just assume
+the exit price was clean — but Marc insists on checking against the ACTUAL
+candle-by-candle price action to see exactly when and where the stop or
+target was really touched, not just approximately. He adds in REAL trading
+costs on top, so nobody's quietly celebrating a win that would have actually
+been a loss after fees and slippage.
+
+Marc also holds the one emergency brake in the whole building: if the account
+loses more than three times its normal risk unit in a single day, Marc calls
+a halt — no new trades for the rest of the day, full stop, no exceptions,
+no arguing. Bad days happen; the point is making sure a bad day never turns
+into a catastrophic one.
+
+  MARC'S RULEBOOK, IN ACTUAL NUMBERS:
+  - The emergency brake trips at -3.0R in a single day, exactly.
+  - He checks real exit prices on 1-minute candles for crypto, 15-minute
+    candles for forex and stocks — fine enough to catch the truth without
+    drowning in noise.
+
+
+THE SCOUT — the crypto specialist
+
+The Scout only cares about one corner of the market: crypto derivatives.
+Specifically, he watches funding rates (are traders paying a premium to stay
+long or short right now — a sign of a crowded, possibly overextended trade)
+and open interest (is money actually flowing into new positions, or is this
+move happening on stale bets). He hands his notes to Dexter just like
+everyone else, tagged so they land in the right bucket.
+
+  THE SCOUT'S RULEBOOK, IN ACTUAL NUMBERS:
+  - Funding rate worth mentioning: 0.05% per 8 hours. Funding rate worth
+    calling "extreme," crowded-trade territory: 0.10%.
+  - Open interest move worth caring about: a 2% swing over 6 hours,
+    alongside at least a 1% price move in the same window.
+
+
+JANE — the other trader in the building
+
+Jane isn't part of Dexter's automated scanning at all — she's a second,
+completely independent trader who brings her OWN trade ideas to the desk,
+simpler ones, without the full confluence analysis. Chev's job with Jane is
+different: he's not originating the idea, he's grading someone else's. Every
+so often — every 20 or so trades between the two of them — Chev sits down and
+reviews both his own track record and Jane's side by side, looking for
+patterns in what's actually working, and updates his own notes accordingly.
+
+
+THE CONTROL ROOM — where Kev actually watches all of this
+
+Everything above happens mostly out of sight. The Control Room is the website
+Kev actually looks at, and it has a few distinct areas:
+
+  - THE WATCHLIST, where every pair being tracked lives, with a little star
+    you can tap on any of them.
+  - THE RADAR, a lookout tower that only shows the pairs you've starred. From
+    here you can also directly ask Chev, on demand, "if you HAD to take this
+    right now, where would you enter?" — even for a setup he'd otherwise
+    skip live. That answer is clearly marked as off-the-record: it never
+    gets written to the real trade log, it's purely for Kev's own curiosity.
+  - THE STRATEGY DASHBOARD, the review room — a live feed of every decision
+    Chev and the gates have made recently, a leaderboard of which tags
+    actually win, and the full raw log if you want to dig in yourself.
+  - CHEV'S CORNER, where any live idea Chev is actually excited about sits
+    waiting for Kev to look at, with the reasoning attached.
+
+
+PART TWO — HOW ONE TRADE ACTUALLY HAPPENS, START TO FINISH
+================================================================================
+
+Let's walk one realistic setup through the whole building, the way it would
+actually happen.
+
+It's 2 in the morning. Dexter is watching ETHUSDT on the 1-hour chart, same as
+always, and he notices price sitting right at a support level that's held
+three times before, right at a Fibonacci retracement zone, with the RSI
+quietly diverging. He adds up his points. It crosses his threshold. Folder
+time.
+
+Before he even calls Chev, Dexter has already asked Elliot to take a look at
+the same chart completely independently. Elliot goes through his six steps —
+swing, leg, state, geometry, auction, hypothesis — and comes back with: "I
+see a bull channel forming, confidence is decent, here's where I'd put the
+entry zone, here's the invalidation, here's a conviction score out of 100."
+The Scout chimes in too, if it's a crypto pair, with a note about funding
+rates.
+
+Dexter bundles all of this — his own point total, Elliot's structural read,
+the Scout's derivatives note, the account's current open positions, and
+Kev's own trading notes for this asset class — into one message, and hands
+it to Chev.
+
+Chev reads all of it. He's not allowed to just glance at Dexter's score and
+nod — he has to independently reason through it: what's the higher-timeframe
+trend doing, does the RSI actually confirm, where's the real structural stop,
+is the reward actually worth the risk. If he likes it, he writes: POST, here's
+my entry, here's my stop, here's my target, here's why, tagging every
+confluence he actually used. If he doesn't like it, he writes SKIP — and (as
+of tonight, more on this later) he has to say exactly which real, checkable
+thing was missing, not just a vague feeling.
+
+Say Chev likes it and posts. The idea doesn't go live yet — it goes straight
+to George. George runs his whole checklist: stop on the right side, wide
+enough for this asset's normal noise, costs not eating the reward, the reward
+actually big enough given this tag's real track record, position size sane,
+portfolio not overheating, no correlation pile-up, no concurrency problem.
+Only if ALL of that clears does George finalize the position size and the
+trade actually goes live.
+
+Whether Chev posted or skipped, the Examiner has already quietly opened a
+shadow file on this exact setup, and will keep watching price until it either
+hits target, hits stop, or the clock runs out — regardless of what Chev
+decided. That shadow record is what eventually updates the tag win-rate
+numbers everyone else relies on later.
+
+If the trade does go live and eventually closes, Marc checks the real candle
+data to confirm exactly how and when it closed, applies real costs, and logs
+the honest result. If it's been a rough day and the account's down three
+units of risk, Marc's circuit breaker kicks in and nothing new gets opened
+until tomorrow, no matter how good the next setup looks.
+
+That's the whole loop. It happens dozens of times a day, mostly resulting in
+a SKIP, because most setups genuinely aren't good enough — that part is
+completely normal and by design.
+
+
+PART THREE — THE NIGHT NOBODY TRADED
+================================================================================
+
+This part is the most recent chapter, and it's worth telling properly, because
+it's the clearest possible demonstration of how all these characters actually
+interact — including how they can quietly work against each other without
+anyone noticing for a while.
+
+It started with a simple, uncomfortable observation from Kev: Chev hadn't
+posted a single trade in over 53 hours. Not "here's one weak trade," not
+"here's one small win" — nothing. Zero.
+
+The first instinct was to suspect George — maybe the bouncer was being
+overzealous, rejecting things Chev actually wanted to take. So the decision
+log was pulled apart and counted. The result was almost the opposite of the
+suspicion: over 92% of the "no trade" outcomes were Chev's OWN skip decisions,
+not George rejecting something Chev had approved. Whatever the problem was, it
+was upstream of George. Chev himself kept saying no.
+
+And when his actual reasons were read closely, a pattern jumped out
+immediately: phrases like "confluence quality below threshold despite strong
+indicators." Technically true-sounding. Actually meaningless — it doesn't
+point at anything specific on the chart at all.
+
+Digging further explained WHY Chev kept talking like that. A while back, Kev
+had deliberately started a temporary, lower-bar "training season" — lowering
+Dexter's own point threshold on purpose, specifically so more setups would
+reach Chev and start generating fresh data. Dexter's bar really had come down.
+But it turned out Elliot's conviction grading — his A+/A/B/C letter system —
+had never been told about the training season at all. Nobody had wired the
+two together. So more setups were reaching Chev past Dexter's now-lower bar,
+but Elliot was still grading every single one of them by his old, unchanged,
+much stricter yardstick — and Chev's own instructions told him to treat a
+mediocre grade from Elliot as a reason to demand extra proof, or just walk
+away. Two bouncers at two different doors, and only one of them had been told
+the rules had changed.
+
+On top of that, Elliot's grading itself turned out to be needlessly harsh in
+its own right: his geometry check punished every ordinary wick and false
+breakout as if it were proof the whole pattern was broken, with zero
+tolerance for normal market noise. And his conviction math was built so that
+one weak ingredient — even a single slightly-noisy measurement — could drag
+an otherwise excellent read all the way down, no matter how strong everything
+else looked.
+
+So that got fixed, three ways at once: Elliot learned to forgive an ordinary
+amount of wick noise instead of treating it as a broken chart. His scoring
+softened from "one bad ingredient ruins everything" to "one truly
+catastrophic ingredient still disqualifies you, but otherwise your average
+matters." And most importantly, his letter grade stopped being a gate at all
+— it became a cosmetic label, while a plain, continuous conviction number
+became what actually drives how much size a trade gets. Nobody's allowed to
+just say "well it's only a B, skip it" anymore.
+
+That felt like real progress — and it was — but there was still a nagging
+follow-up question: was Chev's reasoning actually improving, or just
+sounding a little different? And that's when a second, embarrassing gap
+turned up: for every SKIP, the ONE-SENTENCE quick reason was being kept, but
+the fuller explanation Chev was writing right alongside it — the part that
+actually said something specific — was being thrown away before it ever
+reached the log. Nobody downstream ever saw it. It was like asking someone to
+explain themselves, having them give a genuinely detailed answer, and then
+only writing down the first three words.
+
+That got fixed too: the fuller reasoning now gets kept, for both takes and
+skips, and there's a simple, honest built-in check — does this explanation
+actually contain a real number or price level at all, or is it still just a
+feeling with no evidence attached. Vague answers now get flagged automatically
+instead of hiding in plain sight.
+
+And it was THAT fix — being able to finally read Chev's full, real reasoning
+side by side across a whole night — that surfaced the actual, final answer.
+Reading closely, a huge number of the skips all pointed at the exact same
+place: a required reward-to-risk ratio that was absurdly high, sometimes
+close to four times the risk, for perfectly ordinary day trades.
+
+That number was coming from George — specifically, from the part of his
+checklist that adjusts how much reward you need based on how well this KIND
+of setup has actually performed historically, according to the Examiner's
+records. And when those records were pulled directly, the problem was
+obvious: the most commonly used tags — the ones behind a huge share of every
+setup Chev ever looks at — had a genuinely poor track record on paper. Not a
+poor track record NOW. A poor track record from BEFORE any of tonight's other
+fixes even existed, sitting frozen in the Examiner's memory, exactly the way
+he'd recorded it and never once revisited.
+
+Which meant George was quietly judging every brand-new trade against a
+version of the operation that didn't really exist anymore — and the only way
+those old numbers could ever improve was by new trades actually closing and
+giving the Examiner fresh evidence. But the old numbers themselves were
+exactly what was stopping new trades from happening at all. A locked door
+that could only be opened from the other side.
+
+The fix for George had to solve two separate problems, not one, because they
+only look alike: first, he needed to stop treating ancient evidence as
+current — so now he only weighs each tag's most RECENT results, a rolling
+count rather than the entire lifetime record, so a tag that's rarely used but
+genuinely good is never punished just for being infrequent. Second, even a
+FRESH small sample shouldn't be trusted as if it were rock-solid proof — so
+a thin sample now gets pulled gently toward the overall average until it has
+enough evidence of its own to stand on, instead of being taken completely at
+face value the moment it clears a minimum count.
+
+Both changes were checked directly against George's own real self-test
+checklist, and then against Kev's real historical numbers — the required
+reward-to-risk did come down for the worst-affected tags, honestly and
+measurably, though not by some dramatic amount overnight, because you can
+only get so much out of reshaping old evidence — real improvement now needs
+actual new trades to start closing under everything that's already been
+fixed, so the Examiner finally has something current to remember.
+
+
+WHERE THINGS STAND NOW
+================================================================================
+
+Four real problems, found one at a time, each one only visible once the
+previous one had been dealt with:
+
+  1. Dexter's own bar had already been lowered on purpose — a deliberate
+     choice, working as intended.
+  2. Elliot's separate grading had never been told about that choice, and was
+     needlessly harsh on top of it — fixed.
+  3. Chev's own detailed reasoning was being thrown away before anyone could
+     actually read it — fixed.
+  4. George was judging tonight's trades using yesterday's report card — the
+     real headline discovery, and the fix that's most likely to actually
+     matter.
+
+Nobody in this story turned out to be broken on purpose, or lazy, or
+careless. Every single piece was doing exactly what it was built to do. The
+problem was never any one character — it was that a few of them had quietly
+stopped listening to each other, and it took a careful, patient walk through
+the whole building, one room at a time, to notice.
