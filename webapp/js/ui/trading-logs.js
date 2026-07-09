@@ -2,9 +2,7 @@
    Live/closed trade feed, trade overlay, gold-glow active state, DNA panels.
    (extracted verbatim from index.html; do not reformat indentation)
    ============================================================ */
-  /* ============================================================
-     TRADING LOGS
-     ============================================================ */
+console.log('[TRADING-LOGS] script loaded');
   const tradingLogsEl  = document.getElementById('tradingLogs');
   const closedTradesEl = document.getElementById('closedTrades');
   let lastTradeStatuses = {};
@@ -61,6 +59,7 @@
   }
 
   function renderTradingLogs(data) {
+    console.log('[RENDER] renderTradingLogs start', (data.trades || data.active || []).length, 'open');
     const active = (data.trades || data.active || []).filter(t => t.status === 'OPEN');
     const closedList = (data.closed || []).slice().reverse().slice(0, 5);
     let html = '';
@@ -69,6 +68,7 @@
     } else {
       active.forEach(t => {
         const sym = t.symbol || t.pair || '';
+        console.log('[RENDER] active trade', sym, 'status=', t.status, 'entry=', t.entry);
         const justClosed = lastTradeStatuses[t.row] && lastTradeStatuses[t.row] !== t.status;
         const confData = encodeURIComponent(JSON.stringify(t.confluence_prices || {}));
         const assetType = sym.endsWith('USDT') ? 'crypto' : (sym.includes('/') ? 'forex' : 'stock');
@@ -113,6 +113,7 @@
       });
     }
     tradingLogsEl.innerHTML = html;
+    console.log('[RENDER] innerHTML set, attaching handlers to', tradingLogsEl.children.length, 'children');
 
     // Update summary bar
     const netPnl = active.reduce((s, t) => s + (t.live_pnl || 0), 0);
@@ -193,7 +194,9 @@
     }
 
     function _attachLogRowHandlers(container) {
-      container.querySelectorAll('.logRow[data-pair]').forEach(row => {
+      const rows = container.querySelectorAll('.logRow[data-pair]');
+      console.log('[HANDLERS] found', rows.length, 'logRow[data-pair] in container');
+      rows.forEach(row => {
         row.addEventListener('click', async () => {
           try {
             const pair = row.dataset.pair;
@@ -247,6 +250,7 @@
       });
     }
     _attachLogRowHandlers(tradingLogsEl);
+    console.log('[RENDER] handlers attached to tradingLogs');
     if (closedTradesEl) {
       _attachLogRowHandlers(closedTradesEl);
       _attachDNAHandlers(closedTradesEl);
