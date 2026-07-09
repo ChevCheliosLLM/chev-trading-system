@@ -2,6 +2,7 @@
    Live/closed trade feed, trade overlay, gold-glow active state, DNA panels.
    (extracted verbatim from index.html; do not reformat indentation)
    ============================================================ */
+  console.log('[INIT] trading-logs.js loaded, tradingLogsEl=', !!document.getElementById('tradingLogs'));
   const tradingLogsEl  = document.getElementById('tradingLogs');
   const closedTradesEl = document.getElementById('closedTrades');
   let lastTradeStatuses = {};
@@ -110,8 +111,8 @@
       });
     }
     tradingLogsEl.innerHTML = html;
-
-    // Update summary bar
+    _attachLogRowHandlers(tradingLogsEl);
+    console.log('[INIT] handlers attached to tradingLogs, rows=', tradingLogsEl.querySelectorAll('.logRow[data-pair]').length);
     const netPnl = active.reduce((s, t) => s + (t.live_pnl || 0), 0);
     const balance = data.balance;
     const balEl   = document.getElementById('tsbBalance');
@@ -170,6 +171,8 @@
         });
       }
       closedTradesEl.innerHTML = closedHtml;
+      _attachLogRowHandlers(closedTradesEl);
+      _attachDNAHandlers(closedTradesEl);
     }
 
     // Performance stats
@@ -192,6 +195,7 @@
     function _attachLogRowHandlers(container) {
       container.querySelectorAll('.logRow[data-pair]').forEach(row => {
         row.addEventListener('click', async () => {
+          console.log('[ROW-CLICK] handler fired for', row.dataset.pair);
           const pair = row.dataset.pair;
           const type = row.dataset.type;
           const rowId = row.dataset.row;
