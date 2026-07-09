@@ -387,7 +387,7 @@
           const sy = priceToY(sl);
           if (sy != null) {
             dctx.save();
-            dctx.fillStyle = sipOn ? 'rgba(8,153,129,0.05)' : 'rgba(242,54,69,0.04)';
+            dctx.fillStyle = sipOn ? 'rgba(236,72,153,0.12)' : 'rgba(242,54,69,0.04)';
             dctx.fillRect(0, Math.min(ey,sy), cw, Math.abs(sy-ey));
             dctx.restore();
           }
