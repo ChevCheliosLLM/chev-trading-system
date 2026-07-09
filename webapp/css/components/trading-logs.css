@@ -102,6 +102,26 @@ img.emoji { height: 1em; width: 1em; vertical-align: -0.15em; margin: 0 0.05em; 
   border-left: 2px solid var(--gold);
 }
 
+.jump-to-chart-btn {
+  background: rgba(41,98,255,0.12);
+  border: 1px solid rgba(41,98,255,0.35);
+  color: #6e9eff;
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 9px;
+  font-family: 'Share Tech Mono', monospace;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.12s;
+}
+.jump-to-chart-btn:hover {
+  background: rgba(41,98,255,0.25);
+  border-color: rgba(41,98,255,0.6);
+  color: #9dbfff;
+}
+
 /* ===== Price flash animations (TradingView-style) ===== */
 @keyframes flashUp   { 0%,30% { color: #089981; background: rgba(8,153,129,0.08); } 100% { color: inherit; background: transparent; } }
 .emptyNote.chev { color: #5d6068; border-left: 2px solid #1e222d; margin: 8px 10px; padding: 8px 10px; }

@@ -2,7 +2,6 @@
    Live/closed trade feed, trade overlay, gold-glow active state, DNA panels.
    (extracted verbatim from index.html; do not reformat indentation)
    ============================================================ */
-console.log('[TRADING-LOGS] script loaded');
   const tradingLogsEl  = document.getElementById('tradingLogs');
   const closedTradesEl = document.getElementById('closedTrades');
   let lastTradeStatuses = {};
@@ -59,7 +58,6 @@ console.log('[TRADING-LOGS] script loaded');
   }
 
   function renderTradingLogs(data) {
-    console.log('[RENDER] renderTradingLogs start', (data.trades || data.active || []).length, 'open');
     const active = (data.trades || data.active || []).filter(t => t.status === 'OPEN');
     const closedList = (data.closed || []).slice().reverse().slice(0, 5);
     let html = '';
@@ -68,7 +66,6 @@ console.log('[TRADING-LOGS] script loaded');
     } else {
       active.forEach(t => {
         const sym = t.symbol || t.pair || '';
-        console.log('[RENDER] active trade', sym, 'status=', t.status, 'entry=', t.entry);
         const justClosed = lastTradeStatuses[t.row] && lastTradeStatuses[t.row] !== t.status;
         const confData = encodeURIComponent(JSON.stringify(t.confluence_prices || {}));
         const assetType = sym.endsWith('USDT') ? 'crypto' : (sym.includes('/') ? 'forex' : 'stock');
@@ -108,12 +105,12 @@ console.log('[TRADING-LOGS] script loaded');
             ${sipBadge}
             ${rrHtml}
             <span class="logPnl ${pnlClass(t.live_pnl)}">${moodEmoji(t.live_pnl ?? 0, t.is_sip)} ${fmtPnl(t.live_pnl)}</span>
+            <button class="jump-to-chart-btn" data-symbol="${sym}" data-tf="1h" data-type="${assetType}" data-entry="${t.entry||''}" data-sl="${t.sl||''}" data-tp="${t.tp||''}" data-direction="${t.direction||''}" data-ts="${t.open_ts||''}" data-tags="${t.tags||''}" data-status="${t.status||''}">Chart</button>
           </div>`;
         lastTradeStatuses[t.row] = t.status;
       });
     }
     tradingLogsEl.innerHTML = html;
-    console.log('[RENDER] innerHTML set, attaching handlers to', tradingLogsEl.children.length, 'children');
 
     // Update summary bar
     const netPnl = active.reduce((s, t) => s + (t.live_pnl || 0), 0);
@@ -194,67 +191,84 @@ console.log('[TRADING-LOGS] script loaded');
     }
 
     function _attachLogRowHandlers(container) {
-      const rows = container.querySelectorAll('.logRow[data-pair]');
-      console.log('[HANDLERS] found', rows.length, 'logRow[data-pair] in container');
-      rows.forEach(row => {
+      container.querySelectorAll('.logRow[data-pair]').forEach(row => {
         row.addEventListener('click', async () => {
-          try {
-            const pair = row.dataset.pair;
-            const type = row.dataset.type;
-            const rowId = row.dataset.row;
-            const conf = JSON.parse(decodeURIComponent(row.dataset.conf || '{}'));
-            const rowKey = pair + '|' + (row.dataset.ts || '');
-            console.log('[LOGROW] click', pair, 'key=', rowKey, 'activeKey=', _activeTradeKey);
-            // Toggle OFF — clicking the already-active trade clears its lines and returns to normal.
-            if (_activeTradeKey === rowKey) {
-              console.log('[LOGROW] toggle off');
-              clearChevTools();
-              redrawAll();
-              return;
-            }
-            document.querySelectorAll('.logRow').forEach(r => { r.style.borderLeft = ''; r.classList.remove('activeTrade'); });
-            const tradeSnap = {
-              entry:     parseFloat(row.dataset.entry) || null,
-              sl:        parseFloat(row.dataset.sl)    || null,
-              tp:        parseFloat(row.dataset.tp)    || null,
-              direction: row.dataset.direction,
-              open_ts:   row.dataset.ts,
-              tags:      row.dataset.tags,
-              status:    row.dataset.status || 'OPEN',
-              symbol:    pair,
-            };
-            currentSymbol = pair; currentType = type;
-            console.log('[LOGROW] switching to', currentSymbol, currentType, 'tf=', currentTf);
-            drawings = loadDrawings(currentSymbol); rsiDrawings = loadRsiDrawings(currentSymbol); updateObjTree();
-            _syncDrawings(currentSymbol); _subscribeDrawings(currentSymbol);
-            watchlistInner.querySelectorAll('.watchRow').forEach(r => r.classList.remove('active'));
+          const pair = row.dataset.pair;
+          const type = row.dataset.type;
+          const rowId = row.dataset.row;
+          const conf = JSON.parse(decodeURIComponent(row.dataset.conf || '{}'));
+          const rowKey = pair + '|' + (row.dataset.ts || '');
+          // Toggle OFF — clicking the already-active trade clears its lines and returns to normal.
+          if (_activeTradeKey === rowKey) {
             clearChevTools();
-            activeLogTrade = rowId;
-            _activeTradeKey = rowKey;
-            row.classList.add('activeTrade');
-            if (conf && (conf.RSI_DIV_T1 || conf.RSI_DIV_T2) && currentTf !== '4h') {
-              currentTf = '4h';
-              document.querySelectorAll('[data-tf]').forEach(b => b.classList.toggle('active', b.dataset.tf === '4h'));
-            }
-            console.log('[LOGROW] about to loadChart', currentSymbol, currentTf, currentType);
-            await loadChart(currentSymbol, currentTf, currentType);
-            console.log('[LOGROW] loadChart done, candles=', currentCandles.length);
-            startPolling();
-            activateTradeOverlay(tradeSnap, conf);
-            _scrollToEntry();
-            console.log('[LOGROW] overlay done');
-          } catch (err) {
-            console.error('[LOGROW] click error', err);
+            redrawAll();
+            return;
           }
+          document.querySelectorAll('.logRow').forEach(r => { r.style.borderLeft = ''; r.classList.remove('activeTrade'); });
+          const tradeSnap = {
+            entry:     parseFloat(row.dataset.entry) || null,
+            sl:        parseFloat(row.dataset.sl)    || null,
+            tp:        parseFloat(row.dataset.tp)    || null,
+            direction: row.dataset.direction,
+            open_ts:   row.dataset.ts,
+            tags:      row.dataset.tags,
+            status:    row.dataset.status || 'OPEN',
+            symbol:    pair,
+          };
+          currentSymbol = pair; currentType = type;
+          drawings = loadDrawings(currentSymbol); rsiDrawings = loadRsiDrawings(currentSymbol); updateObjTree();
+          _syncDrawings(currentSymbol); _subscribeDrawings(currentSymbol);
+          watchlistInner.querySelectorAll('.watchRow').forEach(r => r.classList.remove('active'));
+          clearChevTools();
+          activeLogTrade = rowId;
+          _activeTradeKey = rowKey;
+          row.classList.add('activeTrade');
+          if (conf && (conf.RSI_DIV_T1 || conf.RSI_DIV_T2) && currentTf !== '4h') {
+            currentTf = '4h';
+            document.querySelectorAll('[data-tf]').forEach(b => b.classList.toggle('active', b.dataset.tf === '4h'));
+          }
+          await loadChart(currentSymbol, currentTf, currentType);
+          startPolling();
+          activateTradeOverlay(tradeSnap, conf);
+          _scrollToEntry();
         });
       });
     }
     _attachLogRowHandlers(tradingLogsEl);
-    console.log('[RENDER] handlers attached to tradingLogs');
     if (closedTradesEl) {
       _attachLogRowHandlers(closedTradesEl);
       _attachDNAHandlers(closedTradesEl);
     }
+
+    tradingLogsEl.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.jump-to-chart-btn');
+      if (!btn) return;
+      e.stopPropagation();
+      const symbol = btn.dataset.symbol;
+      const tf = btn.dataset.tf || '1h';
+      const type = btn.dataset.type || (symbol.endsWith('USDT') ? 'crypto' : (symbol.includes('/') ? 'forex' : 'stock'));
+      const row = btn.closest('.logRow');
+      const conf = row ? JSON.parse(decodeURIComponent(row.dataset.conf || '{}')) : {};
+      const tradeSnap = {
+        entry:     parseFloat(btn.dataset.entry) || null,
+        sl:        parseFloat(btn.dataset.sl)    || null,
+        tp:        parseFloat(btn.dataset.tp)    || null,
+        direction: btn.dataset.direction,
+        open_ts:   btn.dataset.ts,
+        tags:      btn.dataset.tags,
+        status:    btn.dataset.status || 'OPEN',
+        symbol:    symbol,
+      };
+      currentSymbol = symbol; currentType = type;
+      drawings = loadDrawings(currentSymbol); rsiDrawings = loadRsiDrawings(currentSymbol); updateObjTree();
+      _syncDrawings(currentSymbol); _subscribeDrawings(currentSymbol);
+      watchlistInner.querySelectorAll('.watchRow').forEach(r => r.classList.remove('active'));
+      clearChevTools();
+      await loadChart(currentSymbol, tf, currentType);
+      startPolling();
+      activateTradeOverlay(tradeSnap, conf);
+      _scrollToEntry();
+    });
     // Re-apply the gold glow to the active trade row after the list is rebuilt (polling re-renders it).
     if (_activeTradeKey) {
       document.querySelectorAll('.logRow[data-pair]').forEach(r => {
