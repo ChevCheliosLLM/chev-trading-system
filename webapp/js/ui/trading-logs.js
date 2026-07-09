@@ -195,45 +195,54 @@
     function _attachLogRowHandlers(container) {
       container.querySelectorAll('.logRow[data-pair]').forEach(row => {
         row.addEventListener('click', async () => {
-          const pair = row.dataset.pair;
-          const type = row.dataset.type;
-          const rowId = row.dataset.row;
-          const conf = JSON.parse(decodeURIComponent(row.dataset.conf || '{}'));
-          const rowKey = pair + '|' + (row.dataset.ts || '');
-          // Toggle OFF — clicking the already-active trade clears its lines and returns to normal.
-          if (_activeTradeKey === rowKey) {
+          try {
+            const pair = row.dataset.pair;
+            const type = row.dataset.type;
+            const rowId = row.dataset.row;
+            const conf = JSON.parse(decodeURIComponent(row.dataset.conf || '{}'));
+            const rowKey = pair + '|' + (row.dataset.ts || '');
+            console.log('[LOGROW] click', pair, 'key=', rowKey, 'activeKey=', _activeTradeKey);
+            // Toggle OFF — clicking the already-active trade clears its lines and returns to normal.
+            if (_activeTradeKey === rowKey) {
+              console.log('[LOGROW] toggle off');
+              clearChevTools();
+              redrawAll();
+              return;
+            }
+            document.querySelectorAll('.logRow').forEach(r => { r.style.borderLeft = ''; r.classList.remove('activeTrade'); });
+            const tradeSnap = {
+              entry:     parseFloat(row.dataset.entry) || null,
+              sl:        parseFloat(row.dataset.sl)    || null,
+              tp:        parseFloat(row.dataset.tp)    || null,
+              direction: row.dataset.direction,
+              open_ts:   row.dataset.ts,
+              tags:      row.dataset.tags,
+              status:    row.dataset.status || 'OPEN',
+              symbol:    pair,
+            };
+            currentSymbol = pair; currentType = type;
+            console.log('[LOGROW] switching to', currentSymbol, currentType, 'tf=', currentTf);
+            drawings = loadDrawings(currentSymbol); rsiDrawings = loadRsiDrawings(currentSymbol); updateObjTree();
+            _syncDrawings(currentSymbol); _subscribeDrawings(currentSymbol);
+            watchlistInner.querySelectorAll('.watchRow').forEach(r => r.classList.remove('active'));
             clearChevTools();
-            redrawAll();
-            return;
+            activeLogTrade = rowId;
+            _activeTradeKey = rowKey;
+            row.classList.add('activeTrade');
+            if (conf && (conf.RSI_DIV_T1 || conf.RSI_DIV_T2) && currentTf !== '4h') {
+              currentTf = '4h';
+              document.querySelectorAll('[data-tf]').forEach(b => b.classList.toggle('active', b.dataset.tf === '4h'));
+            }
+            console.log('[LOGROW] about to loadChart', currentSymbol, currentTf, currentType);
+            await loadChart(currentSymbol, currentTf, currentType);
+            console.log('[LOGROW] loadChart done, candles=', currentCandles.length);
+            startPolling();
+            activateTradeOverlay(tradeSnap, conf);
+            _scrollToEntry();
+            console.log('[LOGROW] overlay done');
+          } catch (err) {
+            console.error('[LOGROW] click error', err);
           }
-          document.querySelectorAll('.logRow').forEach(r => { r.style.borderLeft = ''; r.classList.remove('activeTrade'); });
-          const tradeSnap = {
-            entry:     parseFloat(row.dataset.entry) || null,
-            sl:        parseFloat(row.dataset.sl)    || null,
-            tp:        parseFloat(row.dataset.tp)    || null,
-            direction: row.dataset.direction,
-            open_ts:   row.dataset.ts,
-            tags:      row.dataset.tags,
-            status:    row.dataset.status || 'OPEN',
-            symbol:    pair,
-          };
-          currentSymbol = pair; currentType = type;
-          drawings = loadDrawings(currentSymbol); rsiDrawings = loadRsiDrawings(currentSymbol); updateObjTree();
-          _syncDrawings(currentSymbol); _subscribeDrawings(currentSymbol);
-          watchlistInner.querySelectorAll('.watchRow').forEach(r => r.classList.remove('active'));
-          clearChevTools();
-          // Mark this row active — gold glow — and remember it so a second click toggles off.
-          activeLogTrade = rowId;
-          _activeTradeKey = rowKey;
-          row.classList.add('activeTrade');
-          if (conf && (conf.RSI_DIV_T1 || conf.RSI_DIV_T2) && currentTf !== '4h') {
-            currentTf = '4h';
-            document.querySelectorAll('[data-tf]').forEach(b => b.classList.toggle('active', b.dataset.tf === '4h'));
-          }
-          await loadChart(currentSymbol, currentTf, currentType);
-          startPolling();
-          activateTradeOverlay(tradeSnap, conf);
-          _scrollToEntry();
         });
       });
     }
