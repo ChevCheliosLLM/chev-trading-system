@@ -176,25 +176,26 @@
 
     const cp = _activeTrade.conf || {};
     console.log('[OVERLAY] analysisOn=true confKeys=', Object.keys(cp), 'candles=', (currentCandles||[]).length, 'sr=', _overlayComponents.sr, 'fib=', _overlayComponents.fib);
+    const prices = cp.prices || {};
 
     // S/R levels — clean price lines, no fib clutter
     if (_overlayComponents.sr) {
-      if (cp.SR_S) { try { confPriceLines.push(candleSeries.createPriceLine({ price: parseFloat(cp.SR_S), color: '#089981', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: 'Support' })); } catch(e){} }
-      if (cp.SR_R) { try { confPriceLines.push(candleSeries.createPriceLine({ price: parseFloat(cp.SR_R), color: '#f23645', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: 'Resist'  })); } catch(e){} }
+      if (prices.SR_S) { try { confPriceLines.push(candleSeries.createPriceLine({ price: parseFloat(prices.SR_S), color: '#089981', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: 'Support' })); } catch(e){} }
+      if (prices.SR_R) { try { confPriceLines.push(candleSeries.createPriceLine({ price: parseFloat(prices.SR_R), color: '#f23645', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: 'Resist'  })); } catch(e){} }
     }
 
     // Fibonacci — canvas fib tool, no price axis labels
-    if (_overlayComponents.fib && cp.FB_618 != null && cp.FB_50 != null && currentCandles && currentCandles.length >= 2) {
+    if (_overlayComponents.fib && prices.FB_618 != null && prices.FB_50 != null && currentCandles && currentCandles.length >= 2) {
       let time1, price1, time2, price2;
 
-      if (cp.FB_LOW_T && cp.FB_HIGH_T && cp.FB_LOW_P != null && cp.FB_HIGH_P != null) {
+      if (prices.FB_LOW_T && prices.FB_HIGH_T && prices.FB_LOW_P != null && prices.FB_HIGH_P != null) {
         // Chev provided exact swing anchor timestamps — draw precisely
-        time1  = parseInt(cp.FB_LOW_T);  price1 = parseFloat(cp.FB_LOW_P);
-        time2  = parseInt(cp.FB_HIGH_T); price2 = parseFloat(cp.FB_HIGH_P);
+        time1  = parseInt(prices.FB_LOW_T);  price1 = parseFloat(prices.FB_LOW_P);
+        time2  = parseInt(prices.FB_HIGH_T); price2 = parseFloat(prices.FB_HIGH_P);
       } else {
         // Approximate from FB_50/FB_618 — find nearest candle to each price level
-        const fb50  = parseFloat(cp.FB_50);
-        const fb618 = parseFloat(cp.FB_618);
+        const fb50  = parseFloat(prices.FB_50);
+        const fb618 = parseFloat(prices.FB_618);
         const range = (fb50 - fb618) / (0.618 - 0.5);
         const pLow  = Math.min(fb50 + range * 0.5, fb50 - range * 0.5);
         const pHigh = Math.max(fb50 + range * 0.5, fb50 - range * 0.5);
@@ -217,11 +218,11 @@
     }
 
     // Volume Profile — drawn from Chev's detected consolidation range
-    if (_overlayComponents.vp && cp.VP_START_T && cp.VP_END_T) {
+    if (_overlayComponents.vp && prices.VP_START_T && prices.VP_END_T) {
       overlayDrawings.push({
         type: 'vp',
-        time1: parseInt(cp.VP_START_T),
-        time2: parseInt(cp.VP_END_T),
+        time1: parseInt(prices.VP_START_T),
+        time2: parseInt(prices.VP_END_T),
         visible: true,
       });
     }
@@ -244,9 +245,10 @@
     const hasMTF     = msTags.length > 0;
     const mtfTagTf   = hasMTF ? (msTags[0].includes('_') ? msTags[0].split('_')[1] : '4h') : null;
     // SR/Fib/VP require conf data to draw; RSI/EMA/BB/VWAP are calculated from candles
-    const hasSR  = tagHasSR  && !!(conf.SR_S || conf.SR_R);
-    const hasFib = tagHasFib && conf.FB_618 != null;
-    const hasVP  = tagHasVP  && !!(conf.VP_START_T && conf.VP_END_T);
+    const prices = conf.prices || {};
+    const hasSR  = tagHasSR  && !!(prices.SR_S || prices.SR_R);
+    const hasFib = tagHasFib && prices.FB_618 != null;
+    const hasVP  = tagHasVP  && !!(prices.VP_START_T && prices.VP_END_T);
     _overlayEntry = true; _overlayPanelOpen = false; _overlayAnalysisOn = true;
     // Default: no overlays auto-drawn — user ticks what they want to see
     _overlayComponents = { sr: false, fib: false, vp: false };
@@ -343,14 +345,14 @@
       // E/SL/TP price line pills — _refreshTradeOverlayLines reads pill state directly
       _refreshTradeOverlayLines();
     } else if (base === 'sr') {
-      if (isOn) _overlayAnalysisOn = true;
-      _overlayComponents.sr = isOn;
-      console.log('[PILL] SR set overlayAnalysisOn=', _overlayAnalysisOn, 'components.sr=', _overlayComponents.sr);
+      _overlayAnalysisOn = true;
+      _overlayComponents.sr = true;
+      console.log('[PILL] SR forced ON overlayAnalysisOn=', _overlayAnalysisOn, 'components.sr=', _overlayComponents.sr);
       _refreshTradeOverlayLines();
     } else if (base === 'fib' || base === 'fb' || base === 'gp' || tag.toLowerCase() === 'golden pocket') {
-      if (isOn) _overlayAnalysisOn = true;
-      _overlayComponents.fib = isOn;
-      console.log('[PILL] FIB set overlayAnalysisOn=', _overlayAnalysisOn, 'components.fib=', _overlayComponents.fib);
+      _overlayAnalysisOn = true;
+      _overlayComponents.fib = true;
+      console.log('[PILL] FIB forced ON overlayAnalysisOn=', _overlayAnalysisOn, 'components.fib=', _overlayComponents.fib);
       _refreshTradeOverlayLines();
     } else if (base === 'vp' || tag.toLowerCase() === 'volume profile' || base === 'volprofile') {
       _overlayComponents.vp = isOn;
