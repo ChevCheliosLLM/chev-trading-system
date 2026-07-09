@@ -90,4 +90,19 @@
   }
 
   if (typeof window !== 'undefined') install();
+
+  /* ---- DIAGNOSTIC: log every click with the exact target ---- */
+  if (typeof document !== 'undefined') {
+    document.addEventListener('click', function (ev) {
+      try {
+        var t = ev.target;
+        var row = t && t.closest && t.closest('.logRow');
+        var btn = t && t.closest && t.closest('.jump-to-chart-btn');
+        var tag = row
+          ? ('[CLICK-DIAG] .logRow pair=' + (row.dataset.pair || '') + ' type=' + (row.dataset.type || '') + ' row=' + (row.dataset.row || '') + ' btn=' + !!btn)
+          : ('[CLICK-DIAG] target=' + (t.tagName || '') + ' class=' + ((t && t.className) || ''));
+        console.log(tag);
+      } catch (e) { /* never throw from diagnostics */ }
+    }, true);
+  }
 })();
