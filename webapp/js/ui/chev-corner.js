@@ -175,6 +175,7 @@
     if (!_overlayAnalysisOn) { redrawAll(); return; }
 
     const cp = _activeTrade.conf || {};
+    console.log('[OVERLAY] analysisOn=true confKeys=', Object.keys(cp), 'candles=', (currentCandles||[]).length, 'sr=', _overlayComponents.sr, 'fib=', _overlayComponents.fib);
 
     // S/R levels — clean price lines, no fib clutter
     if (_overlayComponents.sr) {
@@ -337,16 +338,19 @@
 
   function _applyIdeaPill(idea, tag, isOn) {
     const base = tag.split('_')[0].toLowerCase();
+    console.log('[PILL] click tag=', tag, 'base=', base, 'isOn=', isOn, 'row=', idea.row, 'hasConf=', !!(idea && idea.confluence_prices));
     if (tag === '_E' || tag === '_SL' || tag === '_TP') {
       // E/SL/TP price line pills — _refreshTradeOverlayLines reads pill state directly
       _refreshTradeOverlayLines();
     } else if (base === 'sr') {
       if (isOn) _overlayAnalysisOn = true;
       _overlayComponents.sr = isOn;
+      console.log('[PILL] SR set overlayAnalysisOn=', _overlayAnalysisOn, 'components.sr=', _overlayComponents.sr);
       _refreshTradeOverlayLines();
     } else if (base === 'fib' || base === 'fb' || base === 'gp' || tag.toLowerCase() === 'golden pocket') {
       if (isOn) _overlayAnalysisOn = true;
       _overlayComponents.fib = isOn;
+      console.log('[PILL] FIB set overlayAnalysisOn=', _overlayAnalysisOn, 'components.fib=', _overlayComponents.fib);
       _refreshTradeOverlayLines();
     } else if (base === 'vp' || tag.toLowerCase() === 'volume profile' || base === 'volprofile') {
       _overlayComponents.vp = isOn;
