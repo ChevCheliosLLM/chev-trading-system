@@ -1,4 +1,306 @@
 ================================================================================
+================================================================================
+*** FOLLOW-UP — VALIDATION CANDIDATES ENGINE + AUDIT TRUTHFULNESS FIX —
+2026-07-08 — RESTART: N/A (additive function + escalation text + audit script),
+DEPLOY: N/A, RE-PASTE CHEV PROMPT: NO ***
+CONTEXT: user observed the INVALIDATION CANDIDATES ENGINE gives Chev a polished
+"where this thesis dies" list, but nothing symmetric for "where it wins" — the
+reward-side math (Opportunity.target_price, structural_rr, reward_profile) was
+already computed in engines.py but never relayed to Chev as a named block; the
+escalation text only surfaced a half-finished "ZONE ALIGNMENT CHECK." While
+verifying, the audit script was found to be self-contradictory (see fix #4).
+WHAT CHANGED AND WHY:
+1. engines.py — added ValidationCandidate dataclass + compute_validation_candidates()
+   + format_validation_candidates_for_chev(): the exact reward-side MIRROR of the
+   invalidation engine (compute_invalidation_candidates / format_...). Three priced
+   candidates: THESIS-TARGET (Opportunity.target_price — the measured-move target
+   where the thesis completes), STRUCTURAL EXTREME (the structural extreme this move
+   targets, derived from reward_profile: balance extreme / mid / fib extension),
+   R:R FLOOR (entry ± 1.0×risk_distance — the minimum target that satisfies 1:1
+   reward/risk, labeled "below this, not worth taking"). Pure function, no I/O, never
+   modifies other engines. Verdict OK/THIN vs the 1:1 R:R floor (mirrors invalidation's
+   PASS/FAIL vs noise floor). WHY: symmetry — Chev's skip discipline already required
+   naming invalidation; the validation half is the other side of the same coin.
+2. dexter.py — wired validation_block into the escalation message immediately after
+   invalidation_block (ask_chev_to_judge, ~8226), reusing the same _near_sup/_near_res
+   long/short/both logic so the two blocks always agree. Pulls target_price /
+   structural_rr / reward_profile / expected_trigger / invalidation_price from
+   _survey.opportunity and the structural extreme from _survey.auction (per
+   reward_profile). WHY: now Chev reads named "where he wins" levels, not just "where
+   he dies."
+3. test_validation_candidates.py — standalone (no dexter import), 7 scenarios incl.
+   direction-awareness, THIN-reward (rr<1.0), empty/"none found", dedupe of an extreme
+   identical to the target, and no-stop-distance (R:R FLOOR skipped). ALL TESTS PASSED.
+4. audit_context.py — FIXED a PRE-EXISTING self-contradiction: section 1 still used the
+   PRE-CUT 15-25K docstring brief estimate and printed a false "OVER budget" verdict,
+   while section 2 correctly reproduced the post-cut brief at 4,283 and printed "under
+   14k." ALSO the audit's msg copy omitted the new validation_block, understating
+   esc_tok. Fixes: removed the stale docstring total + false OVER verdict (section 1
+   now defers to section 2's authoritative COMBINED TOTAL); added a validation_block
+   sample, inserted it into the audit msg, and added it to the per-section inventory;
+   updated the module docstring + the EXCLUDED comment that falsely claimed the brief
+   "is not reproduced"; removed the stale "Bollinger Band rules still present" note
+   (Bollinger was deleted from the wrapper in Task 3). WHY: a verification tool that
+   prints a false OVER must not be trusted — it now tells the truth.
+BENEFIT: Chev gets symmetric named validation levels (THESIS-TARGET / STRUCTURAL
+EXTREME / R:R FLOOR) next to his invalidation list; the audit is internally
+consistent and the budget gates are honestly proven.
+VERIFICATION: `python -m py_compile engines.py dexter.py audit_context.py` exit 0.
+Both test suites ALL TESTS PASSED. audit_context.py now prints COMBINED TOTAL =
+system_prompt 1,679 + wrapper 3,903 + brief 4,283 = 9,864 tokens (≤14,000, under by
+4,136). Validation block ≈134 tok; wrapper rose 3,769→3,903 solely from the new
+block. Brief 4,283 ≤8,000. All gates still green.
+POST-CHECK CLEANUP (same session, after a full re-read): removed a dead `_meets()`
+helper in compute_validation_candidates; reworded a stale audit comment that pointed
+at the deleted DOCUMENTED_MARKET_BRIEF_TOKENS constant; fixed a real UnicodeEncodeError
+crash (exit 1) when the audit's stdout couldn't encode the non-ASCII chars in the
+rendered sample brief (forced sys.stdout to UTF-8); added the missing standalone
+VALIDATION CANDIDATES sample print so it mirrors the invalidation sample. Re-ran:
+py_compile clean, both suites pass, audit exits 0 and renders both blocks.
+RESTART: N/A — engines.py is already imported by dexter.py and both functions are
+called at escalation time; the new text appears on the next escalation with no
+restart. DEPLOY: N/A. RE-PASTE CHEV PROMPT: NO.
+================================================================================
+*** PLAN — "CHEV READS HIS MAIL" (TRIM BRIEF / RELOCATE TEACHING / MICRO-FIXES) —
+2026-07-08 — RESTART: N/A (audit-only + wrapper text deletion), DEPLOY: N/A,
+RE-PASTE CHEV PROMPT: NO (net change already applied in Task 3) ***
+Context: the live market brief was ~32,782 tok (92% raw candle/order-book dumps),
+blowing the 14k combined context budget. This plan cut the brief, moved the teaching
+text that escaped the wrapper into the lean escalation prompt, and applied two
+micro-fixes. Brief cuts (Task 2), the lean-prompt additions (Task 3), and the 4a/4b
+code edits were completed by an earlier session and were already in the working tree
+verified by grep + py_compile. THIS session's work was the verification gate itself
+(audit_context.py) plus finishing Task 3's wrapper deletion.
+WHAT CHANGED THIS SESSION AND WHY:
+1. audit_context.py repaired (it is the standalone tool that PROVES the token gates
+   pass — it reproduces the post-cut brief inline and never imports dexter.py, so it
+   can run without starting the live bot). Three bugs made its numbers wrong/unusable:
+   (a) _lim=0 NaN CRASH — the 1D timeframe now has 0 rows (Task 2 cut), and the audit's
+       own builder divided by/summed an empty series and NaN'd the whole rollup. Fixed
+       with a `continue` + last-5-closes fallback so 1D degrades gracefully (same
+       fallback the real builder uses), no crash. WHY: without this the gate couldn't
+       even run, so the brief budget could not be proven.
+   (b) STALE OVER-COUNT — a leftover `_sections` diagnostic entry split the wrapper on
+       the anchor `BANNED SKIP LANGUAGE`, which no longer exists (Task 3 moved that
+       teaching), so it mis-split and over-counted the wrapper at 5,175 tok. Fixed by
+       labeling that entry "0"; the real gate number (context_prefix + msg =
+       13,190 chars = 3,769 tok) was correct and is now the only number shown.
+   (c) AUDIT STILL MODELED THE OLD BRIEF — it reproduced the full order book, the
+       futures OI/teaching paragraph, a TREND IMPLICATION paragraph, and Bollinger
+       lines that Task 2/3 had removed. Updated the reproduction to match reality
+       (order book top-5/side ≈150 tok; futures OI+funding only; TREND IMPLICATION and
+       Bollinger dropped from the reproduced `msg` + `_sections`). Added a rendered
+       sample-brief output so the post-cut brief can be eyeballed without running the bot.
+   BENEFIT: the audit now measures the actual shipped brief, not a ghost of the old one,
+   so the 8k/14k gates are proven against real numbers (see VERIFICATION).
+2. dexter.py — completed Task 3's wrapper deletion: removed the BOLLINGER BAND RULES
+   teaching block from the wrapper (~line 8278). Its substance now lives ONCE, in
+   prompts/chev_escalation_prompt.txt (Task 3 already added the ≤8-line Bollinger
+   rules there). VERIFIED by grep: `BOLLINGER BAND RULES` appears nowhere in dexter.py.
+   BENEFIT: single source of truth for the Bollinger rules (the prompt), no duplicated
+   teaching weight in the wrapper, and the wrapper token count drops accordingly
+   (part of why the verified wrapper is 3,769 tok, not the old 5,175). The banned-skip
+   substance line ("Do NOT skip simply because price hasn't arrived…") was intentionally
+   KEPT at ~8241 as an operational instruction, not the deleted teaching header — the
+   SKIP DISCIPLINE section in the prompt covers that teaching now.
+NOT CHANGED (out of this session's scope): Task 2 brief cuts, 4a `risk_pct or 1.0`
+(9814/11777), 4b `risk_amount_usd` column index 19 + old-row tolerance (9454/9821) —
+these were already correct in the tree and only re-verified. All COMPUTED SUMMARY
+sections were intentionally left untouched (~2,600 tok of signal preserved).
+VERIFICATION: `python -m py_compile dexter.py` exit 0. audit_context.py output:
+   system_prompt = 1,679 tok; wrapper (excl. brief) = 3,769 tok;
+   brief worst-case = 4,283 tok (≤8,000 ✅); combined = 9,730 tok (≤14,000 ✅, −4,270).
+   Brief rollup: RAW DATA 1,908 tok (45%) · COMPUTED SUMMARY 2,362 tok (55%) ·
+   TEACHING 12 tok. grep confirms TREND IMPLICATION / BOLLINGER BAND RULES / how-to-read
+   / 5-Qs / reasoning-framework appear nowhere in dexter.py except explanatory comments.
+   Lean prompt = 103 lines (≤120 ✅), ~1,694 tok.
+RESTART: N/A — wrapper text deletion and audit tool are non-runtime (audit_context.py is
+a standalone script; the deleted wrapper block was teaching text only). DEPLOY: N/A.
+RE-PASTE CHEV PROMPT: NO — Task 3's prompt file is already byte-final from the prior
+session; this session added nothing to it.
+================================================================================
+*** FOLLOW-UP #2 — "CAN'T REACH FIREBASE" TRADES-PANEL FLAPPING FIXED —
+2026-07-08 — RESTART: NO (frontend only), DEPLOY REQUIRED ***
+Root cause found after ruling out everything else first: (1) fetched the live
+monitor.json data directly from Firebase and ran dexter's ACTUAL
+renderTradingLogs()/_updatePerfSection() against it in a sandboxed Node test —
+zero exceptions, proving the rendering code itself is correct against real
+data; (2) confirmed via curl the endpoint returns 200 consistently, fast, with
+correct CORS headers, no rate-limiting observed externally; (3) Kev's own
+screenshot was the actual smoking gun: the "LIVE (1)" badge showed the correct
+open-trade count while the row content underneath showed "Can't reach
+Firebase" — those two are set by the same function, meaning a recent poll had
+already succeeded (that's how the badge got the right number) and a LATER,
+separate 5-second poll failed and overwrote only the row content. Genuinely
+intermittent, not a permanent bug — Incognito ruled out extensions.
+FIX (webapp/index.html, `refreshTradingLogs()`, ~line 4167): a single failed
+poll no longer blanks the display. Added `_tradingLogsFailCount`, incremented
+on failure and reset on success; the "Can't reach Firebase" message now only
+shows after 3 CONSECUTIVE failures (15 seconds of no data) instead of one
+transient blip. Whatever is causing the occasional individual fetch to fail
+(likely ordinary network jitter between the browser and Firebase, not
+something in our control) is unchanged — this stops it from being visually
+alarming and misleading ("is Dexter online?" when Dexter never stopped
+pushing data) for a single missed cycle.
+ALSO FIXED THIS SESSION (see FOLLOW-UP #1 above): the Firebase drawings-stream
+`timeout=600000` → `timeout=600s` bug, which was independently confirmed fixed
+(forex prices started working again after it, per Kev's own test).
+VERIFICATION: `node -e` syntax check clean, `<div>` balance unchanged
+(581/581). A dedicated extract-and-exec test against the real
+`refreshTradingLogs()` source — 7/7 assertions: 1 and 2 consecutive failures
+don't show the error, 3 consecutive failures do, and a success after failures
+both resets the counter and renders the real data (not just suppresses the
+error).
+RESTART: NO (webapp/index.html only). DEPLOY: YES (push_dashboard.py as usual;
+if viewing directly at the Cloudflare tunnel URL rather than the GitHub Pages
+site, this fix is already live there without any deploy step, since Dexter
+serves that file straight from disk on every request).
+================================================================================
+*** FOLLOW-UP — CONFIRMATION-RULE REVERT, STRUCTURAL READ FIELD, FIREBASE
+DRAWINGS-STREAM FIX — 2026-07-08 — RESTART REQUIRED, DEPLOY REQUIRED, RE-PASTE
+CHEV PROMPT: NO (net change from the forensic remediation above is zero) ***
+1. REVERTED the forensic remediation's Root Cause 1/2 prompt edits in full —
+   Kev has direct, lived history with this exact change (documented above at
+   "THE ACTUAL ROOT CAUSE — HARDCODED CONFIRMATION FIELD," 2026-07-05): a
+   confirmation-candle requirement was tried once, produced 0 POSTs across 93
+   decisions in 4.5 hours (72% of skips citing "lacks confirmation"), and was
+   deliberately removed rather than softened. Re-introducing any form of it —
+   even the "only if you can name a concrete signal" framing this remediation
+   used — repeats a mistake Kev already paid for. dexter.py's escalation
+   prompt and "Chev Prompt"'s three playbooks are now byte-identical to
+   before the forensic remediation touched them (verified via `git diff`).
+   The two unrelated fixes from that remediation pass (the `chev_conversation`
+   audit trail, and the `opened_at`/`open_ts` duration-fallback bug) were kept
+   — Kev's objection was specifically to the confirmation-timing change, not
+   these.
+2. NEW — STRUCTURAL READ field: separate from the reverted item above, and
+   deliberately NOT a timing/confirmation rule. Real, data-backed finding:
+   only 14/89 real trades' reasoning mentions anything from Elliot's
+   structural engine (trendline/geometry/auction/conviction vocabulary) at
+   all, vs. 28/89 mentioning Dexter's indicator vocabulary — most reasoning
+   is as generic as "Confluence at 0.14330 aligns trend and indicators, setup
+   valid." Elliot's Opportunity output was already being computed and shown
+   to Chev (the ZONE ALIGNMENT CHECK), just silently skippable. Fix: a new
+   required field, STRUCTURAL READ, added to both prompt templates (dexter.py
+   ~8106, ~8261) and parsed (`parse_chev_reply`, new tuple
+   `("STRUCTURAL READ:", "structural_read")`), persisted to `new_trade` and
+   the journal entry alongside structure_4h/invalidation/confirmation.
+   Deliberately neutral wording, caught and fixed mid-design after Kev's own
+   pushback: it does NOT ask Chev to justify disagreeing with Elliot (that
+   would bias him toward false agreement to avoid scrutiny) — it only
+   requires he state Elliot's entry zone/hypothesis/conviction as fact and
+   say whether his own entry matches, differs, or wasn't influenced by it,
+   with explicitly no "right" answer. No hard validation added — same
+   opportunistic-parse-with-no-rejection behavior as the existing three
+   fields, so a missing field doesn't break anything, same as today.
+3. FIXED — Firebase drawings live-sync 400 Bad Request (webapp/index.html
+   `_subscribeDrawings`, ~line 6384): the SSE stream URL had
+   `timeout=600000` (bare milliseconds) instead of a valid Firebase duration
+   string. Firebase's own error confirmed it exactly:
+   `"timeout must contain length and unit (s/seconds/min/minutes)"`. Changed
+   to `timeout=600s` (same 600-second/10-minute intent). Verified directly
+   against the live Firebase REST endpoint via curl — 400 before, 200 after.
+   This was firing on every symbol switch, for every visitor, the whole time.
+4. IN PROGRESS — the "Can't reach Firebase" message on the live trades panel:
+   confirmed the underlying `monitor.json` fetch itself returns 200 (checked
+   directly by Kev in browser dev tools), so the failure is in parsing the
+   response or in `renderTradingLogs()` throwing on it, not connectivity —
+   the error message is misleading (the same catch block covers both the
+   fetch AND the render call). Likely related: `refreshForexPrices()`'s
+   primary source is `_latestFbData`, which only gets populated when this
+   same fetch succeeds end-to-end — so the forex-price CORS/522 errors Kev
+   also saw are probably a downstream symptom of this one root issue, not a
+   separate problem (freeforexapi.com, the fallback source, also appears to
+   be down independently right now per a direct curl test — real, but not
+   ours to fix). Waiting on the actual browser console error at the moment
+   the trades panel fails to identify the exact line.
+RESTART: YES (dexter.py's escalation prompt/parser/journal fields changed).
+RE-PASTE CHEV PROMPT: NO — net change versus what's already pasted is zero,
+since the confirmation-rule edit was fully reverted; the file is back to
+byte-identical. DEPLOY SITE: YES (webapp/index.html's drawings-stream fix and
+new push_dashboard.py-independent from Chev Prompt).
+================================================================================
+*** FORENSIC INVESTIGATION REMEDIATION — 2026-07-08 — RESTART REQUIRED, DEPLOY
+NOT REQUIRED (no frontend changes), RE-PASTE CHEV PROMPT: YES ***
+Directly implements Root Causes 1 and 2 plus two of the three suggested code
+changes from the forensic investigation artifact ("Why Dexter/Chev Keeps Making
+the Same Bad Entries"). Root Cause 3 ("stops too tight") was explicitly dropped
+per Kev's own call — the data refuted it, so there was no real fix to make.
+This crosses the standing "no phase talks to Chev" boundary deliberately and
+with Kev's direct request — he asked for exactly this file, not a UI/backend
+change that drifted into it.
+WHAT CHANGED AND WHY:
+1. ROOT CAUSE 1 (entries sit on S/R with no confirmation, by design) — dexter.py's
+   live escalation prompt (the BANNED SKIP LANGUAGE / ENTRY MODES block, ~8172-
+   8213) and three of "Chev Prompt"'s four playbook sections (PULLBACK,
+   BREAKOUT, RANGE/BALANCE) no longer flatly forbid waiting for confirmation.
+   The original vague-language ban stays intact word-for-word ("lacks
+   confirmation," "needs confirmation," "too early" are still banned) — what
+   changed is that Chev can now SKIP or use a MODE B pending order specifically
+   because he's waiting for one NAMED, checkable signal (e.g. "a 15m close back
+   above 1.0490," "a rejection wick off a level with only 1 prior touch"),
+   stated in REASONING with the exact price/level. An unnamed "wants more
+   confirmation" is still banned exactly as before — the fix targets the gap
+   between "vague stalling" and "a real, checkable reason to wait," not the
+   anti-stalling intent itself.
+2. ROOT CAUSE 2 (the learning loop was explicitly forbidden from ever writing
+   the one rule that would fix Root Cause 1) — dexter.py's `_run_learning_session()`
+   had two HARD RULE blocks (the main playbook rewrite prompt, and the loss-
+   pattern-analysis prompt) that explicitly banned writing any advice to wait
+   for a confirmation candle. Both replaced with a rule that allows writing a
+   confirmation-related lesson ONLY if it names a specific, checkable signal
+   that the actual losing trades in that batch demonstrably needed — still
+   bans vague "wait for confirmation" advice with nothing to check. This means
+   the playbook-rewrite mechanism (already confirmed working, not write-only)
+   can now actually learn this lesson instead of being blocked from ever
+   writing it down. The 4 playbook .txt files themselves were NOT hand-edited —
+   they're auto-regenerated by this same function every 10 closed trades, so
+   editing their current snapshot text would just get overwritten; the fix had
+   to be in the code that generates them.
+3. SUGGESTION — forensic audit trail — every trade's journal entry now carries
+   `chev_conversation`: the complete back-and-forth that produced it (the
+   assembled prompt, every hallucination/geometry/gauntlet correction sent, and
+   Chev's reply at each step, ending with the final accepted reply), built from
+   `_chev_messages` (which the hallucination/geometry/gauntlet-fixable-reject
+   blocks already append to) plus the final `chev_response`. KNOWN LIMITATION:
+   this lives only on the in-memory trade dict, not in a Sheet column (a full
+   conversation can be several KB — not a sane thing to cram into a spreadsheet
+   cell) — so it will NOT survive a Dexter restart while the trade is still
+   open, same class of gap as the duration bug below, just not worth fixing the
+   same way given the size. Still a real improvement: any trade that opens and
+   closes without a restart in between (the common case for scalp/day trades)
+   now has a full record.
+4. EVIDENCE GAP FIX — duration computation bug (not just historical data, a live
+   bug): `opened_at` is set in-memory when a trade opens but was never restored
+   when trades reload from the Sheet after a restart — unlike `open_ts`, which
+   IS persisted to and restored from the Sheet (same literal timestamp, just
+   under a different dict key depending on code path). This is almost
+   certainly why 66/88 real journal entries show `duration: "unknown"` — most
+   of them likely outlived at least one restart. Fixed in both
+   `_trade_duration_str()` and `_do_postmortem()` by falling back to `open_ts`
+   when `opened_at` is absent, mirroring the same fallback pattern already used
+   elsewhere in the file (`t.get("open_ts") or t.get("ts")`). This does NOT fix
+   the 66 already-written journal entries (that data is genuinely gone) — it
+   stops the bug from continuing to happen to future trades.
+NOT CHANGED: Root Cause 3 (dropped per Kev — data refuted it, nothing to fix).
+The two historical evidence gaps that are genuinely unrecoverable (only 5/88
+trades joinable to ATR/distance shadow data; 41/88 missing `open_ts` entirely)
+were left alone — both predate fields that already exist in the current code
+and will keep improving on their own as new trades accumulate; there's no
+retroactive fix for data that was never recorded.
+VERIFICATION: `python -m py_compile dexter.py` clean. Source-text checks (12
+assertions) confirm every old banned/hard-rule phrase is gone and every new
+phrase is present, in both dexter.py and "Chev Prompt," including confirming
+the original vague-language ban survived word-for-word. A dedicated
+extract-and-exec test (4/4 assertions) against the real `_trade_duration_str()`
+function proves the `open_ts` fallback works, preserves `opened_at` priority
+when both exist, and doesn't change behavior when neither exists.
+RESTART: YES (dexter.py changed — prompt text, learning-session rules, journal
+audit trail, and the duration fix all only take effect on restart). RE-PASTE
+CHEV PROMPT: YES (the three playbook sections changed — this is the one time
+this session that's actually required, since the file itself changed). DEPLOY
+SITE: NO (no frontend files touched).
+================================================================================
 *** FOLLOW-UP — PERSISTENT LEARN TAB HIGHLIGHT — 2026-07-08 — RESTART: NO,
 DEPLOY REQUIRED ***
 Ad-hoc fix requested directly by Kev (not a formal phase paste) after using
@@ -5825,6 +6127,193 @@ Ollama: OLLAMA_KEEP_ALIVE=0 (unloads when idle)
 VS Code workspace: C:\open-webui-dev\ChevTools\webapp
 Node: managed via nvm-windows. Use Node 20 for Expo work (v20.20.2).
   nvm use 20 before any expo/eas commands.
+
+================================================================================
+*** VRAM OVERFLOW FIX — "THE SMALLER DESK" (chev-32b-learn + SHORTER
+keep_alive) — 2026-07-09 — RESTART: YES (launcher.py build/check changed),
+DEPLOY: N/A, RE-PASTE CHEV PROMPT: NO ***
+CONTEXT: VRAM on the 24GB GPU was overflowing and forcing a CPU offload
+(massive latency). Root cause: chev-chelios-clone (escalations) and
+chev-chelios (learning/chat) BOTH ran the main chev-32b model at num_ctx
+12288, which needs a ~3GB KV cache each. Because Dexter pings the clone
+frequently, the clone's keep_alive timer never expired, so when a learning
+session fired, BOTH KV caches were resident at once: 19GB shared weights +
+3GB clone KV + 3GB learn KV = 25GB > 24GB → CPU offload.
+KEY VRAM/KV-CACHE FINDINGS:
+- Ollama only consumes VRAM while a model is actively loaded. After the
+  keep_alive idle window expires, the model UNLOADS COMPLETELY (0 VRAM) —
+  it is NOT a permanently reserved block.
+- Both brains share the SAME qwen2.5:32b weights (19GB). When either brain
+  loads, those weights are mapped once and shared; only the per-model KV
+  cache is separate.
+- Worst case (both brains resident simultaneously): 19GB weights + 3GB clone
+  KV (12288) + 2GB learn KV (8192) = 24GB — fits the card exactly. With the
+  shorter timer below, the overlap window is essentially eliminated.
+MISCONCEPTION CORRECTED: the 5-minute clone keep_alive was assumed to be the
+problem's cause in the sense of "permanently holding VRAM." The real issue is
+that it never EXPIRED (frequent pings reset it), so the clone stayed resident
+and overlapped the learning session. Fixing it is about SHORTENING the idle
+window so the clone unloads before a learning session stacks on top.
+THE SMALLER DESK — NEW MODEL chev-32b-learn: created ChevBrain-learn.modelfile
+with num_ctx 8192 (KV cache ~2GB instead of ~3GB), num_gpu 99, num_thread 6,
+FROM qwen2.5:32b. This is the dedicated learning/chat brain; the clone keeps
+the full 12288 chev-32b. Because weights are shared, two brains cost 19GB +
+the two smaller KV caches, not 38GB.
+ACTION FOR KEV — OPEN WEBUI: change the model keep_alive to 2m (two minutes)
+for both brains in Open WebUI (Admin → Models / settings). This lets the
+clone unload after 2 minutes of Dexter idleness, so a learning session almost
+never finds the clone still resident — no overlap, no CPU offload.
+launcher.py CHANGES (verified with py_compile, exit 0):
+1. New constants CHEV_BRAIN_LEARN_MODELFILE = r"C:\ChevTools\ChevBrain-learn.
+   modelfile" and CHEV_BRAIN_LEARN_NAME = "chev-32b-learn".
+2. _build_brain()._do_build() now runs `ollama create` for BOTH chev-32b
+   (from ChevBrain.modelfile) AND chev-32b-learn (from ChevBrain-learn.
+   modelfile) in one click; its success message tells Kev to point the clone
+   at chev-32b and learning at chev-32b-learn, then restart Ollama.
+3. _check_brain() now returns True ONLY when BOTH chev-32b and chev-32b-learn
+   appear in `ollama list` — this is the function the UI status loop calls
+   (self._check_brain() in _status_loop), so the status dot now verifies both
+   models exist. The "Chev Brain" service-card description was updated to read
+   "(chev-32b + chev-32b-learn)".
+VERIFICATION: `python -m py_compile launcher.py` exit 0. ChevBrain-learn.
+modelfile written at C:\ChevTools\ChevBrain-learn.modelfile.
+RESTART: YES — launcher.py's build and existence-check changed, so restart the
+launcher to pick them up before clicking "Build Chev Brain." DEPLOY: N/A.
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+*** FOLLOW-UP — THREE-HAT REVIEW OF "THE SMALLER DESK" (launcher.py +
+dexter.py learning-prompt guard) — 2026-07-09 — RESTART: YES (launcher.py
++ dexter.py changed), DEPLOY: N/A, RE-PASTE CHEV PROMPT: NO ***
+Triggered by a cross-discipline review (software engineer / data analyst /
+day trader) of the VRAM fix above. Verdict per hat:
+- SWE: code good (rated B, not "mid"). One real robustness bug fixed.
+- DATA ANALYST: context distribution is CORRECT — clone keeps 12288 (escalation
+  prompt ~9,730 tok in, ~2.5K headroom for the reply); learn drops to 8192
+  (heaviest prompt ~3-5K tok in, generous headroom). Shared qwen2.5:32b weights
+  mean no VRAM doubling. Both brains have room. One overflow risk guarded.
+- DAY TRADER: learning loop is sound (evidence-based, sample-size honesty,
+  conditions-not-outcomes). 8192 does not degrade lesson quality. No objection.
+FIXES:
+1. launcher.py _build_brain() — the original ran both `ollama create` calls in
+   one try; if the SECOND failed, the first model was already built but
+   _brain_built stayed False, so the next click REBUILT the already-built first
+   model (~30s waste) and the failure message didn't name the missing brain.
+   Also the already-built message only named chev-32b. New behavior: a
+   _ollama_models() helper lists installed models; _do_build builds ONLY the
+   missing brain(s) (skips ones already present), sets _brain_built/status True
+   only when _check_brain() confirms BOTH exist, and otherwise reports "Build
+   incomplete — one brain missing" so a re-click cleanly finishes the job.
+   _check_brain() now reuses _ollama_models(). Message names both brains.
+2. dexter.py _run_learning_session() _fmt_entry() — the Step-1 playbook-rewrite
+   prompt (sent to the 8192-ctx chev-32b-learn brain) built entries_text from up
+   to 20 trades with UNTRUNCATED `analysis`. If 20 post-mortems were each very
+   long, the prompt could approach 8192 and Ollama would silently truncate the
+   trade history, so Chev would learn from a partial record. Now caps each
+   trade's `analysis` at 400 chars (same family of bound already used by the
+   loss/compare prompts at 300/200). Output playbook is unchanged in structure.
+VERIFICATION: `python -m py_compile launcher.py dexter.py` exit 0.
+RESTART: YES (both files changed). DEPLOY: N/A. RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+*** FOLLOW-UP — LIVE VERIFICATION OF "THE SMALLER DESK" (build + param proof
++ 32768 vram-default clarification) — 2026-07-09 — RESTART: YES (launcher.py
++ dexter.py changed earlier), DEPLOY: N/A, RE-PASTE CHEV PROMPT: NO ***
+WHAT WORKED:
+1. `ollama create chev-32b-learn -f C:\ChevTools\ChevBrain-learn.modelfile`
+   succeeded (exit 0) — reused the already-local qwen2.5:32b layers, so NO
+   19GB re-download. `ollama list` now shows BOTH chev-32b:latest and
+   chev-32b-learn:latest (each 19GB, weights shared on disk).
+2. `ollama show chev-32b-learn` confirms the Modelfile params took: num_ctx
+   8192, num_gpu 99, num_thread 6. So the smaller desk is real, not just
+   created.
+3. `ChevBrain.modelfile` confirmed to still pin num_ctx 12288 for the clone —
+   both brains explicitly pin their context, so Ollama's startup
+   "vram-based default context" (default_num_ctx=32768 on the 24GB card)
+   NEVER applies to either model. That 32768 is only Ollama's fallback for
+   models with no num_ctx set; it is informational, not what these brains use.
+4. launcher.py/dexter.py both py_compile clean (exit 0) from the earlier
+   three-hat review fixes (build-only-missing-brains logic + the 400-char
+   analysis cap on the playbook-rewrite prompt).
+WHAT DID NOT WORK / NOT YET DONE (user-side, not code):
+- The Open WebUI steps are NOT yet done: pointing chev-chelios-clone →
+  chev-32b and chev-chelios → chev-32b-learn, and setting keep_alive=2m on
+  both, then restarting Ollama. These are Kev's manual UI actions. Until done,
+  the clone and learn connections still run the old routing and the 5-minute
+  timer, so the VRAM overlap the fix targets is not yet eliminated in
+  practice.
+- CAVEAT surfaced: Open WebUI lets you set a per-model num_ctx that OVERRIDES
+  the Modelfile. When wiring chev-32b-learn in Open WebUI, num_ctx must be
+  left blank (inherits 8192) or set to 8192 — if someone typed 32768 there it
+  would win and blow the KV budget. Same check for the clone at 12288.
+WHAT IT SOLVES:
+- The root VRAM-overflow cause: clone (chev-32b, 12288 → ~3GB KV) and learn
+  (chev-32b, 12288 → ~3GB KV) both ran the SAME large context, so when Dexter
+  kept the clone resident (frequent pings never let its keep_alive expire) and
+  a learning session fired, both 3GB KV caches were live at once: 19GB weights
+  + 3GB + 3GB = 25GB > 24GB → forced CPU offload + latency.
+- New split: clone stays at 12288 (~3GB KV); learn moves to chev-32b-learn at
+  8192 (~2GB KV). Worst case both resident simultaneously = 19GB shared weights
+  + 3GB clone KV + 2GB learn KV = 24GB, fitting the card exactly. With the
+  planned 2m keep_alive, the clone unloads after 2 min of idleness so overlap
+  is rare → no offload, no latency.
+- Corrected the misconception: VRAM is only held during an active load; after
+  keep_alive expires the model unloads to 0 VRAM. The 5-min timer's real flaw
+  was that it never EXPIRED (constant pings), not that it reserved space
+  permanently.
+HOW IT BENEFITS:
+- Shared qwen2.5:32b weights mean two brains cost 19GB + the two smaller KV
+  caches, not 38GB — the "smaller desk" is pure KV-cache savings with zero
+  quality loss (the learn prompt fits 8192 comfortably; the day-trader review
+  confirmed the learning loop stays evidence-based and conditions-not-outcomes).
+- Dexter's flow is undisturbed: Open WebUI just calls the model names it's
+  pointed at; the second brain loads in ~1-2s on first request after an unload.
+- The launcher now builds only the missing brain on re-click and reports
+  accurately, and the playbook-rewrite prompt can no longer silently truncate
+  its 20-trade history at the 8192 boundary.
+RESTART: YES (launcher.py + dexter.py changed earlier). DEPLOY: N/A.
+RE-PASTE CHEV PROMPT: NO.
+NEXT (Kev, manual): in Open WebUI set clone→chev-32b / learn→chev-32b-learn,
+set keep_alive=2m on both, leave num_ctx blank (inherits 8192/12288), restart
+Ollama, then launch Dexter.
+
+================================================================================
+*** FOLLOW-UP — LAUNCHER "SHARE LINK" (CLOUDFLARE QUICK TUNNEL → DEXTER :8080)
+— 2026-07-09 — RESTART: N/A (launcher only, additive UI button), DEPLOY: N/A,
+RE-PASTE CHEV PROMPT: NO ***
+ADDED so Kev can expose the live Dexter dashboard (localhost:8080) to a phone /
+remote browser without manual CLI. Verified end-to-end against the real
+cloudflared binary before wiring it in.
+launcher.py CHANGES:
+1. New constant CLOUDFLARED_EXE = r"C:\Program Files (x86)\cloudflared\
+   cloudflared.exe" (confirmed installed, v2026.6.1).
+2. __init__ gained self._tunnel_proc / self._tunnel_url state.
+3. UI: a new "🌐 Share Link" button + a read-only link label on a tunnel row
+   (after the row-2 Build/Logs/Open WebUI Admin buttons). The label shows
+   "off" → "starting…" → the live URL (green) and is clickable to open it.
+4. _start_tunnel(): guarded (one tunnel at a time); if Dexter isn't already
+   serving :8080 it auto-starts Dexter first; spawns `cloudflared tunnel
+   --url http://localhost:8080` (logs to logs/tunnel.log); a watcher thread
+   polls the log for the generated `*.trycloudflare.com` URL (regex
+   https://[a-z0-9-]+\.trycloudflare\.com), then sets the label green, copies
+   the URL to the clipboard, and posts "Tunnel live — link copied to
+   clipboard" in the status bar. _set_tunnel_live()/_open_tunnel_link() handle
+   the label + click-to-open.
+VERIFICATION: `python -m py_compile launcher.py` exit 0. LIVE TEST — ran
+`cloudflared tunnel --url http://localhost:8080` standalone; Cloudflare
+returned "Your quick Tunnel has been created! Visit it at
+https://installation-strength-sometimes-cable.trycloudflare.com" (connectivity
+pre-checks all PASS). Confirmed the launcher's Python regex matches that exact
+URL string. Test process killed, temp log removed — no stray cloudflared left
+running.
+NOTES / CAVEATS: quick (account-less) tunnels are ephemeral — the URL changes
+every time you click Share Link, and Cloudflare gives no uptime guarantee
+(printed in cloudflared's own banner). For a stable URL use a pre-created named
+tunnel later. Tunnel only proxies what Dexter serves on :8080 (the dashboard +
+APIs); it does NOT proxy Open WebUI (:3000, Docker) — point a second tunnel at
+:3000 if Chev's brain UI also needs remote access.
+RESTART: N/A (launcher is a standalone GUI; just re-run launcher.py). DEPLOY:
+N/A. RE-PASTE CHEV PROMPT: NO.
 
 ================================================================================
 END OF HANDOFF

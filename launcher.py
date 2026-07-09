@@ -5,6 +5,7 @@ import webbrowser
 import requests
 import time
 import sys
+import os
 from PIL import Image, ImageTk, ImageDraw
 
 DEXTER_SCRIPT    = r"C:\ChevTools\dexter.py"
@@ -15,8 +16,12 @@ WEBUI            = "http://localhost:3000"
 MONITOR_URL      = "https://chevcheliosllm.github.io/chev-monitor/"
 DOCKER_DESKTOP   = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
 CHROME_EXE       = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-NGROK_EXE        = r"C:\Users\kevin\OneDrive\Desktop\ngrok.exe"
-NGROK_API        = "http://localhost:4040/api/tunnels"
+CLOUDFLARED_EXE  = r"C:\Program Files (x86)\cloudflared\cloudflared.exe"
+CHEV_BRAIN_MODELFILE = r"C:\ChevTools\ChevBrain.modelfile"
+CHEV_BRAIN_NAME      = "chev-32b"
+CHEV_BRAIN_LEARN_MODELFILE = r"C:\ChevTools\ChevBrain-learn.modelfile"
+CHEV_BRAIN_LEARN_NAME      = "chev-32b-learn"
+LOG_DIR              = r"C:\ChevTools\logs"
 
 BG     = "#131722"
 CARD   = "#1c2030"
@@ -48,20 +53,6 @@ def _check_docker():
         return False
 
 
-def _get_ngrok_url():
-    try:
-        r = requests.get(NGROK_API, timeout=2)
-        tunnels = r.json().get("tunnels", [])
-        for t in tunnels:
-            if t.get("proto") == "https":
-                return t["public_url"]
-        if tunnels:
-            return tunnels[0]["public_url"]
-    except Exception:
-        pass
-    return None
-
-
 def _make_circle_portrait(path, size=128):
     img = Image.open(path).convert("RGBA").resize((size, size), Image.LANCZOS)
     mask = Image.new("L", (size, size), 0)
@@ -88,9 +79,12 @@ class ChevLauncher:
         self._dots   = {}
         self._status = {
             "docker": False, "webui": False, "dexter": False,
-            "gemini": False, "telegram": False, "ngrok": False,
+            "gemini": False, "telegram": False, "brain": False,
         }
-        self._ngrok_url = None
+        self._brain_built = False
+        self._procs = {}
+        self._tunnel_proc = None
+        self._tunnel_url  = None
 
         self._build_ui()
         threading.Thread(target=self._status_loop, daemon=True).start()
@@ -117,11 +111,11 @@ class ChevLauncher:
 
         for key, name, desc, action in [
             ("docker",   "Docker",    "Container runtime · runs Open WebUI",         self._start_docker),
-            ("webui",    "Open WebUI","Chev's interface · localhost:3000",            lambda: webbrowser.open(WEBUI)),
-            ("dexter",   "Dexter",    "Trading bot · start in VS Code terminal",      None),
-            ("gemini",   "Ollama",    "Chev's brain · qwen2.5:32b · localhost:11434", lambda: webbrowser.open("http://localhost:11434")),
-            ("telegram", "Telegram",  "Chev in Telegram · start in VS Code terminal", None),
-            ("ngrok",    "Ngrok",     "Charts tunnel · localhost:8080 → public URL",  self._start_ngrok),
+            ("webui",    "Open WebUI","Chev's interface · localhost:3000",           lambda: webbrowser.open(WEBUI)),
+            ("dexter",   "Dexter",    "Trading bot · click to start",                self._start_dexter),
+            ("gemini",   "Ollama",    "Chev's brain · click to start",               self._start_ollama),
+            ("telegram", "Telegram",  "Chev in Telegram · click to start",           self._start_telegram),
+            ("brain",    "Chev Brain","Corrected 32B (chev-32b + chev-32b-learn) · one-click build",   self._build_brain),
         ]:
             self._service_card(cards, key, name, desc, action)
 
@@ -158,20 +152,45 @@ class ChevLauncher:
         row2 = tk.Frame(btns, bg=BG)
         row2.pack(fill="x", pady=(0, 4))
 
-        self._ngrok_btn = tk.Button(
-            row2, text="Ngrok URL (checking…)",
+        self._brain_btn = tk.Button(
+            row2, text="Build Chev Brain",
             font=("Segoe UI", 9), bg=CARD, fg=GOLD, relief="flat",
             cursor="hand2", pady=7,
-            command=self._open_ngrok_url,
+            command=self._build_brain,
         )
-        self._ngrok_btn.pack(side="left", fill="x", expand=True, padx=(0, 3))
+        self._brain_btn.pack(side="left", fill="x", expand=True, padx=(0, 2))
 
         tk.Button(
-            row2, text="Ngrok Dashboard",
+            row2, text="Logs",
+            font=("Segoe UI", 9), bg=CARD, fg=WHITE, relief="flat",
+            cursor="hand2", pady=7,
+            command=self._open_logs,
+        ).pack(side="left", fill="x", expand=True, padx=(2, 2))
+
+        tk.Button(
+            row2, text="Open WebUI Admin",
             font=("Segoe UI", 9), bg=CARD, fg=DIM, relief="flat",
             cursor="hand2", pady=7,
-            command=lambda: webbrowser.open("http://localhost:4040"),
-        ).pack(side="left", fill="x", expand=True, padx=(3, 0))
+            command=lambda: webbrowser.open(WEBUI + "/admin/models"),
+        ).pack(side="left", fill="x", expand=True, padx=(2, 0))
+
+        # Quick-open buttons — tunnel row (Cloudflare quick tunnel → Dexter :8080)
+        trow = tk.Frame(btns, bg=BG)
+        trow.pack(fill="x", pady=(0, 4))
+
+        tk.Button(
+            trow, text="🌐 Share Link",
+            font=("Segoe UI", 9), bg=CARD, fg=GOLD, relief="flat",
+            cursor="hand2", pady=7,
+            command=self._start_tunnel,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 2))
+
+        self._tunnel_lbl = tk.Label(
+            trow, text="off", font=("Segoe UI", 8), bg=CARD, fg=DIM,
+            anchor="w", cursor="hand2", pady=7,
+        )
+        self._tunnel_lbl.pack(side="left", fill="x", expand=True, padx=(2, 0))
+        self._tunnel_lbl.bind("<Button-1>", lambda e: self._open_tunnel_link())
 
         # ── VS Code Terminal Checklist ───────────────────────────────────────
         chk_outer = tk.Frame(self.root, bg=CARD, highlightbackground=BORDER,
@@ -180,8 +199,8 @@ class ChevLauncher:
 
         hdr = tk.Frame(chk_outer, bg=CARD)
         hdr.pack(fill="x", padx=10, pady=(8, 2))
-        tk.Label(hdr, text="VS CODE TERMINAL CHECKLIST",
-                 font=("Segoe UI", 8, "bold"), bg=CARD, fg=GOLD).pack(side="left")
+        tk.Label(hdr, text="STARTUP SCRIPTS",
+                  font=("Segoe UI", 8, "bold"), bg=CARD, fg=GOLD).pack(side="left")
         tk.Label(hdr, text="tick when running",
                  font=("Segoe UI", 7), bg=CARD, fg=DIM).pack(side="right")
 
@@ -225,9 +244,9 @@ class ChevLauncher:
         note_row = tk.Frame(chk_outer, bg=CARD)
         note_row.pack(fill="x", padx=10, pady=(4, 8))
         tk.Label(note_row,
-                 text="engines.py · patterns.py — imported by dexter.py, never run directly",
-                 font=("Segoe UI", 7), bg=CARD, fg=DIM, wraplength=330,
-                 justify="left").pack(anchor="w")
+                  text="Launcher starts these (guarded). Or copy the command to run manually in VS Code.",
+                  font=("Segoe UI", 7), bg=CARD, fg=DIM, wraplength=330,
+                  justify="left").pack(anchor="w")
 
         self._bar = tk.Label(self.root, text="Checking services…",
                              font=("Segoe UI", 9), bg=BG, fg=DIM, wraplength=360)
@@ -273,25 +292,251 @@ class ChevLauncher:
         except Exception as e:
             self._bar.config(text=f"Couldn't open Docker: {e}")
 
-    def _start_ngrok(self):
-        if self._status["ngrok"]:
-            self._bar.config(text=f"Ngrok running → {self._ngrok_url or 'fetching URL…'}")
-            return
+    def _ollama_models(self):
         try:
-            subprocess.Popen(
-                [NGROK_EXE, "http", "8080"],
+            r = subprocess.run(
+                ["ollama", "list"],
+                capture_output=True, text=True, timeout=10,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            self._bar.config(text="Ngrok starting — wait a few seconds…")
-        except Exception as e:
-            self._bar.config(text=f"Couldn't start Ngrok: {e}")
+            return r.stdout
+        except Exception:
+            return ""
 
-    def _open_ngrok_url(self):
-        url = self._ngrok_url or _get_ngrok_url()
-        if url:
-            webbrowser.open(url)
+    def _build_brain(self):
+        if self._check_brain():
+            self._bar.config(
+                text=f"Chev Brain ({CHEV_BRAIN_NAME} + {CHEV_BRAIN_LEARN_NAME}) "
+                     f"already built — ready to use."
+            )
+            return
+
+        self._bar.config(text=f"Building brains (one-time, ~30s each)…")
+
+        def _do_build():
+            try:
+                existing = self._ollama_models()
+                built = []
+                for name, modelfile in (
+                    (CHEV_BRAIN_NAME, CHEV_BRAIN_MODELFILE),
+                    (CHEV_BRAIN_LEARN_NAME, CHEV_BRAIN_LEARN_MODELFILE),
+                ):
+                    if name in existing:
+                        continue
+                    subprocess.run(
+                        ["ollama", "create", name, "-f", modelfile],
+                        capture_output=True, text=True, timeout=300,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                    existing = self._ollama_models()
+                    built.append(name)
+
+                if self._check_brain():
+                    self._brain_built = True
+                    self._status["brain"] = True
+                    self.root.after(0, lambda: self._set_dot("brain", True))
+                    self.root.after(
+                        0,
+                        lambda: self._bar.config(
+                            text=f"{CHEV_BRAIN_NAME} + {CHEV_BRAIN_LEARN_NAME} built. Point the "
+                                  f"clone at {CHEV_BRAIN_NAME} and learning at {CHEV_BRAIN_LEARN_NAME} "
+                                  f"(Admin → Models), then restart Ollama."
+                        ),
+                    )
+                else:
+                    self.root.after(
+                        0,
+                        lambda: self._bar.config(
+                            text="Build incomplete — one brain missing. Click Build Chev Brain again."
+                        ),
+                    )
+            except Exception as e:
+                self.root.after(0, lambda: self._bar.config(text=f"Brain build failed: {e}"))
+
+        threading.Thread(target=_do_build, daemon=True).start()
+
+    # ── Auto-start (guarded, hidden, logged) ─────────────────────────────────
+
+    def _ensure_log_dir(self):
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+        except Exception:
+            pass
+
+    def _log_path(self, name):
+        return os.path.join(LOG_DIR, name + ".log")
+
+    def _py_running(self, script):
+        try:
+            r = subprocess.run(
+                ["wmic", "process", "where", "name='python.exe'", "get", "CommandLine"],
+                capture_output=True, text=True, timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            return script in r.stdout
+        except Exception:
+            return False
+
+    def _ollama_up(self):
+        return _check("http://localhost:11434", timeout=4)
+
+    def _start_ollama(self):
+        if self._ollama_up():
+            self._bar.config(text="Ollama already running.")
+            return
+        try:
+            self._ensure_log_dir()
+            f = open(self._log_path("ollama"), "ab", 0)
+            subprocess.Popen(["ollama", "serve"], stdout=f, stderr=f,
+                             creationflags=subprocess.CREATE_NO_WINDOW)
+            self._bar.config(text="Ollama starting…")
+        except Exception as e:
+            self._bar.config(text=f"Ollama start failed: {e}")
+
+    def _start_dexter(self):
+        if self._py_running("dexter"):
+            self._bar.config(text="Dexter already running.")
+            return
+        try:
+            self._ensure_log_dir()
+            f = open(self._log_path("dexter"), "ab", 0)
+            p = subprocess.Popen([sys.executable, DEXTER_SCRIPT], stdout=f, stderr=f,
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+            self._procs["dexter"] = p.pid
+            self._bar.config(text="Dexter starting…")
+        except Exception as e:
+            self._bar.config(text=f"Dexter start failed: {e}")
+
+    def _start_telegram(self):
+        if self._check_telegram():
+            self._bar.config(text="Telegram already running.")
+            return
+        try:
+            self._ensure_log_dir()
+            f = open(self._log_path("telegram"), "ab", 0)
+            p = subprocess.Popen([sys.executable, TELEGRAM_SCRIPT], stdout=f, stderr=f,
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+            self._procs["telegram"] = p.pid
+            self._bar.config(text="Telegram starting…")
+        except Exception as e:
+            self._bar.config(text=f"Telegram start failed: {e}")
+
+    def _start_tunnel(self):
+        if self._tunnel_proc is not None:
+            self._bar.config(text="Tunnel already running — link is in the Share Link box.")
+            return
+        # Dexter must be serving :8080 for the tunnel to have something to point at
+        if not _check(TERMINAL, timeout=2):
+            self._bar.config(text="Dexter not up on :8080 — starting it…")
+            self._start_dexter()
+
+        self._tunnel_lbl.config(text="starting…", fg=DIM)
+        try:
+            self._ensure_log_dir()
+            f = open(self._log_path("tunnel"), "ab", 0)
+            proc = subprocess.Popen(
+                [CLOUDFLARED_EXE, "tunnel", "--url", TERMINAL],
+                stdout=f, stderr=f,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            self._tunnel_proc = proc
+        except Exception as e:
+            self._tunnel_lbl.config(text="failed", fg=RED)
+            self._bar.config(text=f"Tunnel start failed: {e}")
+            return
+
+        def _watch():
+            import re as _re
+            url_re = _re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+            for _ in range(60):  # up to ~30s for the URL to appear
+                try:
+                    with open(self._log_path("tunnel"), "r",
+                              encoding="utf-8", errors="replace") as fh:
+                        seen = fh.read()
+                except Exception:
+                    seen = ""
+                m = url_re.search(seen)
+                if m:
+                    self._set_tunnel_live(m.group(0))
+                    return
+                time.sleep(0.5)
+            self.root.after(
+                0, lambda: self._tunnel_lbl.config(text="no url — see logs/tunnel", fg=RED)
+            )
+
+        threading.Thread(target=_watch, daemon=True).start()
+
+    def _set_tunnel_live(self, url):
+        self._tunnel_url = url
+        self._tunnel_lbl.config(text=url, fg=GREEN)
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(url)
+        except Exception:
+            pass
+        self._bar.config(text=f"Tunnel live — link copied to clipboard: {url}")
+
+    def _open_tunnel_link(self):
+        if self._tunnel_url:
+            webbrowser.open(self._tunnel_url)
         else:
-            self._bar.config(text="Ngrok not running — click the Ngrok service card to start it.")
+            self._bar.config(text="No tunnel link yet — click 🌐 Share Link first.")
+
+    def _open_logs(self):
+        # Single instance: focus the existing viewer instead of stacking threads
+        viewer = getattr(self, "_logs_viewer", None)
+        if viewer is not None and viewer.winfo_exists():
+            viewer.lift()
+            return
+
+        viewer = tk.Toplevel(self.root)
+        self._logs_viewer = viewer
+        viewer.title("Chev Logs")
+        viewer.geometry("720x520")
+        viewer.configure(bg=BG)
+
+        txt = tk.Text(viewer, bg="#0d1117", fg=WHITE,
+                      font=("Courier New", 9), wrap="none", state="disabled")
+        txt.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+        scroll = tk.Scrollbar(viewer, command=txt.yview)
+        txt.config(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+
+        stop = threading.Event()
+
+        def _on_close():
+            stop.set()
+            viewer.destroy()
+        viewer.protocol("WM_DELETE_WINDOW", _on_close)
+
+        def _render(out):
+            try:
+                txt.config(state="normal")
+                txt.delete("1.0", "end")
+                txt.insert("end", out)
+                txt.see("end")
+                txt.config(state="disabled")
+            except Exception:
+                pass  # widget already destroyed
+
+        def _tail():
+            while not stop.is_set():
+                try:
+                    parts = []
+                    for n in ("ollama", "dexter", "telegram"):
+                        p = self._log_path(n)
+                        if os.path.exists(p):
+                            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                                lines = fh.read().splitlines()
+                            parts.append(f"===== {n} (last 250 lines) =====")
+                            parts.extend(lines[-250:])
+                    if not stop.is_set():
+                        txt.after(0, lambda o="\n".join(parts): _render(o))
+                except Exception:
+                    pass
+                time.sleep(1.5)
+
+        threading.Thread(target=_tail, daemon=True).start()
 
     # ── Logic ────────────────────────────────────────────────────────────────
 
@@ -300,19 +545,18 @@ class ChevLauncher:
             self._start_docker()
             return
 
-        # Start ngrok if not already up
-        if not self._status["ngrok"]:
-            self._start_ngrok()
+        # Start the brain + bots (each guarded so double-clicks never double-start)
+        self._start_ollama()
+        self._start_dexter()
+        self._start_telegram()
 
-        ngrok_url = self._ngrok_url or TERMINAL
         try:
             subprocess.Popen(
-                [CHROME_EXE, "--new-window", MONITOR_URL, ngrok_url, WEBUI],
+                [CHROME_EXE, "--new-window", MONITOR_URL, WEBUI],
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
         except Exception:
             webbrowser.open(MONITOR_URL)
-            webbrowser.open(ngrok_url)
             webbrowser.open(WEBUI)
 
     def _check_telegram(self):
@@ -333,19 +577,17 @@ class ChevLauncher:
             dexter   = _check(f"{TERMINAL}/api/trades")
             gemini   = _check("http://localhost:11434", timeout=4)
             telegram = self._check_telegram()
-            ngrok    = _check(NGROK_API, timeout=2)
-            ngrok_url = _get_ngrok_url() if ngrok else None
+            brain    = self._check_brain()
 
             self._status = {
                 "docker": docker, "webui": webui, "dexter": dexter,
-                "gemini": gemini, "telegram": telegram, "ngrok": ngrok,
+                "gemini": gemini, "telegram": telegram, "brain": brain,
             }
-            self._ngrok_url = ngrok_url
             self.root.after(0, self._apply_status)
             time.sleep(5)
 
     def _apply_status(self):
-        for key in ("docker", "webui", "dexter", "gemini", "telegram", "ngrok"):
+        for key in ("docker", "webui", "dexter", "gemini", "telegram", "brain"):
             self._set_dot(key, self._status[key])
 
         all_up = all(self._status.values())
@@ -354,14 +596,14 @@ class ChevLauncher:
         else:
             self._launch_btn.config(bg="#1e3a5f", fg=WHITE)
 
-        # Update ngrok button label with live URL
-        if self._ngrok_url:
-            short = self._ngrok_url.replace("https://", "")
-            self._ngrok_btn.config(text=short, fg=GREEN)
-        else:
-            self._ngrok_btn.config(text="Ngrok offline", fg=DIM)
-
         self._bar.config(text=f"Last checked: {time.strftime('%H:%M:%S')}")
+
+    def _check_brain(self):
+        out = self._ollama_models()
+        return (
+            CHEV_BRAIN_NAME in out
+            and CHEV_BRAIN_LEARN_NAME in out
+        )
 
     def _set_dot(self, key, online):
         self._dots[key].config(fg=GREEN if online else RED)

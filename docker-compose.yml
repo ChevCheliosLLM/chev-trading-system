@@ -1,0 +1,28 @@
+# Open WebUI for ChevTools
+# Chev (escalation model "chev-chelios-clone") runs on the LOCAL Ollama qwen2.5:32b.
+# Ollama runs on the Windows HOST at 0.0.0.0:11434.
+# Because Open WebUI runs INSIDE Docker, "localhost" there means the container,
+# NOT the host — so it must reach Ollama via host.docker.internal.
+#
+# Daily start:  docker compose -f C:\ChevTools\docker-compose.yml up -d
+# Daily stop:   docker compose -f C:\ChevTools\docker-compose.yml down
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:cuda
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    environment:
+      # THE FIX: point Open WebUI at the host Ollama (was "/ollama", a dead placeholder)
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - USE_OLLAMA_DOCKER=false
+      - USE_CUDA_DOCKER=true
+    volumes:
+      - open-webui:/app/backend/data          # preserves users / models / prompts
+      - /c/ChevTools/shared:/app/backend/shared
+    restart: unless-stopped
+
+volumes:
+  open-webui:
+    name: open-webui                           # reuse the existing data volume
+    external: true                             # it pre-exists; don't let Compose manage it

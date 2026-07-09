@@ -14,7 +14,7 @@ jobs:
       - name: Checkout chev-terminal
         uses: actions/checkout@v4
 
-      - name: Push monitor.html as index.html via GitHub API
+      - name: Push monitor.html as monitor.html via GitHub API
         env:
           GH_TOKEN: ${{ secrets.CHEV_MONITOR_TOKEN }}
         run: |
@@ -23,11 +23,11 @@ jobs:
           # Base64-encode the file
           CONTENT=$(base64 -w 0 monitor.html)
 
-          # Get current SHA of index.html in target repo
+          # Get current SHA of monitor.html in target repo
           RESPONSE=$(curl -s \
             -H "Authorization: token ${GH_TOKEN}" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/chevcheliosllm/chev-monitor/contents/index.html")
+            "https://api.github.com/repos/chevcheliosllm/chev-monitor/contents/monitor.html")
 
           echo "API response: $RESPONSE"
 
@@ -47,7 +47,7 @@ jobs:
             PAYLOAD=$(python3 -c "
           import json, sys
           print(json.dumps({
-            'message': 'Sync monitor.html → index.html from chev-terminal [bot]',
+            'message': 'Sync monitor.html → monitor.html from chev-terminal [bot]',
             'content': sys.argv[1],
             'sha': sys.argv[2]
           }))" "$CONTENT" "$SHA")
@@ -55,18 +55,19 @@ jobs:
             PAYLOAD=$(python3 -c "
           import json, sys
           print(json.dumps({
-            'message': 'Sync monitor.html → index.html from chev-terminal [bot]',
+            'message': 'Sync monitor.html → monitor.html from chev-terminal [bot]',
             'content': sys.argv[1]
           }))" "$CONTENT")
           fi
 
-          # Push as index.html
+          # Push as monitor.html (separate file — do NOT clobber the main
+          # dashboard's index.html in the same repo)
           RESULT=$(curl -s -X PUT \
             -H "Authorization: token ${GH_TOKEN}" \
             -H "Accept: application/vnd.github.v3+json" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            "https://api.github.com/repos/chevcheliosllm/chev-monitor/contents/index.html")
+            "https://api.github.com/repos/chevcheliosllm/chev-monitor/contents/monitor.html")
 
           echo "PUT result: $RESULT"
 
@@ -78,5 +79,5 @@ jobs:
             print('ERROR:', d['message'])
             sys.exit(1)
           else:
-            print('Success — monitor.html synced as index.html.')
+            print('Success — monitor.html synced as monitor.html.')
           "

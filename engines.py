@@ -2119,3 +2119,283 @@ def format_survey_for_chev(survey: MarketSurvey) -> str:
                 lines.append("")
 
     return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INVALIDATION CANDIDATES ENGINE
+# Input:  direction, entry price, a normalized hypothesis bucket, and whatever
+#         structures the caller already computed (fib anchors, range bounds,
+#         breakout level, pattern invalidation, SR levels, VAL/VAH, a fallback
+#         swing, and the ATR-floor stop distance for this trade_type).
+# Output: up to 3 InvalidationCandidate — never predicts, only measures where
+#         the thesis dies, in order of "most likely to be right first".
+# Never:  modifies the scorer, the gauntlet, or any existing engine function.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class InvalidationCandidate:
+    """One named, priced place a trade thesis can die. Never modified after creation."""
+    label: str            # "THESIS-KILLER" | "STRUCTURAL BACKSTOP" | "NOISE FLOOR"
+    price: float
+    pct_from_entry: float  # % distance from the ENTRY ZONE, never from current price
+    passes_floor: bool    # True if this candidate clears the ATR noise floor
+    note: str
+
+
+_BREATHING_ROOM_NOTE = (
+    "leave at least 0.5x ATR of breathing room beyond this price so normal "
+    "movement doesn't trigger it"
+)
+_NOISE_FLOOR_NOTE = (
+    "not structural — the line below which any stop is a coin flip"
+)
+
+# hypothesis_type buckets this function understands; anything else (including
+# "", None, or an unrecognized engine hypothesis name) falls back to nearest_swing_beyond.
+_PULLBACK_TYPES = {"pullback", "golden_pocket", "gp"}
+_RANGE_FADE_TYPES = {"range_fade", "range"}
+_BREAKOUT_TYPES = {"breakout"}
+_PATTERN_TYPES = {"pattern", "head_and_shoulders", "h&s", "flag", "pennant"}
+
+
+def compute_invalidation_candidates(
+    direction: Literal["long", "short"],
+    entry_price: float,
+    hypothesis_type: str,
+    noise_floor_distance: float,
+    fib_anchor_high: Optional[float] = None,
+    fib_anchor_low: Optional[float] = None,
+    range_low: Optional[float] = None,
+    range_high: Optional[float] = None,
+    breakout_level: Optional[float] = None,
+    pattern_invalidation: Optional[float] = None,
+    sr_levels: Optional[List[Dict]] = None,   # [{"price": float, "kind": "support"|"resistance"}, ...]
+    val: Optional[float] = None,
+    vah: Optional[float] = None,
+    nearest_swing_beyond: Optional[float] = None,
+) -> List[InvalidationCandidate]:
+    """
+    Map a setup onto up to 3 named invalidation candidates:
+      1. THESIS-KILLER    — the price that specifically kills THIS hypothesis type.
+      2. STRUCTURAL BACKSTOP — the next SR level or VAL/VAH beyond the thesis-killer.
+      3. NOISE FLOOR      — the ATR-based minimum stop for this trade_type, labeled
+                             explicitly as not structural.
+    Returns fewer than 3 (down to an empty list) when the inputs don't support a
+    candidate — an empty list means "no invalidation candidates found", the only
+    situation in which Chev's "no invalidation" skip is legal (per the lean prompt).
+    Pure function: no I/O, never modifies its inputs.
+    """
+    is_long = direction == "long"
+    ht = (hypothesis_type or "").strip().lower()
+    candidates: List[InvalidationCandidate] = []
+
+    def _pct(price: float) -> float:
+        return abs(price - entry_price) / entry_price * 100.0 if entry_price else 0.0
+
+    def _passes(price: float) -> bool:
+        return abs(entry_price - price) >= noise_floor_distance
+
+    def _beyond(price: float, reference: float) -> bool:
+        """True if `price` is further from entry than `reference`, in the invalidation direction."""
+        return price < reference if is_long else price > reference
+
+    # ---- Candidate 1: THESIS-KILLER ----------------------------------------
+    killer_price: Optional[float] = None
+    if ht in _PULLBACK_TYPES:
+        killer_price = fib_anchor_low if is_long else fib_anchor_high
+    elif ht in _RANGE_FADE_TYPES:
+        killer_price = range_low if is_long else range_high
+    elif ht in _BREAKOUT_TYPES:
+        killer_price = breakout_level
+    elif ht in _PATTERN_TYPES:
+        killer_price = pattern_invalidation
+    if killer_price is None:
+        killer_price = nearest_swing_beyond  # unknown hypothesis, or the mapped field was empty
+
+    if killer_price is not None:
+        candidates.append(InvalidationCandidate(
+            label="THESIS-KILLER",
+            price=round(killer_price, 5),
+            pct_from_entry=round(_pct(killer_price), 2),
+            passes_floor=_passes(killer_price),
+            note=_BREATHING_ROOM_NOTE,
+        ))
+
+    # ---- Candidate 2: STRUCTURAL BACKSTOP -----------------------------------
+    if killer_price is not None:
+        backstop_price: Optional[float] = None
+        for lvl in (sr_levels or []):
+            lvl_price = lvl.get("price")
+            if lvl_price is not None and _beyond(lvl_price, killer_price):
+                if backstop_price is None or _beyond(backstop_price, lvl_price):
+                    backstop_price = lvl_price  # nearest beyond the killer, not the furthest
+        va_price = val if is_long else vah
+        if va_price is not None and _beyond(va_price, killer_price):
+            if backstop_price is None or _beyond(backstop_price, va_price):
+                backstop_price = va_price
+
+        if backstop_price is not None:
+            candidates.append(InvalidationCandidate(
+                label="STRUCTURAL BACKSTOP",
+                price=round(backstop_price, 5),
+                pct_from_entry=round(_pct(backstop_price), 2),
+                passes_floor=_passes(backstop_price),
+                note=_BREATHING_ROOM_NOTE,
+            ))
+
+    # ---- Candidate 3: NOISE FLOOR -------------------------------------------
+    if noise_floor_distance and entry_price:
+        floor_price = entry_price - noise_floor_distance if is_long else entry_price + noise_floor_distance
+        candidates.append(InvalidationCandidate(
+            label="NOISE FLOOR",
+            price=round(floor_price, 5),
+            pct_from_entry=round(_pct(floor_price), 2),
+            # This candidate IS the floor by construction — it can't meaningfully
+            # fail its own check. (A raw _passes() call here is floating-point
+            # flaky: entry - (entry - d) isn't always bit-exact d.)
+            passes_floor=True,
+            note=_NOISE_FLOOR_NOTE,
+        ))
+
+    return candidates[:3]
+
+
+def format_invalidation_candidates_for_chev(candidates: List[InvalidationCandidate], label_suffix: str = "") -> str:
+    """
+    Build the "INVALIDATION CANDIDATES" text block for Chev's escalation message.
+    Prints "none found" when the list is empty — the only wording that makes a
+    "no invalidation" SKIP legal under the lean escalation prompt's skip discipline.
+    label_suffix (e.g. " (IF LONG)") lets a caller print both directions when
+    Dexter hasn't committed to one yet -- it never changes the underlying data.
+    """
+    if not candidates:
+        return f"INVALIDATION CANDIDATES{label_suffix}: none found\n\n"
+
+    lines = [f"INVALIDATION CANDIDATES{label_suffix} (priced from YOUR entry, not current price):"]
+    for c in candidates:
+        verdict = "PASS" if c.passes_floor else "FAIL"
+        lines.append(
+            f"  {c.label}: {c.price:.5f} ({c.pct_from_entry:.2f}% from entry) — "
+            f"{verdict} vs noise floor — {c.note}"
+        )
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VALIDATION CANDIDATES ENGINE  (mirror of the INVALIDATION CANDIDATES ENGINE)
+# Input:  direction, entry price, and the Opportunity engine's reward-side data
+#         (target_price, structural_rr, reward_profile, expected_trigger), plus
+#         the structural extreme the move targets (auction_extreme) and the
+#         entry->stop risk distance (so the R:R floor can be priced).
+# Output: up to 3 ValidationCandidate — never predicts, only measures where the
+#         thesis is CONFIRMED / COMPLETED, in order of "most likely to be right
+#         first".  The reward-side counterpart to the invalidation engine above:
+#         that one tells Chev where he dies; this one tells him where he wins.
+# Never:  modifies the scorer, the gauntlet, or any existing engine function.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MIN_RR = 1.0  # a trade below 1:1 reward isn't worth taking (mirrors the
+               # opportunity engine's "B" quality floor at structural_rr >= 1.0)
+
+
+@dataclass
+class ValidationCandidate:
+    """One named, priced place a trade thesis is confirmed/completed. Never modified after creation."""
+    label: str            # "THESIS-TARGET" | "STRUCTURAL EXTREME" | "R:R FLOOR"
+    price: float
+    pct_from_entry: float  # % distance from the ENTRY ZONE, never from current price
+    meets_floor: bool     # True if this candidate clears the minimum R:R floor
+    note: str
+
+
+def compute_validation_candidates(
+    direction: Literal["long", "short"],
+    entry_price: float,
+    target_price: Optional[float] = None,
+    structural_rr: Optional[float] = None,
+    reward_profile: Optional[str] = None,
+    expected_trigger: Optional[str] = None,
+    auction_extreme: Optional[float] = None,
+    risk_distance: float = 0.0,
+) -> List[ValidationCandidate]:
+    """
+    Map a setup onto up to 3 named validation candidates:
+      1. THESIS-TARGET     — the measured-move target where this thesis completes
+                              (the Opportunity engine's target_price).
+      2. STRUCTURAL EXTREME — the structural extreme this move is targeting
+                              (balance extreme / mid / fib extension, from reward_profile).
+      3. R:R FLOOR         — the minimum target price that satisfies the minimum
+                              reward/risk, labeled explicitly as the reward floor.
+    Returns fewer than 3 (down to an empty list) when the inputs don't support a
+    candidate — an empty list means "no validation candidates found", the honest
+    counterpart to "INVALIDATION CANDIDATES: none found".
+    Pure function: no I/O, never modifies its inputs.
+    """
+    is_long = direction == "long"
+    candidates: List[ValidationCandidate] = []
+
+    def _pct(price: float) -> float:
+        return abs(price - entry_price) / entry_price * 100.0 if entry_price else 0.0
+
+    def _in_reward_dir(price: float) -> bool:
+        """True if `price` is in the reward direction from entry (up for long, down for short)."""
+        return price > entry_price if is_long else price < entry_price
+
+    # ---- Candidate 1: THESIS-TARGET -----------------------------------------
+    if target_price is not None and _in_reward_dir(target_price):
+        candidates.append(ValidationCandidate(
+            label="THESIS-TARGET",
+            price=round(target_price, 5),
+            pct_from_entry=round(_pct(target_price), 2),
+            meets_floor=bool(structural_rr is not None and structural_rr >= _MIN_RR),
+            note=expected_trigger or "measured-move target where the thesis completes",
+        ))
+
+    # ---- Candidate 2: STRUCTURAL EXTREME ------------------------------------
+    if (auction_extreme is not None and _in_reward_dir(auction_extreme)
+            and (not candidates
+                 or abs(auction_extreme - candidates[0].price) / max(abs(candidates[0].price), 1e-10) > 0.001)):
+        candidates.append(ValidationCandidate(
+            label="STRUCTURAL EXTREME",
+            price=round(auction_extreme, 5),
+            pct_from_entry=round(_pct(auction_extreme), 2),
+            meets_floor=bool(structural_rr is not None and structural_rr >= _MIN_RR),
+            note=f"structural extreme this move targets ({reward_profile or 'structure'})",
+        ))
+
+    # ---- Candidate 3: R:R FLOOR ---------------------------------------------
+    if risk_distance and entry_price:
+        floor_price = entry_price + _MIN_RR * risk_distance if is_long else entry_price - _MIN_RR * risk_distance
+        candidates.append(ValidationCandidate(
+            label="R:R FLOOR",
+            price=round(floor_price, 5),
+            pct_from_entry=round(_pct(floor_price), 2),
+            # This candidate IS the floor by construction — it can't meaningfully
+            # fail its own check (same floating-point reasoning as the noise floor).
+            meets_floor=True,
+            note=f"minimum target that satisfies {_MIN_RR:.1f}:1 reward/risk — below this, not worth taking",
+        ))
+
+    return candidates[:3]
+
+
+def format_validation_candidates_for_chev(candidates: List[ValidationCandidate], label_suffix: str = "") -> str:
+    """
+    Build the "VALIDATION CANDIDATES" text block for Chev's escalation message —
+    the reward-side mirror of format_invalidation_candidates_for_chev.
+    Prints "none found" when the list is empty. label_suffix (e.g. " (IF LONG)")
+    lets a caller print both directions when Dexter hasn't committed to one yet.
+    """
+    if not candidates:
+        return f"VALIDATION CANDIDATES{label_suffix}: none found\n\n"
+
+    lines = [f"VALIDATION CANDIDATES{label_suffix} (priced from YOUR entry, not current price):"]
+    for c in candidates:
+        verdict = "OK" if c.meets_floor else "THIN"
+        lines.append(
+            f"  {c.label}: {c.price:.5f} ({c.pct_from_entry:.2f}% from entry) — "
+            f"{verdict} vs {_MIN_RR:.1f}:1 R:R floor — {c.note}"
+        )
+    lines.append("")
+    return "\n".join(lines) + "\n"

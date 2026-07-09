@@ -266,6 +266,7 @@ def api_close_trade():
         _gross_pnl   = round(target.get("position_size_usd", 0) * move_pct, 2)
         exit_pnl, _trade_cost = honest_sim.apply_costs(target, _gross_pnl, 1.0)
         outcome      = "WIN" if exit_pnl >= 0 else "LOSS"
+        outcome      = _classify_outcome(outcome, exit_pnl, target)  # Phase 6: force-close bypasses _do_postmortem, needs its own call
         try:
             honest_sim.record_close_R(target, round(exit_pnl + target.get("partial_net_pnl", 0.0), 2))
         except Exception as _rr_e:
@@ -597,10 +598,13 @@ def api_strategy_funnel():
 def api_strategy_performance():
     """Scorecard numbers + equity curve + R-multiple distribution + grade/tag win rates,
     all from chev_journal.json (closed trades) — the same file the Sheet exports from."""
-    journal = _load_journal()
-    closed  = [t for t in journal if t.get("outcome") in ("WIN", "LOSS")]
-    wins    = [t for t in closed if t["outcome"] == "WIN"]
-    losses  = [t for t in closed if t["outcome"] == "LOSS"]
+    journal   = _load_journal()
+    closed    = [t for t in journal if t.get("outcome") in ("WIN", "LOSS")]
+    wins      = [t for t in closed if t["outcome"] == "WIN"]
+    losses    = [t for t in closed if t["outcome"] == "LOSS"]
+    # Phase 6: SCRATCH (partial banked, remainder trailed near breakeven) is neither a
+    # win nor a loss -- excluded from `closed`/win_rate above, reported as its own count.
+    scratches = [t for t in journal if t.get("outcome") == "SCRATCH"]
 
     total_pnl  = sum(float(t.get("pnl", 0) or 0) for t in closed)
     gross_win  = sum(float(t.get("pnl", 0) or 0) for t in wins)
@@ -682,6 +686,7 @@ def api_strategy_performance():
         "total_closed":  len(closed),
         "wins":          len(wins),
         "losses":        len(losses),
+        "scratches":     len(scratches),
         "win_rate":      round(win_rate, 1),
         "profit_factor": round(profit_factor, 2) if profit_factor is not None else None,
         "expectancy":    round(expectancy, 2),
@@ -1911,6 +1916,7 @@ CHAT_ID = "-5501297384"
 _sl_notify_ts: dict = {}  # symbol -> last SL trail notification timestamp (15-min cooldown)
 OPENWEBUI_API_KEY = "sk-91bd167cca0142c983379ebe27b4e621"
 OPENWEBUI_URL     = "http://localhost:3000/api/chat/completions"
+ESCALATION_MODEL_ID = "chev-chelios-clone"  # lean escalation model in Open WebUI — its API id is "chev-chelios-clone" (display name "chev-escalation"); must match the model id registered in Open WebUI
 
 FIREBASE_URL  = "https://chev-monitor-default-rtdb.firebaseio.com"
 JOURNAL_PATH       = r"C:\ChevTools\chev_journal.json"
@@ -3000,7 +3006,7 @@ def _log_chev_decision(symbol, primary_tf, dexter_score, dexter_reasons, decisio
             print(f"[Dexter] Skip Log sheet write failed: {_e}")
 
 
-def _call_chev(messages, timeout=120):
+def _call_chev(messages, timeout=120, model_id=MODEL_ID):
     """Call Chev via Open WebUI — his identity, tools, and model config all live there."""
     global _chev_online, _chev_last_call, _chev_rate_limit_until
     with _chev_lock:
@@ -3011,7 +3017,7 @@ def _call_chev(messages, timeout=120):
             resp = requests.post(
                 OPENWEBUI_URL,
                 headers={"Authorization": f"Bearer {OPENWEBUI_API_KEY}", "Content-Type": "application/json"},
-                json={"model": MODEL_ID, "messages": messages},
+                json={"model": model_id, "messages": messages},
                 timeout=timeout
             )
             data = resp.json()
@@ -3242,12 +3248,17 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
     def _fmt_entry(i, e):
         moves = e.get("chev_moves", [])
         moves_line = ("\nManagement: " + " | ".join(moves)) if moves else ""
+        # Cap analysis so the playbook-rewrite prompt (sent to the 8192-ctx
+        # chev-32b-learn brain) can never silently truncate the trade history.
+        analysis = (e.get("analysis") or "none")
+        if len(analysis) > 400:
+            analysis = analysis[:400].rstrip() + "…"
         return (
             f"Trade {i+1}: {e['symbol']} {e['direction'].upper()} | {e['outcome']} ${e['pnl']:+.2f} | "
             f"held {e.get('duration','?')} | {e['ts'][:10]} [{e.get('close_type','?')}]\n"
             f"Confluences: {e.get('tags','none')}"
             f"{moves_line}\n"
-            f"Analysis: {e.get('analysis','none')}"
+            f"Analysis: {analysis}"
         )
     entries_text = "\n\n".join([_fmt_entry(i, e) for i, e in enumerate(recent)])
 
@@ -3314,8 +3325,10 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
             grade_stats[g] = {"w": 0, "l": 0}
         if e.get("outcome") == "WIN":
             grade_stats[g]["w"] += 1
-        else:
+        elif e.get("outcome") == "LOSS":
             grade_stats[g]["l"] += 1
+        # SCRATCH is neither -- excluded from grade accuracy, same as everywhere else
+        # in this function (Phase 6: don't train playbook lessons on fake losses).
     grade_lines = []
     for g in ("A+", "A", "B"):
         if g in grade_stats:
@@ -3525,12 +3538,61 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
     except Exception as e:
         print(f"[Playbook] Learning session failed: {e}")
 
+def _classify_outcome(base_outcome, pnl, trade):
+    """Phase 6 — the ONE place outcome gets reclassified. A trade that booked a partial
+    close earlier (e.g. +1R banked, then the remainder trailed out near breakeven) is
+    not a LOSS just because the FINAL leg alone was slightly negative -- the combined
+    realized PnL is what actually happened to the account.
+
+    Reclassifies LOSS -> SCRATCH when combined (partial + final leg) PnL is >= -0.1R,
+    or LOSS -> WIN when combined PnL is >= 0. Never fires for a trade with no partial
+    event (trade.get("partial_done") falsy), and never touches close_type (SL_HIT/
+    TP_HIT/etc. stay exactly as recorded) -- classification only, nothing about how
+    the trade closed or how partials execute.
+
+    Handles both the bare "WIN"/"LOSS" format and the "CLOSED (WIN)"/"CLOSED (LOSS)"
+    wrapped format used by Chev's manual swing-management close, so SCRATCH round-trips
+    correctly either way. Returns base_outcome unchanged in every other case.
+    """
+    wrapped = base_outcome.startswith("CLOSED (") and base_outcome.endswith(")")
+    inner = base_outcome[len("CLOSED ("):-1] if wrapped else base_outcome
+
+    if inner != "LOSS" or not trade.get("partial_done"):
+        return base_outcome
+
+    risk_usd = trade.get("risk_amount_usd", 0)
+    if not risk_usd:
+        return base_outcome
+
+    partial_pnl  = trade.get("partial_net_pnl", 0.0)
+    combined_pnl = pnl + partial_pnl
+    combined_r   = combined_pnl / risk_usd
+
+    if combined_r >= 0:
+        inner = "WIN"
+    elif combined_r >= -0.1:
+        inner = "SCRATCH"
+    else:
+        return base_outcome  # still a real loss even combined -- nothing to change
+
+    new_outcome = f"CLOSED ({inner})" if wrapped else inner
+    print(f"[OUTCOME] {trade.get('symbol','?')} reclassified {base_outcome} -> {new_outcome} "
+          f"(final leg ${pnl:+.2f} + partial ${partial_pnl:+.2f} = {combined_r:+.2f}R combined)")
+    return new_outcome
+
+
 def _do_postmortem(trade, outcome, pnl, exit_price):
     """Runs in background thread. Asks Chev to analyze the closed trade and saves to journal."""
+    outcome = _classify_outcome(outcome, pnl, trade)
     duration = "unknown"
-    if trade.get("opened_at"):
+    # "opened_at" is only ever set in-memory at the moment a trade opens -- it does not survive
+    # a Dexter restart while the trade is still open (unlike "open_ts", which is persisted to
+    # and restored from the Sheet). Fall back to "open_ts" so duration keeps working across a
+    # restart instead of silently going "unknown" for any trade that outlives one.
+    _opened_raw = trade.get("opened_at") or trade.get("open_ts")
+    if _opened_raw:
         try:
-            opened = datetime.strptime(trade["opened_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            opened = datetime.strptime(_opened_raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
             delta  = datetime.now(timezone.utc) - opened
             h = int(delta.total_seconds() // 3600)
             m = int((delta.total_seconds() % 3600) // 60)
@@ -3668,6 +3730,7 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
         "structure_4h":     trade.get("structure_4h", ""),
         "invalidation":     trade.get("invalidation", ""),
         "confirmation":     trade.get("confirmation", ""),
+        "structural_read":  trade.get("structural_read", ""),
         "analysis":         analysis,
         "reasoning_quality": reasoning_quality,
         "setup_grade":      trade.get("setup_grade", ""),
@@ -3689,7 +3752,7 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
         with open(JOURNAL_PATH, "w", encoding="utf-8") as f:
             json.dump(journal, f, indent=2)
         print(f"[Journal] Post-mortem saved for {trade['symbol']} ({outcome}). Total: {len(journal)} entries.")
-        icon = "✓" if outcome == "WIN" else "✗"
+        icon = "✓" if outcome == "WIN" else ("➖" if outcome == "SCRATCH" else "✗")
         pnl_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
         send_telegram_alert(f"{trade['symbol']} {trade['direction'].upper()} {icon} {pnl_str}")
         global _combined_closed_count
@@ -5767,27 +5830,15 @@ def _macro_trend_context(df_4h):
 
         candle_summary = f"  Last {len(closes)} candles: {bull_count} bullish / {bear_count} bearish"
 
-        if verdict in ("STRONG_UPTREND", "UPTREND"):
-            implication = (
-                "  ⚠ TREND IMPLICATION: In an uptrend, RESISTANCE levels are CONTINUATION ZONES, not reversal zones.\n"
-                "    Price breaking resistance = trend continuation. Shorts at resistance are counter-trend and low probability.\n"
-                "    Only short if there is an explicit 4H BOS (break of structure) or CHoCH (change of character) confirming trend reversal."
-            )
-        elif verdict in ("STRONG_DOWNTREND", "DOWNTREND"):
-            implication = (
-                "  ⚠ TREND IMPLICATION: In a downtrend, SUPPORT levels are CONTINUATION ZONES, not reversal zones.\n"
-                "    Price breaking support = trend continuation. Longs at support are counter-trend and low probability.\n"
-                "    Only long if there is an explicit 4H BOS or CHoCH confirming trend reversal."
-            )
-        else:
-            implication = "  Both directions valid. Mean-reversion (long at support / short at resistance) is the primary strategy."
-
+        # Phase 2b: the TREND IMPLICATION paragraph (per-verdict resistance/support-as-
+        # continuation-zone explanation) is deleted here -- it duplicated the wrapper's
+        # counter_trend_warning almost verbatim. Verdict + HH/HL counts are the signal;
+        # that explanation now lives once, in the wrapper.
         block = (
             f"\n--- 4H Macro Trend Context (last ~3 days) ---\n"
             f"  Verdict    : {summary}\n"
             f"{candle_summary}\n"
             f"{vol_note}\n"
-            f"{implication}\n"
         )
         return block, verdict
 
@@ -5815,7 +5866,12 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zon
         except ValueError:
             _hi = TF_HIERARCHY.index("1h")
         full_data_tfs    = TF_HIERARCHY[_hi : _hi + 3]           # e.g. ["1h","4h","1d"]
-        full_data_limits = dict(zip(full_data_tfs, [500, 250, 150]))
+        # Phase 2b diet: raw row counts, not fetch depth (tf_fetch_limits above still
+        # fetches deep history for every computed section -- SR/VP/auction/swings/fib
+        # all still see the full window). Position 2 (e.g. "1d" when primary=1h) gets 0
+        # raw rows -- PDH/PDL, macro trend context, and the per-TF summary already carry
+        # that timeframe's story; see the last-5-closes fallback line below instead.
+        full_data_limits = dict(zip(full_data_tfs, [30, 15, 0]))
 
         # ── Fetch all TFs in parallel ──────────────────────────────────
         tf_data = {}
@@ -6049,8 +6105,8 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zon
                     imb = "more bids" if ob["imbalance"] > 0.1 else "more asks" if ob["imbalance"] < -0.1 else "balanced"
                     lines.append(f"    {ob['exchange']:20s} {ob['imbalance']:+.3f} ({imb})")
 
-                lines.append("  ASKS price|dist%|qty|tag (closest first):")
-                for p, q, label in agg["ask_clusters"][:30]:
+                lines.append("  ASKS price|dist%|qty|tag (top 5 by size):")
+                for p, q, label in sorted(agg["ask_clusters"], key=lambda c: -c[1])[:5]:
                     dist = (p - agg["mid_price"]) / agg["mid_price"] * 100
                     lines.append(f"  {p:.5f}|+{dist:.2f}%|{q:.3f}{label}")
                 if agg["ask_air_pockets"]:
@@ -6058,8 +6114,8 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zon
                     for p, dist in agg["ask_air_pockets"]:
                         lines.append(f"  {p:.5f}|{dist:.2f}%")
 
-                lines.append("  BIDS price|dist%|qty|tag (closest first):")
-                for p, q, label in agg["bid_clusters"][:30]:
+                lines.append("  BIDS price|dist%|qty|tag (top 5 by size):")
+                for p, q, label in sorted(agg["bid_clusters"], key=lambda c: -c[1])[:5]:
                     dist = (agg["mid_price"] - p) / agg["mid_price"] * 100
                     lines.append(f"  {p:.5f}|-{dist:.2f}%|{q:.3f}{label}")
                 if agg["bid_air_pockets"]:
@@ -6091,14 +6147,12 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zon
                     "\n--- Futures (Binance perpetual) ---",
                     f"  Open Interest : {oi:,.2f} contracts  (6h: {_oi6_s} | 24h: {_oi24_s})",
                     f"  Funding Rate  : {fr:+.4f}%  ({fr_label})",
-                    "  How to read: price up + OI up = real participation (trend healthy). "
-                    "Price up + OI down = weak rally (bearish divergence). Mirror logic for downmoves.",
-                    "  Extreme funding = the crowded side pays to stay in — fuel for a squeeze against them.",
+                    # Phase 2b: "how to read OI+price" teaching text deleted -- moved to
+                    # the lean prompt (stated once, not per escalation).
                 ]
 
         # ── Context summaries for non-primary TFs (no raw candles) ──────────
         lines.append(f"\n\n=== HIGHER / LOWER TIMEFRAME CONTEXT ===")
-        lines.append("(Rich summaries — no raw rows. Use these to understand the bigger picture.)")
 
         for tf in all_tfs:
             if tf in full_data_tfs:
@@ -6119,13 +6173,22 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zon
         for _i, _ftf in enumerate(full_data_tfs):
             _lim  = full_data_limits[_ftf]
             _role = "PRIMARY TIMEFRAME" if _i == 0 else f"HIGHER TIMEFRAME +{_i}"
+            df = tf_data.get(_ftf)
+            if _lim == 0:
+                # Phase 2b: no raw dump for this TF -- PDH/PDL, macro trend context, and
+                # the per-TF summary loop already carry its story. One fallback line only.
+                # (df.iloc[-0:] would be the WHOLE frame, not empty -- -0 == 0 in Python --
+                # so this TF is handled entirely separately from the slicing below.)
+                if df is not None and len(df) >= 5:
+                    _last5_str = ", ".join(f"{c:.5f}" for c in df["close"].iloc[-5:].tolist())
+                    lines.append(f"\n{_ftf.upper()} last 5 closes: {_last5_str}")
+                continue
             lines.append(f"\n\n=== {_role}: {_ftf.upper()} — FULL CANDLE DATA (last {_lim} candles) ===")
             if _i == 0:
                 lines.append("This is your primary chart. All indicators pre-computed per candle.")
             else:
                 lines.append("Higher timeframe context — compile your own structure, swings, and key levels from this data.")
             lines.append(f"Trade type for this TF: {TF_TRADE_TYPE.get(_ftf, 'day')}")
-            df = tf_data.get(_ftf)
             if df is None:
                 lines.append(f"  [{_ftf.upper()} data unavailable]")
                 continue
@@ -6150,11 +6213,11 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zon
                     lines += patterns
                 eq_highs, eq_lows = _detect_equal_highs_lows(df_out)
                 if eq_highs:
-                    lines.append("Equal Highs (liquidity above — do NOT place SL just above these; they will be swept before a real downward move):")
+                    lines.append("Equal Highs (liquidity above):")
                     for price, count in eq_highs[:5]:
                         lines.append(f"  {price:.5f}  ({count} touches)")
                 if eq_lows:
-                    lines.append("Equal Lows (liquidity below — do NOT place SL just below these; they will be swept before a real upward move):")
+                    lines.append("Equal Lows (liquidity below):")
                     for price, count in eq_lows[:5]:
                         lines.append(f"  {price:.5f}  ({count} touches)")
                 sweeps = _detect_liquidity_sweep(df_out)
@@ -6195,11 +6258,6 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zon
                 lines.append(f"\nZONE ANALYSIS (confluence at {confluence_zone:.5g}):")
                 lines.append(f"  Prior tests  : {_dwell['quality']}")
                 lines.append(f"  Current candle: {_dwell['candle_note']}")
-                lines.append(
-                    "  Context note : these are data points, not hard gates. A DOJI at an established level is "
-                    "still a valid setup — it calls for patience, not a skip. A first-visit level with a hammer "
-                    "can still be taken — it just has less prior confirmation. Weight accordingly."
-                )
 
         return "\n".join(lines)
 
@@ -7841,19 +7899,14 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360, force_tak
     playbook_text = _load_playbook(asset_type)
     journal = _load_journal()
     same_type = [e for e in journal if e.get("asset_type") == asset_type][-3:]
-    last_two  = [e for e in journal if e not in same_type][-2:]
-    context_entries = same_type + last_two
+    journal_lines = "\n".join([
+        f"• {e['symbol']} {e['direction'].upper()} → {e['outcome']} (${e['pnl']:+.2f}) | tags: {e.get('tags','none')}"
+        for e in same_type
+    ])
+    # Playbook + journal are placed later, inside msg (Phase 2 reorder: sections f/g).
+    playbook_block = f"=== YOUR TRADING PLAYBOOK ===\n{playbook_text}\n\n" if playbook_text else ""
+    journal_block  = f"=== RELEVANT RECENT TRADES (context only) ===\n{journal_lines}\n\n" if journal_lines else ""
     context_prefix = ""
-    if playbook_text:
-        context_prefix += f"=== YOUR TRADING PLAYBOOK ===\n{playbook_text}\n\n"
-    if context_entries:
-        journal_lines = "\n\n".join([
-            f"• {e['symbol']} {e['direction'].upper()} → {e['outcome']} (${e['pnl']:+.2f}) | {e['ts'][:10]}\n"
-            f"  Confluences: {e.get('tags','none')} | Duration: {e.get('duration','?')}\n"
-            f"  Analysis: {e.get('analysis','none')}"
-            for e in context_entries
-        ])
-        context_prefix += f"=== RELEVANT RECENT TRADES (context only) ===\n{journal_lines}\n\n"
 
     # Show open/pending positions so Chev can self-assess correlation before taking new trade
     _open_now   = [t for t in open_trades if t.get("status") == "OPEN"]
@@ -8091,76 +8144,144 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360, force_tak
         asset_type, result.get("atr"), result.get("current_price") or confluence_zone, EXPLORATION_MODE
     )
 
+    # ── Invalidation candidates (Phase 3) ─────────────────────────────────────
+    # Direction isn't decided yet at escalation time (Chev picks long/short in his
+    # reply) -- reuse the same _near_sup/_near_res signal that already drives
+    # direction_hint above, rather than inventing a new bias heuristic.
+    _hyp_type = ""
+    if result.get("in_golden_pocket"):
+        _hyp_type = "golden_pocket"
+    elif r4h.get("regime") == "RANGING":
+        _hyp_type = "range_fade"
+    elif (_survey and _survey.hypotheses and _survey.hypotheses[0].status == "CONFIRMED"
+          and _survey.hypotheses[0].breakout_level) or any(p.get("breakout") for p in result.get("all_patterns", [])):
+        _hyp_type = "breakout"
+    elif _survey and _survey.hypotheses:
+        _hyp_type = "pattern"
+
+    _ic_auction        = _survey.auction if _survey else None
+    _ic_fib_anchor_hi  = getattr(_ic_auction, "fib_anchor_high", None)
+    _ic_fib_anchor_lo  = getattr(_ic_auction, "fib_anchor_low", None)
+    _ic_vah            = getattr(_ic_auction, "vah", None)
+    _ic_val            = getattr(_ic_auction, "val", None)
+
+    _ic_breakout_level = None
+    if _survey and _survey.hypotheses and _survey.hypotheses[0].breakout_level:
+        _ic_breakout_level = _survey.hypotheses[0].breakout_level
+    else:
+        for _p in result.get("all_patterns", []):
+            if _p.get("breakout") and _p.get("breakout_level"):
+                _ic_breakout_level = _p["breakout_level"]
+                break
+
+    _ic_pattern_invalidation = None
+    for _p in result.get("all_patterns", []):
+        _ic_neckline = (_p.get("details") or {}).get("neckline")
+        if _ic_neckline:
+            _ic_pattern_invalidation = _ic_neckline
+            break
+
+    _ic_sr_levels = []
+    if result.get("support"):
+        _ic_sr_levels.append({"price": result["support"]["price"], "kind": "support"})
+    if result.get("resistance"):
+        _ic_sr_levels.append({"price": result["resistance"]["price"], "kind": "resistance"})
+
+    _ic_atr           = result.get("atr")
+    _ic_floor_profile = risk_gauntlet.get_active_profile(EXPLORATION_MODE)
+    _ic_noise_floor    = (_ic_floor_profile["ATR_FLOOR"][trade_type] * _ic_atr) if _ic_atr else 0.0
+
+    def _ic_candidates_for(_dir):
+        _nearest_beyond = (result["support"]["price"]    if _dir == "long"  and result.get("support")
+                           else result["resistance"]["price"] if _dir == "short" and result.get("resistance")
+                           else None)
+        return engines.compute_invalidation_candidates(
+            direction=_dir,
+            entry_price=confluence_zone,
+            hypothesis_type=_hyp_type,
+            noise_floor_distance=_ic_noise_floor,
+            fib_anchor_high=_ic_fib_anchor_hi,
+            fib_anchor_low=_ic_fib_anchor_lo,
+            breakout_level=_ic_breakout_level,
+            pattern_invalidation=_ic_pattern_invalidation,
+            sr_levels=_ic_sr_levels,
+            val=_ic_val,
+            vah=_ic_vah,
+            nearest_swing_beyond=_nearest_beyond,
+        )
+
+    if _near_sup and not _near_res:
+        invalidation_block = engines.format_invalidation_candidates_for_chev(_ic_candidates_for("long"))
+    elif _near_res and not _near_sup:
+        invalidation_block = engines.format_invalidation_candidates_for_chev(_ic_candidates_for("short"))
+    else:
+        invalidation_block = (
+            engines.format_invalidation_candidates_for_chev(_ic_candidates_for("long"), " (IF LONG)") +
+            engines.format_invalidation_candidates_for_chev(_ic_candidates_for("short"), " (IF SHORT)")
+        )
+
+    # ── Validation candidates (reward-side mirror of the invalidation engine) ──
+    # Direction isn't decided yet at escalation time (same as invalidation above) —
+    # reuse _near_sup/_near_res so the two blocks always agree on long/short/both.
+    _vc_opp       = _survey.opportunity if _survey else None
+    _vc_target    = getattr(_vc_opp, "target_price", None)
+    _vc_rr        = getattr(_vc_opp, "structural_rr", None)
+    _vc_profile   = getattr(_vc_opp, "reward_profile", None)
+    _vc_trigger   = getattr(_vc_opp, "expected_trigger", None)
+    _vc_inv       = getattr(_vc_opp, "invalidation_price", 0.0) or 0.0
+    _vc_risk_dist = abs(confluence_zone - _vc_inv) if _vc_inv else 0.0
+
+    def _vc_auction_extreme(_dir):
+        _a = _survey.auction if _survey else None
+        if not _a or not _vc_profile:
+            return None
+        if _vc_profile == "AT_BALANCE_EXTREME":
+            return getattr(_a, "balance_high", None) if _dir == "long" else getattr(_a, "balance_low", None)
+        if _vc_profile == "MID_BALANCE":
+            _bh = getattr(_a, "balance_high", None)
+            _bl = getattr(_a, "balance_low", None)
+            return (_bh + _bl) / 2.0 if (_bh is not None and _bl is not None) else None
+        if _vc_profile == "BREAKOUT_RETRACE":
+            return getattr(_a, "fib_anchor_high", None) if _dir == "long" else getattr(_a, "fib_anchor_low", None)
+        return None
+
+    def _vc_candidates_for(_dir):
+        return engines.compute_validation_candidates(
+            direction=_dir,
+            entry_price=confluence_zone,
+            target_price=_vc_target,
+            structural_rr=_vc_rr,
+            reward_profile=_vc_profile,
+            expected_trigger=_vc_trigger,
+            auction_extreme=_vc_auction_extreme(_dir),
+            risk_distance=_vc_risk_dist,
+        )
+
+    if _near_sup and not _near_res:
+        validation_block = engines.format_validation_candidates_for_chev(_vc_candidates_for("long"))
+    elif _near_res and not _near_sup:
+        validation_block = engines.format_validation_candidates_for_chev(_vc_candidates_for("short"))
+    else:
+        validation_block = (
+            engines.format_validation_candidates_for_chev(_vc_candidates_for("long"), " (IF LONG)") +
+            engines.format_validation_candidates_for_chev(_vc_candidates_for("short"), " (IF SHORT)")
+        )
+
     msg = (
-        f"⚡ OUTPUT FORMAT — READ FIRST:\n"
-        f"Your reply MUST follow this EXACT structure. POST: or SKIP: is the first word you write — no preamble.\n\n"
-        f"If TAKING the trade:\n"
-        f"  POST: <your read in 15 words max>\n"
-        f"  4H STRUCTURE: <one sentence — trending/ranging, last BOS or CHoCH, last key level>\n"
-        f"  INVALIDATION: <exact price that proves this trade wrong>\n"
-        f"  ENTRY BASIS: <the confluence/structure already in place that makes this the moment to act>\n"
-        f"  TRADE: direction=..., entry=..., sl=..., tp=..., risk_pct=..., leverage=..., position_size_usd=..., tags=..., trade_type=...\n"
-        f"  REASONING: <full narrative — why this level, what structure supports it, what you're watching>\n\n"
-        f"If PASSING the trade:\n"
-        f"  SKIP: <one sentence reason>\n"
-        f"  WHAT WAS MISSING: <which criterion failed — 4H STRUCTURE context / INVALIDATION level / confluence quality / other>\n"
-        f"  REASONING: <what you saw that made you pass — be specific, no generalities>\n\n"
-        f"MANDATORY RULES:\n"
-        f"  4H STRUCTURE, INVALIDATION, ENTRY BASIS — all three required on every POST.\n"
-        f"  WHAT WAS MISSING — required on every SKIP.\n"
-        f"  REASONING — required on both POST and SKIP.\n"
-        f"  SPECIFICITY — WHAT WAS MISSING and REASONING must each cite at least one real number\n"
-        f"    FROM THIS SETUP: a price level, an ATR multiple, an RSI value, a %, or a named tag —\n"
-        f"    not a qualitative judgment with no number attached. Vague: 'confluence quality below\n"
-        f"    threshold despite strong indicators.' Specific: 'EMA-21/55 cluster at 61,300 vs. the\n"
-        f"    4H golden pocket at 61,250-61,420, but no confirmed RSI divergence and the nearest\n"
-        f"    swing low is 2.1% away — R:R only 1.1:1 against the 1.3:1 floor.' If you can't point to\n"
-        f"    a real number from THIS setup, you haven't actually looked closely enough yet — look\n"
-        f"    again before writing SKIP or POST.\n"
-        f"  Dexter will not log the trade without all required fields.\n\n"
         f"Hey Chev, Dexter here with REAL computed numbers. I've given you the full market data above — candles, volume, all levels. Study it yourself and make your own read.\n\n"
         f"I've detected a confluence zone at {confluence_zone:.5f} with {result['count']} factor(s) aligning: {', '.join(result['reasons'])}.\n"
         f"{direction_hint}\n\n"
         f"{counter_trend_warning}"
         f"{regime_context}"
-        f"{rsi_block}"
         f"{pattern_block}"
+        f"{invalidation_block}"
+        f"{validation_block}"
         f"{geometry_block}"
-        f"TOOLS AVAILABLE — CALL THEM BEFORE WRITING POST: OR SKIP:\n"
-        f"You have live analysis tools. Use them now to independently verify this setup and populate your tags correctly.\n\n"
-        f"ALWAYS CALL FIRST:\n"
-        f"  get_support_resistance(\"{symbol}\", \"{primary_tf}\") — confirm whether a validated SR level exists near {confluence_zone:.5f}.\n"
-        f"  If no Tier A level is near that zone, the SR confluence is weak. Say so in REASONING and drop the sr tag.\n\n"
-        f"CALL WHEN THE DATA ABOVE SUGGESTS IT:\n"
-        f"  get_stacked_fibonacci(\"{symbol}\", \"{primary_tf}\") — call if price looks like it's at a fib retracement.\n"
-        f"    Confirmed golden pocket (0.618–0.65 overlap across TFs) → add gp=4 tag.\n"
-        f"    Single-TF fib level only → add fib_Xtf tag with fib_high=<swing high> and fib_low=<swing low> anchors.\n\n"
-        f"  get_volume_profile(\"{symbol}\", \"{primary_tf}\") — call if you suspect price is near a volume cluster.\n"
-        f"    Entry within 0.3% of POC, VAH, or VAL → add vp=3 tag and set vp_start=<YYYY-MM-DD of anchor candle>.\n\n"
-        f"  detect_rsi_divergence(\"{symbol}\", \"{primary_tf}\") — call if RSI looks like it's diverging on the candle data.\n"
-        f"    If confirmed → add rsi_Xtf tag and set rsi_div_t1=<older pivot date>, rsi_div_t2=<newer pivot date>.\n\n"
-        f"  get_atr_stop_suggestion(\"{symbol}\", \"{primary_tf}\", entry_price=<your entry>, direction=<long or short>) — call before finalising your SL.\n"
-        f"    Your SL must clear BOTH the ATR floor AND the cost floor stated in the EXECUTABLE\n"
-        f"    GEOMETRY block above for this trade_type — whichever of the two is larger is the\n"
-        f"    real minimum. If your structural SL is tighter than that, widen it or SKIP.\n\n"
-        f"TOOL INTEGRITY RULE: Only tag what your tools confirm from live data. No guessed levels, no fabricated pivot dates.\n"
-        f"If a tool returns no level near the zone — drop that tag. Your REASONING must explain what the tools showed.\n\n"
-        f"Your job: decide if this is a genuine trade setup. Be an actual trader — reason about:\n"
-        f"  1. Is price at a meaningful level or mid-range noise?\n"
-        f"  2. What is the higher timeframe (4H+) structure telling you? Always check 4H for context, even when the entry trigger is on a 15m or 30m chart. A 4H SR or Fib confluence adds significant weight. You have NO directional bias — if a short setup has better confluence than a long, take the short.\n"
-        f"  3. Is RSI giving confirmation? (>70 = overbought/short bias, <30 = oversold/long bias, divergence = reversal signal)\n"
-        f"  4. Where is the SL? Place it just beyond the structural level that invalidates the trade — the nearest significant swing high/low or SR zone. "
-        f"A small buffer beyond that level is fine. Being stopped out by a wick that breaches the level is correct behaviour — the level was broken, the trade is wrong. "
-        f"What is NOT acceptable is placing the SL just a few ticks from entry before any real structural level — that is not a stop loss, it is a guaranteed loss. "
-        f"For forex, minimum 20 pips. For stocks, minimum 0.5%. For crypto, see the min SL row "
-        f"for this trade_type in the EXECUTABLE GEOMETRY block above — do not use a smaller one. "
-        f"The distance should come from where the level actually is, not be invented.\n"
-        f"  5. Where is the FIRST meaningful structural level in the direction of the trade?\n"
-        f"     Look at the touch count next to each SR level in the brief above — e.g. '1.0490(4x)' means 4 confirmed touches.\n"
-        f"     STRONG level: 4+ touches — price is very likely to react here. Use as TP.\n"
-        f"     WEAK level: 1–2 touches — price may blow straight through. If a stronger level exists just beyond it AND gives at least 2:1 R:R, target that instead.\n"
-        f"     If you choose a weak TP level because the stronger one is too far, say so in REASONING and explain what momentum signal would tell you to move TP up.\n"
-        f"     The goal is not the nearest level — it is the nearest WALL that price is likely to respect.\n\n"
+        f"{playbook_block}"
+        f"{journal_block}"
+        f"Decide now. POST or SKIP, format per your instructions.\n\n"
+        f"{rsi_block}"
+        f"\n\n"
         f"IMPORTANT — you have TWO ways to enter a trade, not one:\n\n"
         f"  A) Price is already AT or very close to the confluence zone (within ~0.3%):\n"
         f"     → Enter at market. Use trade_type=scalp/day/swing as appropriate.\n\n"
@@ -8171,14 +8292,6 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360, force_tak
         f"     → This is the correct response when a level looks valid but price needs to come to you.\n\n"
         f"Only SKIP if the setup itself is genuinely weak — wrong trend, poor confluence quality, no clear invalidation level.\n"
         f"Do NOT skip simply because price hasn't arrived at the level yet.\n\n"
-        f"BANNED SKIP LANGUAGE: 'lacks confirmation,' 'needs confirmation,' 'lacks clear confirmation at\n"
-        f"the current price level,' 'too early,' or any variant that doesn't name a concrete, checkable\n"
-        f"factor. These are not real reasons — they're a placeholder for not having looked closely enough.\n"
-        f"Confluence already over the score threshold IS the basis to act, not a reason to look for more.\n"
-        f"If you SKIP, WHAT WAS MISSING must name one of: a specific tool that returned nothing near the\n"
-        f"zone (say which), a specific contradicting 4H structure fact, a specific R:R or ATR-floor\n"
-        f"problem with real numbers, or a specific invalidation level that can't be placed sensibly. If\n"
-        f"none of those apply, the setup doesn't qualify for a SKIP — take it or size down, don't stall.\n\n"
         f"ABSOLUTE RULES — trades that break these are REJECTED and wasted:\n"
         f"  LONG:  sl MUST be a number LOWER than entry  (e.g. entry=1.0445, sl=1.038 ✓ | sl=1.047 ✗ WRONG)\n"
         f"  SHORT: sl MUST be a number HIGHER than entry (e.g. entry=1.0445, sl=1.055 ✓ | sl=1.040 ✗ WRONG)\n"
@@ -8215,50 +8328,6 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360, force_tak
         f"  between signals, invalidation quality, and timing. Judge those. Nothing else.\n"
         f"  Still tag your confluences on the TRADE: line (tags=sr_4h,fib_1h,rsi_1h etc.) —\n"
         f"  tags drive the chart anchors and the learning system, they are not a score.\n\n"
-        f"BOLLINGER BAND RULES — how to read and use the BB data in the market brief:\n"
-        f"  The brief shows: BB upper / mid / lower, band width %, %B position, and squeeze status.\n"
-        f"  %B is a universal position reading — 1.0 = at upper band, 0.5 = at mid line, 0.0 = at lower band.\n"
-        f"  It is self-normalising: the same %B threshold means the same structural position on any pair.\n\n"
-        f"  BURST (strongest signal — %B > 1.0 or %B < 0.0):\n"
-        f"    Price has closed OUTSIDE the band. This is overextension — the market has pushed too far.\n"
-        f"    Expect mean reversion BACK INSIDE the band. This is a fade/reversal signal, not a breakout signal.\n"
-        f"    BURST above upper band (%B > 1.0) → bias SHORT (fade the move)\n"
-        f"    BURST below lower band (%B < 0.0) → bias LONG (fade the move)\n"
-        f"    Tag this as bb_Xtf (e.g. bb_1h if 1H chart). No visual anchor needed.\n\n"
-        f"  NEAR BAND (approaching signal — %B > 0.85 or %B < 0.15):\n"
-        f"    Price is in the top or bottom 15% of the current band — approaching the edge.\n"
-        f"    This is moderate on its own — a BURST is the stronger version of this signal.\n"
-        f"    Only tag as bb_Xtf if it coincides with a structural level (SR, Fib, EMA) — do not trade band touch alone.\n\n"
-        f"  MID LINE (dynamic support/resistance — %B near 0.5):\n"
-        f"    The blue middle line (20 SMA) acts as support when price is above it, resistance when below.\n"
-        f"    A rejection or bounce off the mid line supports directional bias. Tag as bb_Xtf if mid aligns with your SR.\n\n"
-        f"  SQUEEZE (big move warning — band width < 1.5%):\n"
-        f"    Bands are compressed. A directional explosion is coming — do NOT predict which way.\n"
-        f"    Wait for the burst direction THEN trade the mean reversion back in, or wait for BB to expand with clear direction.\n"
-        f"    Do not enter a trade during a squeeze unless other confluences strongly support the direction.\n\n"
-        f"  KEY RULE: BB signals are strongest when they COMBINE with SR, Fib, or divergence at the same level.\n"
-        f"  A burst through the band AT a 4H resistance zone is a high-conviction SHORT. Alone, it is just a signal.\n\n"
-        f"If you're posting a trade:\n"
-        f"  POST: <your read in MAX 15 words — why this level, why now. No fluff.>\n"
-        f"  TRADE: direction=long, entry=X, sl=Y, tp=Z, risk_pct=N, leverage=N, position_size_usd=N, tags=sr_4h,fib_1h,rsi, trade_type=day\n\n"
-        f"VISUAL ANCHORS — for each tagged visual tool, append exact anchor fields to the TRADE: line.\n"
-        f"These values are drawn on the chart so Kev can see exactly what YOU are seeing:\n"
-        f"  Tagged sr or sr_Xtf  → add  sr_level=<your support or resistance price>\n"
-        f"  Tagged fib or fib_Xtf → add  fib_high=<swing high price>, fib_low=<swing low price>\n"
-        f"  Tagged vp             → add  vp_start=<YYYY-MM-DD of the first candle of your profile range>\n"
-        f"  Tagged rsi or rsi_Xtf → add  rsi_div_t1=<YYYY-MM-DD of older RSI swing pivot>, rsi_div_t2=<YYYY-MM-DD of newer RSI swing pivot>\n"
-        f"    (The system draws your RSI divergence line on the RSI panel AND the matching price trendline on the chart)\n"
-        f"  Tagged ms or ms_Xtf  → no anchor needed. The chart auto-fetches and overlays the higher TF candles as transparent boxes.\n"
-        f"    Use ms_4h when the 4H candle structure is a confluence, ms_1d for daily structure, ms_1h for 1H structure.\n"
-        f"If anchors are missing for a tagged tool, it will not be drawn on the chart.\n"
-        f"Example: TRADE: direction=long, entry=1.2340, sl=1.2280, tp=1.2500, ..., tags=sr_4h,fib_1h,rsi_1h, trade_type=day, sr_level=1.2300, fib_high=1.2650, fib_low=1.2100, rsi_div_t1=2024-06-01, rsi_div_t2=2024-06-15\n\n"
-        f"REMINDER — required fields after TRADE: line:\n"
-        f"  4H STRUCTURE: <4H trend context — one sentence>\n"
-        f"  INVALIDATION: <the specific price that proves you wrong>\n"
-        f"  ENTRY BASIS: <the confluence/structure already in place that makes this the moment to act>\n"
-        f"  REASONING: <full analysis — why this setup, what structure supports it, what you're watching. No word limit.>\n"
-        f"All four are required. Dexter stores them for post-mortems and learning sessions. Missing = blind spot.\n\n"
-        f"If not convinced: SKIP: <one sentence>, WHAT WAS MISSING: <which criterion failed>, REASONING: <be specific>\n\n"
         f"ACCOUNT & RISK STATUS:\n"
         f"  Balance: ${balance:.2f} (updates only when trades CLOSE at TP or SL)\n"
         f"  {heat_context}\n\n"
@@ -8285,7 +8354,7 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360, force_tak
             "this live), and say why in REASONING regardless of the format you're forced to use."
         )
     messages = [{"role": "user", "content": context_prefix + msg}]
-    reply = _call_chev(messages, timeout=timeout)
+    reply = _call_chev(messages, timeout=timeout, model_id=ESCALATION_MODEL_ID)
 
     # If the reply didn't start with POST:/SKIP:, remind Chev in the same thread and retry once
     if reply:
@@ -8305,7 +8374,7 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360, force_tak
                 "  SKIP: <one reason>       ← passing\n"
                 "Your very first word must be POST or SKIP. Nothing before it."
             )})
-            reply = _call_chev(messages, timeout=timeout)
+            reply = _call_chev(messages, timeout=timeout, model_id=ESCALATION_MODEL_ID)
 
     return reply, messages
 
@@ -8402,7 +8471,8 @@ def parse_chev_reply(text):
         for _field, _key in [("4H STRUCTURE:", "structure_4h"),
                               ("INVALIDATION:", "invalidation"),
                               ("ENTRY BASIS:", "confirmation"),
-                              ("CONFIRMATION:", "confirmation")]:
+                              ("CONFIRMATION:", "confirmation"),
+                              ("STRUCTURAL READ:", "structural_read")]:
             for line in lines:
                 s = line.strip()
                 if s.upper().startswith(_field.upper()):
@@ -8539,9 +8609,10 @@ def _build_management_brief(symbol, asset_type, primary_tf, direction, entry, tp
 
 
 def _trade_duration_str(trade):
-    """Return human-readable time elapsed since trade opened, e.g. '3h 12m'."""
+    """Return human-readable time elapsed since trade opened, e.g. '3h 12m'.
+    Falls back to "open_ts" when "opened_at" is missing -- see _do_postmortem for why."""
     try:
-        opened = datetime.strptime(trade.get("opened_at", ""), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        opened = datetime.strptime(trade.get("opened_at") or trade.get("open_ts") or "", "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
         secs   = int((datetime.now(timezone.utc) - opened).total_seconds())
         h, m   = secs // 3600, (secs % 3600) // 60
         return f"{h}h {m}m" if h > 0 else f"{m}m"
@@ -9041,7 +9112,7 @@ def ask_chev_manage_trade(trade, current_price, bos_paragraph=None):
         )
     playbook_text = _load_playbook(asset_type)
     content = (f"=== YOUR TRADING PLAYBOOK ===\n{playbook_text}\n\n" if playbook_text else "") + msg
-    reply = _call_chev([{"role": "user", "content": content}], timeout=60)
+    reply = _call_chev([{"role": "user", "content": content}], timeout=300, model_id=ESCALATION_MODEL_ID)
     # Store Chev's decision so the next management brief can quote it back to him
     if reply:
         trade["last_chev_decision"]  = reply.strip()[:80]
@@ -9410,6 +9481,8 @@ def load_state_from_sheet(worksheet):
                         # Fallback for older rows: LONGs wait for price to DROP to entry,
                         # SHORTs wait for price to RISE to entry (covers the common limit-order case)
                         trade_entry["entry_trigger_above"] = direction.lower() == "short"
+                if len(row) > 19 and row[19]:
+                    trade_entry["risk_amount_usd"] = float(row[19])
                 loaded_open.append(trade_entry)
             except ValueError:
                 continue
@@ -9768,13 +9841,14 @@ def log_new_trade(worksheet, dashboard_ws, symbol, asset_type, trade, current_pr
     expiry_hours = TRADE_TYPE_EXPIRY_HOURS[trade_type]
     expiry_at = (datetime.now(timezone.utc) + pd.Timedelta(hours=expiry_hours)).strftime("%Y-%m-%d %H:%M:%S")
     entry_trigger_above = entry > current_price_at_creation
+    risk_amount_usd = round((trade.get("risk_pct") or 1.0) / 100 * balance, 2)
 
     conf_json = json.dumps(confluence_prices) if confluence_prices else ""
 
     row_values = [
         symbol, direction.upper(), entry, sl, tp, risk_pct, leverage,
         position_size_usd, margin_used_usd, tags, "", "", "PENDING", "", timestamp,
-        trade_type, expiry_at, conf_json, str(entry_trigger_above)
+        trade_type, expiry_at, conf_json, str(entry_trigger_above), risk_amount_usd
     ]
 
     existing_rows = len(worksheet.get_all_values())
@@ -9797,6 +9871,7 @@ def log_new_trade(worksheet, dashboard_ws, symbol, asset_type, trade, current_pr
         "status": "PENDING",
         "expiry_at": expiry_at,
         "entry_trigger_above": entry_trigger_above,
+        "risk_amount_usd": risk_amount_usd,
         "confluence_prices": confluence_prices or {},
         "primary_tf": primary_tf,
         "regime_at_proposal": regime_at_proposal,
@@ -10101,6 +10176,26 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
 
             still_open.append(trade)
             continue
+
+        # ── Phase 4 safety net: risk_amount_usd must never be 0/missing on an OPEN trade ──
+        # Catches two known-broken upstream paths: (1) load_state_from_sheet() reconstructs
+        # OPEN/PENDING trades from the Google Sheet on every process restart, and the sheet
+        # has no risk_amount_usd column at all -- reloaded trades carry none. (2) a PENDING
+        # order that filled with a stale/zero value already on it. This runs every cycle for
+        # every OPEN trade but is idempotent -- once patched, risk_amount_usd is nonzero and
+        # this block no-ops on every later cycle. Does not touch the gauntlet's own sizing.
+        if not trade.get("risk_amount_usd"):
+            _net_balance  = get_balance(dashboard_ws) or 0
+            _net_risk_pct = trade.get("risk_pct") or 1.0
+            _net_risk     = round(_net_risk_pct / 100 * _net_balance, 2)
+            _net_cap      = round(0.02 * _net_balance, 2)  # hard cap: 2% of balance
+            if _net_risk > _net_cap and _net_risk > 0:
+                _net_scale = _net_cap / _net_risk
+                trade["position_size_usd"] = round(trade.get("position_size_usd", 0) * _net_scale, 2)
+                _net_risk = _net_cap
+            trade["risk_amount_usd"] = _net_risk
+            print(f"[RISK NET] {trade['symbol']} OPEN with risk_amount_usd=0 -- computed ${_net_risk:.2f} "
+                  f"({_net_risk_pct}% of ${_net_balance:.2f} balance, capped at 2%) -- upstream sizing path broken for this trade.")
 
         is_long = trade["direction"] == "long"
 
@@ -11686,6 +11781,13 @@ while True:
                     new_trade["structure_4h"]  = parsed.get("structure_4h", "")
                     new_trade["invalidation"]  = parsed.get("invalidation", "")
                     new_trade["confirmation"]  = parsed.get("confirmation", "")
+                    new_trade["structural_read"] = parsed.get("structural_read", "")
+                    # Forensic audit trail: the full back-and-forth that produced this trade --
+                    # the assembled prompt, every correction (hallucination/geometry/gauntlet
+                    # fixable-reject), and Chev's reply at each step, ending with the final
+                    # accepted reply. Carried through to the journal at close time so a future
+                    # investigation doesn't have to reconstruct this from scratch again.
+                    new_trade["chev_conversation"] = _chev_messages + [{"role": "assistant", "content": chev_response}]
                     new_trade["opened_at"]     = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                     new_trade["original_sl"]   = new_trade.get("sl", 0)
                     new_trade["original_tp"]   = new_trade.get("tp", 0)
@@ -11702,7 +11804,7 @@ while True:
                         new_trade["gauntlet_notes"]       = _sz["notes"]
                     else:
                         _bal_at_open = get_balance(dashboard_ws) or balance
-                        new_trade["risk_amount_usd"] = round(new_trade.get("risk_pct", 1.0) / 100 * _bal_at_open, 2)
+                        new_trade["risk_amount_usd"] = round((trade.get("risk_pct") or 1.0) / 100 * _bal_at_open, 2)
                     new_trade["atr_at_entry"]    = result.get("atr", 0)
                     _g, _      = _setup_grade(result, asset_type)
                     _, _sq     = _session_grade(asset_type)
