@@ -1,0 +1,55 @@
+/* ============================================================
+   Design Tokens — CSS custom properties consumed app-wide.
+   :root color palette, dimensions, radii, shadows, glow values.
+   MUST load first; every other stylesheet inherits from these vars.
+   ============================================================ */
+/* ===== DESIGN TOKENS ===== */
+:root {
+  --bg:       #08090f;
+  --s0:       #0d0f1b;
+  --s1:       #111320;
+  --s2:       #161829;
+  --s3:       #1c1f2e;
+  --border:   #1e222d;
+  --border2:  #2a2e3a;
+  --gold:     #d4af37;
+  --gold-dim: rgba(212,175,55,0.12);
+  --blue:     #2962ff;
+  --green:    #089981;
+  --red:      #f23645;
+  --txt1:     #d1d4dc;
+  --txt2:     #787b86;
+  --txt3:     #3a3d4d;
+  --r-xs:  4px;
+  --r-sm:  8px;
+  --r-md:  12px;
+  --r-lg:  16px;
+  --r-xl:  24px;
+  --r-pill: 999px;
+  --shadow-sm:  0 1px 3px rgba(0,0,0,0.4);
+  --shadow-md:  0 4px 16px rgba(0,0,0,0.5);
+  --shadow-lg:  0 8px 32px rgba(0,0,0,0.6);
+  --glow-gold:  0 0 20px rgba(212,175,55,0.15);
+  --glow-blue:  0 0 20px rgba(41,98,255,0.2);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--txt1);
+  font-family: 'Inter', -apple-system, "Segoe UI", sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---------- Top bar ---------- */
+#topbar {
+  display: flex; flex-direction: column;
+  background: linear-gradient(180deg, #10121f 0%, #0d0f1b 100%);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.03), 0 2px 12px rgba(0,0,0,0.4);
+  flex-shrink: 0; z-index: 10; position: relative;
+}

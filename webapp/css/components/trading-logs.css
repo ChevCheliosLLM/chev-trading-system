@@ -1,0 +1,220 @@
+/* ============================================================
+   Trading Logs & Rows — .watchRow, .logRow, .priceBlock,
+   sparklines, trade DNA panel, and performance/direction/regime breakdowns.
+   ============================================================ */
+.watchRow {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 7px 10px 7px 12px; cursor: pointer;
+  border-left: 2px solid transparent;
+  border-bottom: 1px solid rgba(255,255,255,0.025);
+  transition: background 0.1s, border-color 0.1s;
+  position: relative;
+}
+.watchRow:hover { background: rgba(255,255,255,0.025); }
+.watchRow:hover .removeBtn { opacity: 1; }
+.watchRow.active {
+  background: rgba(212,175,55,0.04);
+  border-left: 2px solid var(--gold);
+}
+.watchRow.active .sym { color: var(--gold); }
+.watchRow .left { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; overflow: hidden; }
+.watchRow .logo { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; background: var(--s2); }
+.watchRow .flagEmoji { font-size: 15px; line-height: 1; flex-shrink: 0; }
+img.emoji { height: 1em; width: 1em; vertical-align: -0.15em; margin: 0 0.05em; }
+.watchRow img.emoji { height: 18px; width: 18px; vertical-align: middle; margin: 0; flex-shrink: 0; }
+.logMood img.emoji, .logPnl img.emoji { height: 1.15em; width: 1.15em; vertical-align: -0.2em; }
+.watchRow .tradeDot {
+  width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; background: transparent;
+}
+.watchRow .tradeDot.live { background: var(--green); box-shadow: 0 0 5px rgba(8,153,129,0.8); }
+.watchRow .tradeDot.loss { background: var(--red);   box-shadow: 0 0 5px rgba(242,54,69,0.8); }
+.watchRow .ideaDot {
+  width: 5px; height: 5px; border-radius: 1px; flex-shrink: 0;
+  background: var(--gold); transform: rotate(45deg); display: none;
+  box-shadow: 0 0 5px rgba(212,175,55,0.7);
+}
+.watchRow .ideaDot.show { display: block; }
+.watchRow .sym {
+  font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600;
+  color: var(--txt1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  letter-spacing: 0.01em;
+}
+.watchRow .right {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: 8px;
+}
+.watchRow .priceBlock { text-align: right; min-width: 64px; }
+.watchRow .px {
+  font-size: 12px; color: var(--txt1); font-family: "Share Tech Mono", monospace;
+  font-weight: 500; letter-spacing: -0.02em; line-height: 1.15;
+}
+.watchRow .chg {
+  font-size: 9px; font-family: "Share Tech Mono", monospace;
+  letter-spacing: -0.01em; line-height: 1;
+}
+.watchRow .chg.up   { color: var(--green); }
+.watchRow .chg.down { color: var(--red); }
+.watchRow .chg:not(.up):not(.down) { color: var(--txt3); }
+.removeBtn {
+  opacity: 0; background: none; border: none; color: var(--txt3);
+  font-size: 13px; cursor: pointer; padding: 2px 4px; line-height: 1;
+  border-radius: var(--r-xs); transition: all 0.12s; flex-shrink: 0;
+}
+.removeBtn:hover { color: var(--red); background: rgba(242,54,69,0.08); }
+
+.starBtn {
+  background: none; border: none; color: var(--txt3); opacity: 0.35;
+  font-size: 11px; cursor: pointer; padding: 2px 3px; line-height: 1;
+  border-radius: var(--r-xs); transition: all 0.12s; flex-shrink: 0;
+}
+.starBtn:hover { opacity: 0.8; color: var(--gold); }
+.starBtn.active { opacity: 1; color: var(--gold); }
+
+#addRow { padding: 7px 10px; }
+#addRow button {
+  width: 100%; background: transparent;
+  border: 1px dashed rgba(255,255,255,0.08); color: var(--txt3);
+  padding: 6px; border-radius: 3px; cursor: pointer;
+  font-size: 9px; font-family: 'Share Tech Mono', monospace;
+  letter-spacing: 0.08em; transition: all 0.12s;
+}
+#addRow button:hover { background: rgba(212,175,55,0.04); color: var(--gold); border-color: rgba(212,175,55,0.25); }
+.logRow {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; font-size: 11px;
+  border-bottom: 1px solid rgba(255,255,255,0.03); border-radius: var(--r-sm);
+  margin: 1px 0; transition: background 0.12s;
+}
+.logRow:hover { background: var(--s2); cursor: pointer; }
+.logRow .logMood { font-size: 17px; display:flex; align-items:center; flex-shrink:0; }
+.logRow .logPair { font-weight: 600; color: var(--txt1); flex: 1; white-space: nowrap; font-family: 'Inter', sans-serif; }
+.logRow .logLev { color: var(--txt3); font-family: "Share Tech Mono", monospace; font-size: 10px; }
+.logRow .logType { font-size: 10px; color: var(--txt2); text-transform: uppercase; font-family: "Share Tech Mono", monospace; }
+.logRow .logPnl {
+  font-family: "Share Tech Mono", monospace; font-weight: 700; min-width: 64px; text-align: right; font-size: 12px;
+}
+.logRow .logPnl.pnl-up { color: var(--green); }
+.logRow .logPnl.pnl-down { color: var(--red); }
+.logRow.lastClosedRow { background: rgba(255,255,255,0.015); }
+.logRow.pulse { animation: pulseFlash 0.7s ease; }
+.logRow.activeTrade {
+  background: rgba(212,175,55,0.10);
+  box-shadow: 0 0 10px rgba(212,175,55,0.25);
+  border-left: 2px solid var(--gold);
+}
+
+/* ===== Price flash animations (TradingView-style) ===== */
+@keyframes flashUp   { 0%,30% { color: #089981; background: rgba(8,153,129,0.08); } 100% { color: inherit; background: transparent; } }
+.emptyNote.chev { color: #5d6068; border-left: 2px solid #1e222d; margin: 8px 10px; padding: 8px 10px; }
+.emptyNote b { color: #787b86; }
+
+/* ===== Chev's Corner ===== */
+#chevsCorner { padding: 4px 0 8px; }
+
+/* .ideaCard styles defined near end of <style> (redesigned version) */
+
+/* ---------- Chart area ---------- */
+#chartColumn { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
+.deepStatCard {
+  background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 8px 10px; display: flex; flex-direction: column; gap: 2px;
+}
+.deepStatLabel { font-size: 8px; font-family: 'Inter', sans-serif; font-weight: 600; color: var(--txt3); text-transform: uppercase; letter-spacing: 0.08em; }
+.deepStatValue { font-size: 16px; font-family: 'Inter', sans-serif; font-weight: 700; color: var(--txt1); line-height: 1.1; }
+.deepStatSub   { font-size: 9px; font-family: 'Share Tech Mono', monospace; color: var(--txt2); }
+.deepStatValue.green { color: var(--green); }
+.deepStatValue.red   { color: var(--red); }
+.deepStatValue.gold  { color: var(--gold); }
+
+/* ===== DIRECTION BREAKDOWN ===== */
+.dirBreakdown {
+  display: flex; gap: 8px; padding: 0 8px 8px; flex-shrink: 0;
+}
+.dirBlock {
+  flex: 1; background: var(--s1); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 8px 10px;
+}
+.dirLabel { font-size: 8px; font-weight: 700; font-family: 'Inter', sans-serif; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px; }
+.dirBlock.long-dir .dirLabel  { color: var(--green); }
+.dirBlock.short-dir .dirLabel { color: var(--red); }
+.dirWR { font-size: 18px; font-weight: 700; font-family: 'Inter', sans-serif; line-height: 1; }
+.dirBlock.long-dir .dirWR  { color: var(--green); }
+.dirBlock.short-dir .dirWR { color: var(--red); }
+.dirSub { font-size: 9px; color: var(--txt2); font-family: 'Share Tech Mono', monospace; margin-top: 2px; }
+.dirBar { height: 3px; border-radius: var(--r-pill); margin-top: 6px; overflow: hidden; background: var(--border); }
+.dirBarFill { height: 100%; border-radius: var(--r-pill); }
+.dirBlock.long-dir  .dirBarFill { background: var(--green); }
+.dirBlock.short-dir .dirBarFill { background: var(--red); }
+
+/* ===== REGIME BREAKDOWN ===== */
+.regimeBreakdown {
+  display: flex; flex-direction: column; gap: 6px; padding: 0 8px 10px; flex-shrink: 0;
+}
+.regimeBkTitle {
+  font-size: 8px; font-weight: 700; font-family: 'Inter', sans-serif;
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--txt2);
+  padding: 0 0 2px;
+}
+.regimeRow {
+  display: grid; grid-template-columns: 56px 1fr 36px 40px;
+  align-items: center; gap: 6px;
+}
+.regimeLabel {
+  font-size: 9px; font-weight: 700; font-family: 'Inter', sans-serif;
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.regimeLabel.bull  { color: var(--green); }
+.regimeLabel.bear  { color: var(--red); }
+.regimeLabel.range { color: var(--gold); }
+.regimeBar { height: 5px; border-radius: var(--r-pill); background: var(--border2); overflow: hidden; }
+.regimeBarFill { height: 100%; border-radius: var(--r-pill); transition: width 0.4s ease; }
+.regimeBarFill.bull  { background: var(--green); }
+.regimeBarFill.bear  { background: var(--red); }
+.regimeBarFill.range { background: var(--gold); }
+.regimeWR { font-size: 11px; font-weight: 700; font-family: 'Inter', sans-serif; text-align: right; }
+.regimeCnt { font-size: 9px; color: var(--txt2); font-family: 'Share Tech Mono', monospace; text-align: right; }
+
+/* ===== TRADE DNA BUTTON & PANEL ===== */
+.logDNABtn {
+  margin-left: auto; opacity: 0; font-size: 10px; padding: 2px 6px;
+  border-radius: var(--r-pill); border: 1px solid var(--border2);
+  color: var(--txt2); cursor: pointer; transition: opacity 0.1s, color 0.1s;
+  flex-shrink: 0; background: transparent;
+  font-family: 'Inter', sans-serif; font-weight: 600; letter-spacing: 0.03em;
+}
+.logRow:hover .logDNABtn { opacity: 1; }
+.logDNABtn:hover { color: var(--gold); border-color: rgba(212,175,55,0.3); background: var(--gold-dim); }
+.logDNABtn.active { opacity: 1; color: var(--gold); border-color: rgba(212,175,55,0.3); background: var(--gold-dim); }
+
+.tradeDNAPanel {
+  display: none; margin: 0 6px 2px; padding: 10px 12px;
+  background: linear-gradient(135deg, rgba(212,175,55,0.04) 0%, rgba(13,15,27,0.8) 100%);
+  border: 1px solid rgba(212,175,55,0.15); border-top: none;
+  border-radius: 0 0 var(--r-sm) var(--r-sm); animation: dnaSlideIn 0.15s ease;
+}
+.tradeDNAPanel.open { display: block; }
+.dnaHeader {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+.dnaTitle {
+  font-size: 9px; font-weight: 700; font-family: 'Inter', sans-serif;
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--gold); opacity: 0.7;
+}
+.dnaHypName {
+  font-size: 11px; font-weight: 600; font-family: 'Inter', sans-serif; color: var(--txt1);
+}
+.dnaRows { display: flex; flex-direction: column; gap: 3px; }
+.dnaRow {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 9px; font-family: 'Share Tech Mono', monospace;
+}
+.dnaRowLabel { color: var(--txt2); }
+.dnaRowVal { color: var(--txt1); font-weight: 600; }
+.dnaNoData { font-size: 9px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; }
+
+/* ===== WATCHLIST SPARKLINES ===== */
+.sparkCanvas { display: block; flex-shrink: 0; opacity: 0.55; transition: opacity 0.15s; border-radius: 2px; }
+.watchRow:hover .sparkCanvas { opacity: 0.9; }
+.watchRow.active .sparkCanvas { opacity: 0.9; }
+
+/* ===== RADAR PANE ===== */
+#radarPane { overflow-y: auto; }

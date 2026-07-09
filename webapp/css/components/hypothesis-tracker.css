@@ -1,0 +1,231 @@
+/* ============================================================
+   Hypothesis Tracker — the full hypothesis tracker panel.
+   ============================================================ */
+.hypTrackItem {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+  border-radius: var(--r-sm); margin-bottom: 3px; font-family: 'Inter', sans-serif;
+}
+.hypTrackItem:hover { background: var(--s2); }
+.hypTrackDot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.hypTrackDot.win  { background: var(--green); box-shadow: 0 0 5px var(--green); }
+.hypTrackDot.loss { background: var(--red);   box-shadow: 0 0 5px var(--red); }
+.hypTrackDot.open { background: var(--gold);  box-shadow: 0 0 5px var(--gold); }
+.hypTrackText { flex: 1; font-size: 10px; color: var(--txt1); }
+.hypTrackMeta { font-size: 8px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; }
+
+/* Pipeline section headers */
+.tradeSectionHeader {
+  padding: 7px 14px 5px; font-size: 9px; color: var(--txt3); text-transform: uppercase;
+  letter-spacing: 0.12em; border-top: 1px solid rgba(255,255,255,0.04); background: var(--bg);
+  font-family: 'Inter', sans-serif; font-weight: 700; display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0; position: sticky; top: 0; z-index: 2;
+  border-left: 2px solid transparent;
+}
+.tradeSectionHeader:first-child { border-top: none; }
+.tradeSectionHeader.has-data {
+  color: var(--txt2); border-left-color: rgba(212,175,55,0.4);
+}
+.tradeSectionHeader .sectionBadge {
+  font-size: 8px; background: var(--gold-dim); border: 1px solid rgba(212,175,55,0.25);
+  color: var(--gold); border-radius: var(--r-pill); padding: 1px 7px; font-family: 'Inter', sans-serif;
+}
+
+/* Watchlist search */
+#watchlistSearch {
+  width: 100%; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
+  color: var(--txt1); border-radius: 3px;
+  padding: 6px 10px 6px 28px; font-size: 10px;
+  font-family: 'Share Tech Mono', monospace; outline: none; box-sizing: border-box;
+  transition: border-color 0.12s;
+}
+#watchlistSearch::placeholder { color: var(--txt3); letter-spacing: 0.03em; }
+#watchlistSearch:focus { border-color: rgba(212,175,55,0.3); }
+#watchlistSearchWrap { position: relative; padding: 7px 8px 5px; }
+#watchlistSearchIcon { position: absolute; left: 16px; top: 50%; transform: translateY(-28%); color: var(--txt3); font-size: 11px; pointer-events: none; }
+
+/* Fix: ltbName is a <button> — strip browser defaults */
+.layerToolBtn .ltbName {
+  background: none; border: none; cursor: pointer; padding: 0; outline: none;
+}
+.layerToolBtn:hover .ltbName { color: #d4af37; }
+
+/* Topbar CHEV wordmark + live bias chip */
+#chevWordmark {
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 16px;
+  color: var(--gold); letter-spacing: 0.14em; margin-right: 2px; user-select: none;
+  flex-shrink: 0; text-shadow: 0 0 16px rgba(212,175,55,0.25);
+}
+
+/* Bottom status bar */
+#statusBar {
+  display: flex; align-items: center; gap: 10px; padding: 0 14px;
+  height: 22px; background: var(--bg); border-top: 1px solid rgba(255,255,255,0.04);
+  flex-shrink: 0; font-family: 'Share Tech Mono', monospace; font-size: 9px;
+  color: var(--txt3); overflow: hidden;
+}
+.sbDot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; transition: background 0.3s, box-shadow 0.3s; }
+.sbDot.live { background: var(--green); box-shadow: 0 0 5px rgba(8,153,129,0.7); }
+.sbDot.dead { background: var(--txt3); }
+#sbDexterLabel { color: var(--txt3); }
+#sbDexterLabel.live { color: var(--green); }
+#sbBtcPrice { color: var(--txt2); transition: color 0.3s; }
+#sbBtcPrice.up   { color: var(--green); }
+#sbBtcPrice.down { color: var(--red); }
+#sbTime { color: var(--txt2); margin-left: auto; }
+.sbSep { width: 1px; height: 12px; background: rgba(255,255,255,0.06); flex-shrink: 0; }
+.sbKbHint { color: var(--border2); font-size: 8px; }
+
+/* Market regime chip */
+.regimeChip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+  border-radius: var(--r-pill); font-size: 8px; font-family: 'Inter', sans-serif;
+  font-weight: 700; letter-spacing: 0.06em; border: 1px solid currentColor; opacity: 0.9;
+}
+.regimeChip.bull  { color: var(--green); border-color: rgba(8,153,129,0.4); background: rgba(8,153,129,0.08); }
+.regimeChip.bear  { color: var(--red);   border-color: rgba(242,54,69,0.4);  background: rgba(242,54,69,0.08); }
+.regimeChip.range { color: var(--txt2);  border-color: rgba(120,123,134,0.3); background: rgba(120,123,134,0.06); }
+
+/* R:R badge in trade rows */
+.rrBadge {
+  font-size: 8px; font-family: 'Share Tech Mono', monospace; color: var(--txt2);
+  background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-xs);
+  padding: 1px 4px; margin-left: auto; flex-shrink: 0;
+}
+.rrBadge.good { color: var(--green); border-color: rgba(8,153,129,0.3); }
+.rrBadge.bad  { color: var(--red);   border-color: rgba(242,54,69,0.3); }
+
+/* Hold time badge */
+.logHold { font-size: 8px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; flex-shrink: 0; }
+
+/* Redesigned Chev's Corner idea cards */
+.ideaCard {
+  background: var(--s0); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 10px 12px; margin: 4px 8px; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.ideaCard:hover { border-color: rgba(41,98,255,0.35); background: var(--s1); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+.ideaCard.activeIdea { border-color: rgba(212,175,55,0.7); background: rgba(212,175,55,0.05); box-shadow: 0 0 12px rgba(212,175,55,0.15); transform: translateY(-1px); }
+.ideaCardTop { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.ideaDirBadge {
+  font-family: 'Inter', sans-serif; font-weight: 700; font-size: 11px;
+  letter-spacing: 0.04em; padding: 2px 8px; border-radius: var(--r-pill); flex-shrink: 0;
+}
+.ideaDirBadge.long  { color: var(--green); background: rgba(8,153,129,0.12); border: 1px solid rgba(8,153,129,0.25); }
+.ideaDirBadge.short { color: var(--red);   background: rgba(242,54,69,0.12);  border: 1px solid rgba(242,54,69,0.25); }
+.ideaPairName { font-size: 14px; font-weight: 700; color: var(--txt1); font-family: 'Inter', sans-serif; letter-spacing: 0.01em; }
+.ideaTypeLabel { font-size: 9px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; text-transform: uppercase; }
+.ideaRRChip {
+  margin-left: auto; font-size: 9px; font-family: 'Share Tech Mono', monospace;
+  color: var(--gold); background: var(--gold-dim); border: 1px solid rgba(212,175,55,0.2);
+  border-radius: var(--r-pill); padding: 1px 7px; flex-shrink: 0;
+}
+.ideaTagRow { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 6px; }
+.ideaTagChip {
+  font-size: 8px; font-family: 'Inter', sans-serif; letter-spacing: 0.02em;
+  background: rgba(41,98,255,0.08); border: 1px solid rgba(41,98,255,0.18); color: #5d7cff;
+  border-radius: var(--r-pill); padding: 1px 7px;
+}
+.ideaPill {
+  font-size: 8px; font-family: 'Inter', sans-serif; letter-spacing: 0.02em;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.14); color: var(--txt3);
+  border-radius: var(--r-pill); padding: 2px 8px; cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.ideaPill.active {
+  border-color: var(--gold); color: var(--gold); background: var(--gold-dim);
+}
+.ideaPill:hover:not(.active) { border-color: rgba(255,255,255,0.3); color: var(--txt2); }
+.ideaPriceRow {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  border-top: 1px solid rgba(255,255,255,0.05); padding-top: 6px;
+  font-family: 'Share Tech Mono', monospace;
+}
+.ideaPriceRow .ideaPill { font-family: 'Share Tech Mono', monospace; font-size: 8px; }
+.ideaPillE  { border-color: rgba(212,175,55,0.25)!important; color: rgba(212,175,55,0.65)!important; }
+.ideaPillE.active  { border-color: var(--gold)!important; color: var(--gold)!important; background: var(--gold-dim)!important; }
+.ideaPillSL { border-color: rgba(242,54,69,0.25)!important; color: rgba(242,54,69,0.65)!important; }
+.ideaPillSL.active { border-color: var(--red)!important; color: var(--red)!important; background: rgba(242,54,69,0.1)!important; }
+.ideaPillTP { border-color: rgba(8,153,129,0.25)!important; color: rgba(8,153,129,0.65)!important; }
+.ideaPillTP.active { border-color: var(--green)!important; color: var(--green)!important; background: rgba(8,153,129,0.1)!important; }
+
+/* Idea card — directional stripe, confidence bar, reasoning note */
+.ideaCard.long  { border-left: 2px solid rgba(8,153,129,0.5); }
+.ideaCard.short { border-left: 2px solid rgba(242,54,69,0.5); }
+.ideaCard.activeIdea.long  { border-left-color: rgba(212,175,55,0.7); }
+.ideaCard.activeIdea.short { border-left-color: rgba(212,175,55,0.7); }
+.ideaConfRow {
+  display: flex; align-items: center; gap: 6px;
+  margin: 6px 0 0; font-size: 8px; font-family: 'Inter', sans-serif; color: var(--txt3);
+}
+.ideaConfTrack {
+  flex: 1; height: 2px; background: var(--border); border-radius: var(--r-pill); overflow: hidden;
+}
+.ideaConfFill { height: 100%; border-radius: var(--r-pill); transition: width 0.4s; }
+.ideaConfFill.high { background: var(--green); }
+.ideaConfFill.mid  { background: var(--gold); }
+.ideaConfFill.low  { background: var(--red); }
+.ideaNote {
+  margin-top: 8px; font-size: 9px; font-family: 'Share Tech Mono', monospace;
+  color: var(--txt2); line-height: 1.6; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 6px;
+  white-space: pre-wrap; word-break: break-word;
+}
+.ideaLevChip {
+  font-size: 8px; font-family: 'Share Tech Mono', monospace;
+  color: var(--txt2); background: var(--s2);
+  border: 1px solid var(--border2); border-radius: var(--r-pill); padding: 1px 7px; margin-left: auto;
+}
+
+/* Topbar live bias chip (updates after ENGINE runs) */
+#chevBiasChip {
+  display: none; font-family: 'Inter', sans-serif; font-weight: 700; font-size: 10px;
+  letter-spacing: 0.05em; padding: 3px 9px; border-radius: var(--r-pill); flex-shrink: 0;
+  margin-right: 6px; vertical-align: middle; user-select: none; border: 1px solid;
+}
+#chevBiasChip.bull  { color: var(--green); background: rgba(8,153,129,0.10); border-color: rgba(8,153,129,0.25); }
+#chevBiasChip.bear  { color: var(--red);   background: rgba(242,54,69,0.10);  border-color: rgba(242,54,69,0.25); }
+#chevBiasChip.range { color: var(--gold);  background: var(--gold-dim); border-color: rgba(212,175,55,0.25); }
+
+/* ENGINE cached indicator */
+#engineCacheNote {
+  font-family: 'Inter', sans-serif; font-size: 8px; color: var(--txt3);
+  padding: 3px 10px; flex-shrink: 0;
+}
+
+/* "Ask Chev about this" button on idea cards */
+.ideaAskBtn {
+  display: flex; align-items: center; gap: 5px; margin-top: 8px;
+  width: 100%; background: rgba(41,98,255,0.06); border: 1px solid rgba(41,98,255,0.15);
+  border-radius: var(--r-sm); padding: 6px 10px; cursor: pointer; color: #5d7cff;
+  font-size: 10px; font-family: 'Inter', sans-serif; font-weight: 500;
+  transition: all 0.15s;
+}
+.ideaAskBtn:hover { background: rgba(41,98,255,0.12); border-color: rgba(41,98,255,0.3); color: #8ba4ff; transform: none; }
+.ideaAskBtn img { width: 12px; height: 12px; opacity: 0.8; flex-shrink: 0; }
+
+/* ENGINE auto-run toggle */
+#engAutoLabel {
+  display: flex; align-items: center; gap: 5px; font-size: 9px;
+  color: var(--txt2); font-family: 'Inter', sans-serif;
+  letter-spacing: 0.03em; cursor: pointer; user-select: none;
+}
+#engAutoLabel input { accent-color: var(--gold); cursor: pointer; width: 10px; height: 10px; }
+#engAutoLabel.active { color: var(--gold); }
+
+/* Quick topbar symbol search */
+#quickSearchWrap { position: relative; display: inline-flex; align-items: center; flex-shrink: 0; }
+#quickSearchIcon { position: absolute; left: 8px; color: var(--txt3); font-size: 10px; pointer-events: none; user-select: none; }
+#quickSearchInput {
+  background: var(--s1); border: 1px solid var(--border); color: var(--txt1);
+  border-radius: var(--r-md); padding: 5px 10px 5px 24px; font-size: 10px;
+  font-family: 'Inter', sans-serif; width: 80px; outline: none;
+  transition: border-color 0.15s, width 0.2s, box-shadow 0.15s;
+}
+#quickSearchInput:focus { border-color: rgba(41,98,255,0.4); width: 120px; box-shadow: 0 0 0 3px rgba(41,98,255,0.08); color: #fff; }
+#quickSearchInput::placeholder { color: var(--txt3); }
+
+/* ===== COMMAND PALETTE (Ctrl+K) ===== */
+#cmdPaletteOverlay {
+  position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px); display: none; align-items: flex-start; justify-content: center;
+  padding-top: 14vh;
+}

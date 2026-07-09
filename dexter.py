@@ -1702,9 +1702,9 @@ def api_analysis_engine():
                 "structure_axis": g.structure_axis,
                 "compression": round(float(g.compression), 3),
                 "parallelism": round(float(g.parallelism), 3),
-                "is_converging": g.is_converging,
-                "breakout_up": g.breakout_up,
-                "breakout_dn": g.breakout_dn,
+                "is_converging": bool(g.is_converging),
+                "breakout_up": bool(g.breakout_up),
+                "breakout_dn": bool(g.breakout_dn),
                 "upper_slope": round(float(g.upper.slope_norm), 4),
                 "lower_slope": round(float(g.lower.slope_norm), 4),
             }

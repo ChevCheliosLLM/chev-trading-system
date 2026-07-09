@@ -1,0 +1,817 @@
+/* ============================================================
+   Engine tab Dexter overlays, engine cache, hypothetical cache, layers tab.
+   (extracted verbatim from index.html; do not reformat indentation)
+   ============================================================ */
+  /* ============================================================
+     ENGINE TAB — Dexter visual overlays
+     ============================================================ */
+  let _engineData = null;
+  // Expose so the isolated tab-switch script can read it for cache restore check
+  Object.defineProperty(window, '_engineData', { get: () => _engineData, set: v => { _engineData = v; } });
+  let _engineOverlayState = {
+    swings: true, legs: true, geometry: false, balance: true, hypothesis: false, patterns: false
+  };
+
+  function _drawEngineOverlays() {
+    if (!_engineData) return;
+    const d = _engineData;
+    dctx.save();
+
+    // 1. Balance zone
+    if (_engineOverlayState.balance && d.auction) {
+      const y1 = priceToY(d.auction.balance_high);
+      const y2 = priceToY(d.auction.balance_low);
+      if (y1 != null && y2 != null) {
+        dctx.fillStyle = 'rgba(212,175,55,0.06)';
+        dctx.fillRect(0, Math.min(y1, y2), _dw, Math.abs(y2 - y1));
+        dctx.strokeStyle = 'rgba(212,175,55,0.25)';
+        dctx.lineWidth = 0.5;
+        dctx.setLineDash([5, 4]);
+        dctx.beginPath(); dctx.moveTo(0, y1); dctx.lineTo(_dw, y1); dctx.stroke();
+        dctx.beginPath(); dctx.moveTo(0, y2); dctx.lineTo(_dw, y2); dctx.stroke();
+        dctx.setLineDash([]);
+        // Equilibrium / POC
+        const yPoc = priceToY(d.auction.poc || d.auction.anchor_price);
+        if (yPoc != null) {
+          dctx.strokeStyle = 'rgba(212,175,55,0.5)';
+          dctx.lineWidth = 1;
+          dctx.setLineDash([6, 3]);
+          dctx.beginPath(); dctx.moveTo(0, yPoc); dctx.lineTo(_dw, yPoc); dctx.stroke();
+          dctx.setLineDash([]);
+          dctx.font = '9px Share Tech Mono, monospace';
+          dctx.fillStyle = 'rgba(212,175,55,0.7)';
+          dctx.fillText('POC', 6, yPoc - 3);
+        }
+      }
+    }
+
+    // 2. Legs
+    if (_engineOverlayState.legs && d.legs) {
+      const recent = d.legs.slice(-10);
+      recent.forEach(leg => {
+        const x1 = timeToX(leg.start_ts), y1 = priceToY(leg.start_price);
+        const x2 = timeToX(leg.end_ts),   y2 = priceToY(leg.end_price);
+        if (x1 == null || y1 == null || x2 == null || y2 == null) return;
+        const isImp = leg.character === 'IMPULSIVE';
+        const col = isImp ? (leg.direction === 'UP' ? '#089981' : '#f23645') : '#787b86';
+        dctx.save();
+        dctx.strokeStyle = col;
+        dctx.globalAlpha = isImp ? 0.75 : 0.3;
+        dctx.lineWidth = isImp ? 1.8 : 1;
+        if (!isImp) dctx.setLineDash([4, 3]);
+        dctx.beginPath(); dctx.moveTo(x1, y1); dctx.lineTo(x2, y2); dctx.stroke();
+        dctx.setLineDash([]);
+        if (isImp) {
+          const mx = (x1 + x2) / 2, my = (y1 + y2) / 2 - 6;
+          dctx.globalAlpha = 0.85;
+          dctx.font = 'bold 8px Share Tech Mono, monospace';
+          dctx.fillStyle = col;
+          dctx.fillText(leg.distance_atr.toFixed(1) + 'A · ' + leg.dist_atr_pct + 'p', mx + 4, my);
+        }
+        dctx.restore();
+      });
+    }
+
+    // 3. Swing dots
+    if (_engineOverlayState.swings && d.swings) {
+      d.swings.slice(-20).forEach(sw => {
+        const x = timeToX(sw.ts), y = priceToY(sw.price);
+        if (x == null || y == null) return;
+        const isH = sw.kind === 'HIGH';
+        dctx.save();
+        dctx.fillStyle = isH ? '#f23645' : '#089981';
+        dctx.globalAlpha = sw.confirmed ? 0.9 : 0.4;
+        dctx.beginPath();
+        dctx.arc(x, y, 4, 0, Math.PI * 2);
+        dctx.fill();
+        dctx.font = 'bold 8px Share Tech Mono, monospace';
+        dctx.fillStyle = isH ? '#f23645' : '#089981';
+        dctx.fillText(isH ? 'H' : 'L', x - 3, isH ? y - 8 : y + 14);
+        dctx.restore();
+      });
+    }
+
+    // 4. Pattern trendlines (upper + lower boundary)
+    if (_engineOverlayState.patterns && d.patterns) {
+      const pat = d.patterns;
+
+      function _drawPatternLine(ep, isUpper) {
+        if (!ep || ep.t1 == null || ep.p1 == null) return;
+        const x1 = timeToX(ep.t1), y1 = priceToY(ep.p1);
+        const x2 = timeToX(ep.t2), y2 = priceToY(ep.p2);
+        if (x1 == null || y1 == null || x2 == null || y2 == null) return;
+        const slope = ep.slope_class || '';
+        const baseCol = isUpper
+          ? (slope === 'falling' ? '#f23645' : slope === 'rising' ? '#f23645' : '#d4af37')
+          : (slope === 'rising'  ? '#089981' : slope === 'falling' ? '#089981' : '#d4af37');
+        const r2 = ep.r2 || 0;
+        dctx.save();
+        dctx.globalAlpha = 0.35 + r2 * 0.45;  // more opaque = higher R²
+        dctx.strokeStyle = baseCol;
+        dctx.lineWidth = 1.5;
+        dctx.setLineDash([6, 4]);
+        dctx.beginPath();
+        dctx.moveTo(x1, y1);
+        dctx.lineTo(x2, y2);
+        dctx.stroke();
+        dctx.setLineDash([]);
+
+        // Touch-point dots — use pivot_highs/pivot_lows already in the payload
+        const pivots = isUpper ? (pat.pivot_highs || []) : (pat.pivot_lows || []);
+        pivots.forEach(pv => {
+          const px = timeToX(pv.ts), py = priceToY(pv.price);
+          if (px == null || py == null) return;
+          dctx.fillStyle = baseCol;
+          dctx.globalAlpha = 0.55;
+          dctx.beginPath();
+          dctx.arc(px, py, 3, 0, Math.PI * 2);
+          dctx.fill();
+        });
+
+        dctx.restore();
+      }
+
+      _drawPatternLine(pat.upper_trendline, true);
+      _drawPatternLine(pat.lower_trendline, false);
+
+      // Pattern label at top-right of upper line
+      if (pat.pattern && pat.pattern !== 'None' && pat.upper_trendline) {
+        const ep = pat.upper_trendline;
+        const x2 = timeToX(ep.t2), y2 = priceToY(ep.p2);
+        if (x2 != null && y2 != null) {
+          dctx.save();
+          dctx.globalAlpha = 0.90;
+          const bias = pat.bias || 'neutral';
+          const lCol = bias === 'bullish' ? '#089981' : bias === 'bearish' ? '#f23645' : '#d4af37';
+          const conf = Math.round((pat.value || 0) * 100);
+          const txt  = pat.pattern + (conf ? ' ' + conf + '%' : '');
+          const fw = dctx.measureText(txt).width + 10;
+          const fh = 14;
+          const lx = Math.max(4, Math.min(x2 - fw / 2, _dw - fw - 4));
+          const ly = Math.max(fh + 4, y2 - 14);
+          dctx.fillStyle = 'rgba(13,15,27,0.82)';
+          dctx.beginPath();
+          dctx.roundRect(lx, ly - fh + 2, fw, fh, 3);
+          dctx.fill();
+          dctx.font = 'bold 9px Share Tech Mono, monospace';
+          dctx.fillStyle = lCol;
+          dctx.fillText(txt, lx + 5, ly);
+          dctx.restore();
+        }
+      }
+    }
+
+    dctx.restore();
+  }
+
+  // Hook engine overlays into the main redrawAll (append at end)
+  // Live position P&L badge — drawn at current price when trade overlay is on
+  function _drawLivePosition() {
+    if (!_overlayEntry || !_activeTrade || !_activeTrade.entry) return;
+    if (!currentCandles || !currentCandles.length) return;
+    const cp    = currentCandles[currentCandles.length - 1].close;
+    const entry = _activeTrade.entry;
+    const isLong = (_activeTrade.direction || '').toLowerCase().includes('long');
+    const lev   = parseFloat(_activeTrade.leverage) || 1;
+    const isPending = _activeTrade.status === 'PENDING';
+    const y = priceToY(cp);
+    if (y == null) return;
+    dctx.save();
+    let txt, color, bgColor, strokeColor;
+    if (isPending) {
+      // Trade idea not yet open — show how far price is from entry
+      const distPct = (cp - entry) / entry * 100;
+      const above = distPct >= 0;
+      // Arrow points toward entry: price above entry → needs to drop ↓, below → needs to rise ↑
+      const arrow = above ? '↓' : '↑';
+      const approaching = isLong ? !above : above;
+      txt = arrow + ' WATCHING  ' + Math.abs(distPct).toFixed(2) + '%';
+      color      = approaching ? '#d4af37' : '#787b86';
+      bgColor    = approaching ? 'rgba(212,175,55,0.08)' : 'rgba(30,34,45,0.85)';
+      strokeColor = approaching ? 'rgba(212,175,55,0.35)' : 'rgba(60,65,80,0.5)';
+      // Dashed line in gold for pending
+      dctx.strokeStyle = 'rgba(212,175,55,0.25)';
+      dctx.lineWidth = 1; dctx.setLineDash([2, 5]);
+      dctx.beginPath(); dctx.moveTo(0, y); dctx.lineTo(_dw, y); dctx.stroke();
+      dctx.setLineDash([]);
+    } else {
+      // Live position — show P&L
+      const pctRaw = isLong ? (cp - entry) / entry * 100 : (entry - cp) / entry * 100;
+      const pctLev = pctRaw * lev;
+      const isProfit = pctLev >= 0;
+      const prefix = isProfit ? '▲ +' : '▼ ';
+      const levSuffix = lev > 1 ? ' · ' + lev + 'x' : '';
+      txt = prefix + Math.abs(pctLev).toFixed(2) + '%' + levSuffix;
+      color       = isProfit ? '#089981' : '#f23645';
+      bgColor     = isProfit ? 'rgba(8,153,129,0.13)'  : 'rgba(242,54,69,0.13)';
+      strokeColor = isProfit ? 'rgba(8,153,129,0.55)'  : 'rgba(242,54,69,0.55)';
+      dctx.strokeStyle = isProfit ? 'rgba(8,153,129,0.3)' : 'rgba(242,54,69,0.3)';
+      dctx.lineWidth = 1; dctx.setLineDash([3, 4]);
+      dctx.beginPath(); dctx.moveTo(0, y); dctx.lineTo(_dw, y); dctx.stroke();
+      dctx.setLineDash([]);
+    }
+    dctx.font = 'bold 6px "Share Tech Mono", monospace';
+    const tw = dctx.measureText(txt).width;
+    const ph = 9, pw = tw + 6;
+    const px = 4;
+    const pyTop = y - ph / 2;
+    dctx.fillStyle   = bgColor;
+    dctx.strokeStyle = strokeColor;
+    dctx.lineWidth = 1;
+    dctx.beginPath();
+    if (dctx.roundRect) dctx.roundRect(px, pyTop, pw, ph, 2);
+    else dctx.rect(px, pyTop, pw, ph);
+    dctx.fill(); dctx.stroke();
+    dctx.fillStyle  = color;
+    dctx.textAlign  = 'left'; dctx.textBaseline = 'middle';
+    dctx.fillText(txt, px + 3, y);
+    dctx.restore();
+  }
+
+  const _origRedrawAll = redrawAll;
+  redrawAll = function() {
+    _origRedrawAll();
+    _drawEngineOverlays();
+    _drawLivePosition();
+    // RSI → main chart crosshair sync: faint vertical dashed line when hovering RSI panel
+    if (_rsiCrossX != null && _rsiCrossX >= 0 && _rsiCrossX <= _dw) {
+      dctx.save();
+      dctx.globalAlpha = 0.35;
+      dctx.strokeStyle = '#787b86';
+      dctx.lineWidth = 1;
+      dctx.setLineDash([3, 4]);
+      dctx.beginPath(); dctx.moveTo(_rsiCrossX, 0); dctx.lineTo(_rsiCrossX, _dh); dctx.stroke();
+      dctx.setLineDash([]);
+      dctx.restore();
+    }
+  };
+
+  /* ============================================================
+     ENGINE CACHE — persist Dexter results per symbol+tf in localStorage
+     ============================================================ */
+  const _ENG_CACHE_KEY = '_chev_eng_v1';
+
+  function _saveEngineCache(sym, tf, data) {
+    try {
+      const store = JSON.parse(localStorage.getItem(_ENG_CACHE_KEY) || '{}');
+      store[sym + '|' + tf] = { data, ts: Date.now() };
+      // Keep only the 12 most recent symbols to avoid localStorage bloat
+      const keys = Object.keys(store).sort((a,b) => (store[b].ts||0)-(store[a].ts||0));
+      if (keys.length > 12) keys.slice(12).forEach(k => delete store[k]);
+      localStorage.setItem(_ENG_CACHE_KEY, JSON.stringify(store));
+    } catch(e) {}
+  }
+
+  function _loadEngineCache(sym, tf) {
+    try {
+      const store = JSON.parse(localStorage.getItem(_ENG_CACHE_KEY) || '{}');
+      return store[sym + '|' + tf] || null;
+    } catch(e) { return null; }
+  }
+
+  /* ============================================================
+     HYPOTHETICAL CACHE — Chev's "where would you enter" answers,
+     persisted per symbol+tf so they survive navigating away. Never
+     written server-side (no journal/sheet/telegram) — cache-only.
+     ============================================================ */
+  const _HYPO_CACHE_KEY = '_chev_hypo_v1';
+
+  function _saveHypoCache(sym, tf, data) {
+    try {
+      const store = JSON.parse(localStorage.getItem(_HYPO_CACHE_KEY) || '{}');
+      store[sym + '|' + tf] = { data, ts: Date.now() };
+      const keys = Object.keys(store).sort((a,b) => (store[b].ts||0)-(store[a].ts||0));
+      if (keys.length > 12) keys.slice(12).forEach(k => delete store[k]);
+      localStorage.setItem(_HYPO_CACHE_KEY, JSON.stringify(store));
+    } catch(e) {}
+  }
+
+  function _loadHypoCache(sym, tf) {
+    try {
+      const store = JSON.parse(localStorage.getItem(_HYPO_CACHE_KEY) || '{}');
+      return store[sym + '|' + tf] || null;
+    } catch(e) { return null; }
+  }
+
+  /* ─── Conviction SVG gauge helper ─── */
+  function _convictionGaugeSVG(pct, color) {
+    const r = 20, cx = 26, cy = 26, stroke = 5;
+    const circ = 2 * Math.PI * r;
+    const dashArr = circ * 0.75;  // 270° arc
+    const dashOff = dashArr * (1 - pct / 100);
+    return `<svg viewBox="0 0 52 52" style="transform:rotate(135deg)">
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="${stroke}" stroke-dasharray="${dashArr.toFixed(1)} ${circ.toFixed(1)}" stroke-linecap="round"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-dasharray="${(dashArr*pct/100).toFixed(1)} ${circ.toFixed(1)}" stroke-linecap="round" style="transition:stroke-dasharray 0.6s ease"/>
+    </svg>`;
+  }
+
+  /* ─── Structure timeline from legs ─── */
+  function _buildStructureTimeline(legs) {
+    if (!legs || !legs.length) return '';
+    const recent = legs.slice(-7);
+    let chips = recent.map((leg, i) => {
+      const isImp = leg.character === 'IMPULSIVE';
+      const isUp  = leg.direction === 'UP';
+      const cls   = isImp ? (isUp ? 'impl-up' : 'impl-dn') : (isUp ? 'corr-up' : 'corr-dn');
+      const arrow = isImp ? (isUp ? '▲' : '▼') : (isUp ? '△' : '▽');
+      const sep   = i < recent.length - 1 ? '<span class="legConnector"></span>' : '';
+      return `<span class="legChip ${cls}" title="${leg.character} ${leg.direction} · ${leg.distance_atr?.toFixed(1) || '?'}A">
+        <span class="legArrow">${arrow}</span>
+        <span class="legAtr">${leg.distance_atr?.toFixed(1) || '?'}A</span>
+      </span>${sep}`;
+    }).join('');
+    chips += '<span class="legNow">NOW</span>';
+    return `<div class="structureTimeline">${chips}</div>`;
+  }
+
+  /* ─── Hypothesis card ─── */
+  function _buildHypCard(h, isPrimary) {
+    const bias = (h.bias || 'NEUTRAL').toUpperCase();
+    const dirCls = bias === 'LONG' ? 'long' : bias === 'SHORT' ? 'short' : 'neutral';
+    const dirLabel = bias === 'LONG' ? '▲ LONG' : bias === 'SHORT' ? '▼ SHORT' : '◆ NEUTRAL';
+    const confPct  = Math.round((h.confidence || 0) * 100);
+    const confCls  = confPct >= 65 ? 'high' : confPct >= 40 ? 'mid' : 'low';
+    const fillColor = bias === 'LONG' ? 'var(--green)' : bias === 'SHORT' ? 'var(--red)' : 'var(--gold)';
+    const name = (h.name || h.label || '').replace(/_/g, ' ');
+    const label = h.label || name;
+    const trigger = h.expected_next_event || h.trigger || '';
+    const kill    = h.invalidation || h.kill_switch || '';
+    return `<div class="hypCard${isPrimary ? ' primary' : ''}">
+      <div class="hypCardHeader">
+        <span class="hypDir ${dirCls}">${dirLabel}</span>
+        <span class="hypName">${name}</span>
+        <span class="hypPct ${confCls}">${confPct}%</span>
+      </div>
+      <div class="hypConfTrack"><div class="hypConfFill" style="width:${confPct}%;background:${fillColor}"></div></div>
+      ${label !== name ? `<div class="hypDesc">${label}</div>` : ''}
+      ${(trigger || kill) ? `<div class="hypFooter">
+        ${trigger ? `<div class="hypFooterRow"><img src="emoji/hope.png" class="hypFooterIcon" alt=""><span class="hypFooterLabel hypTrigger">Watch for:</span><span class="hypFooterText hypTrigger">${trigger}</span></div>` : ''}
+        ${kill    ? `<div class="hypFooterRow"><img src="emoji/oh-no.png" class="hypFooterIcon" alt=""><span class="hypFooterLabel hypKill">Kills it:</span><span class="hypFooterText hypKill">${kill}</span></div>` : ''}
+      </div>` : ''}
+    </div>`;
+  }
+
+  /* ─── Scenario planner block ─── */
+  function _buildScenario(state, topHyp) {
+    if (!state) return '';
+    const isBull = state.direction > 15, isBear = state.direction < -15;
+    const bullTarget = topHyp && topHyp.bias === 'LONG'  ? topHyp.expected_next_event : null;
+    const bearTarget = topHyp && topHyp.bias === 'SHORT' ? topHyp.expected_next_event : null;
+    return `<div class="scenarioRow">
+      <div class="scenarioBlock scenarioBull">
+        <div class="scenarioLabel">▲ Bull Case</div>
+        <div class="scenarioIf">If buyers hold structure:</div>
+        <div class="scenarioThen">${bullTarget || (isBull ? 'Continuation higher, trend intact' : 'Potential reversal long')}</div>
+      </div>
+      <div class="scenarioBlock scenarioBear">
+        <div class="scenarioLabel">▼ Bear Case</div>
+        <div class="scenarioIf">If sellers regain control:</div>
+        <div class="scenarioThen">${bearTarget || (isBear ? 'Continuation lower, momentum down' : 'Range breakdown expected')}</div>
+      </div>
+    </div>`;
+  }
+
+  /* ─── Update Brain State Banner in TRADES pane ─── */
+  function _updateBrainStateBanner(d, runTs) {
+    const banner  = document.getElementById('brainStateBanner');
+    const regimeEl = document.getElementById('brainStateRegime');
+    const hypEl   = document.getElementById('brainStateHyp');
+    const confEl  = document.getElementById('brainStateConf');
+    const barFill = document.getElementById('brainStateBarFill');
+    const ageEl   = document.getElementById('brainStateAge');
+    if (!banner) return;
+
+    const state  = d.state || d.market_state;
+    const hyps   = d.hypotheses || [];
+    const topHyp = hyps[0];
+
+    let regime = state?.regime || 'UNKNOWN';
+    const isBull = regime.includes('BULL');
+    const isBear = regime.includes('BEAR');
+    const regCls = isBull ? 'bull' : isBear ? 'bear' : 'range';
+    const regLabel = (isBull ? '▲ ' : isBear ? '▼ ' : '◆ ') + regime.replace(/_/g, ' ');
+
+    regimeEl.textContent = regLabel;
+    regimeEl.className   = regCls;
+
+    const confPct = topHyp ? Math.round(topHyp.confidence * 100) : 0;
+    const confCls = confPct >= 65 ? 'high' : confPct >= 40 ? 'mid' : 'low';
+
+    if (topHyp) {
+      const hypName = (topHyp.name || topHyp.label || '').replace(/_/g, ' ');
+      hypEl.innerHTML = `<b>${hypName}</b> <em>· ${currentSymbol} ${currentTf?.toUpperCase() || ''}</em>`;
+      confEl.textContent = confPct + '%';
+      confEl.className   = confCls;
+      barFill.style.width      = confPct + '%';
+      barFill.style.background = isBull ? 'var(--green)' : isBear ? 'var(--red)' : 'var(--gold)';
+    } else {
+      hypEl.textContent  = regime.replace(/_/g, ' ').toLowerCase() + ' — no strong hypothesis';
+      confEl.textContent = '';
+      barFill.style.width = (state?.participation || 0) + '%';
+    }
+
+    if (runTs) {
+      const ago = Math.round((Date.now() - runTs) / 60000);
+      ageEl.textContent = '⟳ Dexter ran ' + (ago < 1 ? 'just now' : ago + 'm ago') + ' · ' + currentSymbol;
+    }
+
+    banner.classList.add('visible');
+    _saveHypothesisHistory(d, runTs || Date.now());
+  }
+
+  /* ─── Hypothesis history (localStorage) ─── */
+  const _HYP_HISTORY_KEY = '_chev_hyp_v1';
+  function _saveHypothesisHistory(d, ts) {
+    const hyps = d.hypotheses || [];
+    const topHyp = hyps[0];
+    if (!topHyp) return;
+    const record = {
+      sym: currentSymbol, tf: currentTf, ts,
+      name: (topHyp.name || '').replace(/_/g, ' '),
+      bias: topHyp.bias || 'NEUTRAL',
+      conf: Math.round((topHyp.confidence || 0) * 100),
+      regime: d.state?.regime || '',
+      outcome: 'open'
+    };
+    try {
+      const hist = JSON.parse(localStorage.getItem(_HYP_HISTORY_KEY) || '[]');
+      // avoid duplicates within 10 min
+      const recent = hist[hist.length - 1];
+      if (recent && recent.sym === record.sym && Math.abs(recent.ts - ts) < 600000) return;
+      hist.push(record);
+      if (hist.length > 50) hist.splice(0, hist.length - 50);
+      localStorage.setItem(_HYP_HISTORY_KEY, JSON.stringify(hist));
+    } catch(e) {}
+  }
+
+  /* ─── Hypothesis History renderer ─── */
+  function _renderHypHistory() {
+    const section = document.getElementById('hypHistorySection');
+    const container = document.getElementById('hypTracker');
+    if (!section || !container) return;
+    try {
+      const hist = JSON.parse(localStorage.getItem(_HYP_HISTORY_KEY) || '[]');
+      if (!hist.length) { section.style.display = 'none'; return; }
+      section.style.display = '';
+      const recent = [...hist].reverse().slice(0, 12);
+      container.innerHTML = recent.map(r => {
+        const bias = r.bias || 'NEUTRAL';
+        const arrow = bias === 'LONG' ? '▲' : bias === 'SHORT' ? '▼' : '◆';
+        const dotCls = r.outcome === 'win' ? 'win' : r.outcome === 'loss' ? 'loss' : 'open';
+        const ago = Math.round((Date.now() - r.ts) / 60000);
+        const agoStr = ago < 60 ? ago + 'm ago' : Math.round(ago/60) + 'h ago';
+        const conf = r.conf ? r.conf + '%' : '';
+        const nameStr = (r.name || '').length > 28 ? r.name.slice(0,28) + '…' : r.name;
+        return `<div class="hypTrackItem">
+          <span class="hypTrackDot ${dotCls}"></span>
+          <span class="hypTrackText"><b style="color:${bias==='LONG'?'var(--green)':bias==='SHORT'?'var(--red)':'var(--txt2)'}">${arrow}</b> ${nameStr || bias}</span>
+          <span class="hypTrackMeta">${r.sym} ${r.tf?.toUpperCase()||''} · ${conf} · ${agoStr}</span>
+        </div>`;
+      }).join('');
+    } catch(e) { section.style.display = 'none'; }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const clearBtn = document.getElementById('clearHypHistory');
+    if (clearBtn) clearBtn.addEventListener('click', () => {
+      localStorage.removeItem(_HYP_HISTORY_KEY);
+      _renderHypHistory();
+      showNotification('History cleared', 'Hypothesis log reset', 'info', 'wrench.png', 3000);
+    });
+  });
+
+  /* ─── Main ENGINE data renderer ─── */
+  function _applyEngineData(d, fromCache, cacheTs) {
+    _engineData = d;
+    const readout   = document.getElementById('engineReadout');
+    const toggles   = document.getElementById('engineOverlayToggles');
+    const cacheNote = document.getElementById('engineCacheNote');
+    const state  = d.state  || d.market_state;
+    const prof   = d.asset_profile;
+    const hyps   = d.hypotheses || [];
+    const topHyp = hyps[0];
+    let html = '';
+
+    // ─── 1. CHEV'S READ (narrative) ───
+    if (state) {
+      const isBull = state.direction > 25, isBear = state.direction < -25;
+      const moodImg = isBull ? 'fire.png' : isBear ? 'furious.png' : 'lets-see.png';
+      const _mood   = isBull ? `I'm reading <b style="color:var(--green)">bullish</b>` :
+                      isBear ? `I'm reading <b style="color:var(--red)">bearish</b>` :
+                               `No clean trend — market is <b>ranging</b>`;
+      const p = state.participation;
+      const _partic = p >= 60 ? `participation <b>${p.toFixed(0)}/100</b> — institutions active`
+                    : p <= 35  ? `participation <b>${p.toFixed(0)}/100</b> — thin, low conviction`
+                               : `participation <b>${p.toFixed(0)}/100</b> — moderate`;
+      const _phase  = state.phase ? ` <b>${state.phase}</b> phase.` : '';
+      const hypColor = topHyp ? (topHyp.bias==='LONG' ? 'var(--green)' : topHyp.bias==='SHORT' ? 'var(--red)' : 'var(--gold)') : 'var(--gold)';
+      const _bet = topHyp ? ` My thesis: <b style="color:${hypColor}">${(topHyp.name||topHyp.label||'').replace(/_/g,' ')}</b> at <b>${Math.round(topHyp.confidence*100)}%</b> confidence.` : '';
+      html += `<div class="dexterNarrative">
+        <img src="emoji/${moodImg}" alt="" style="width:16px;height:16px;vertical-align:middle;margin-right:6px">
+        <b style="color:var(--gold);letter-spacing:0.05em">CHEV'S READ</b><br>
+        ${_mood}, ${_partic}.${_phase}${_bet}
+      </div>`;
+    }
+
+    // ─── 2. CONVICTION METER ───
+    if (topHyp && state) {
+      const conf   = Math.round(topHyp.confidence * 100);
+      const isBull = (topHyp.bias === 'LONG');
+      const isBear = (topHyp.bias === 'SHORT');
+      const mColor = isBull ? 'var(--green)' : isBear ? 'var(--red)' : 'var(--gold)';
+      const moodConf = conf >= 70 ? 'not-bad-2.png' : conf >= 45 ? 'not-bad-1.png' : 'lets-see.png';
+      const phase = state.phase || 'unknown';
+      html += `<div class="convictionMeter">
+        <div class="convictionGauge">
+          ${_convictionGaugeSVG(conf, mColor)}
+          <div class="convictionVal">
+            <span class="cvNum" style="color:${mColor}">${conf}</span>
+            <span class="cvLbl">CONF</span>
+          </div>
+        </div>
+        <div class="convictionBody">
+          <div class="convictionTitle">
+            <img src="emoji/${moodConf}" alt="" style="width:14px;height:14px;vertical-align:middle;margin-right:4px">
+            Conviction: ${conf >= 70 ? 'High' : conf >= 45 ? 'Moderate' : 'Low'}
+          </div>
+          <div class="convictionSub">
+            Participation ${state.participation?.toFixed(0) || '—'}/100 · ${phase}<br>
+            ${state.participation_pct != null ? state.participation_pct + 'th percentile' : ''}
+          </div>
+        </div>
+      </div>`;
+    }
+
+    // ─── 3. STRUCTURE TIMELINE ───
+    if (d.legs && d.legs.length) {
+      html += `<div class="engineBlock">
+        <div class="engineBlockTitle">Structure Timeline <small style="color:var(--txt3);font-weight:400">${d.legs.length} legs total</small></div>
+        ${_buildStructureTimeline(d.legs)}
+      </div>`;
+    }
+
+    // ─── 4. HYPOTHESES BOARD ───
+    if (hyps.length) {
+      html += `<div class="engineBlock">
+        <div class="engineBlockTitle">
+          <img src="emoji/tools.png" alt="" style="width:12px;height:12px;vertical-align:middle;margin-right:4px;opacity:0.8">
+          Chev's Hypotheses
+          <small style="color:var(--txt3);font-weight:400;margin-left:4px">${hyps.length} active</small>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">
+      `;
+      hyps.forEach((h, i) => { html += _buildHypCard(h, i === 0); });
+      html += '</div></div>';
+    }
+
+    // ─── 5. SCENARIO PLANNER ───
+    if (state && topHyp) {
+      html += `<div class="engineBlock">
+        <div class="engineBlockTitle">
+          <img src="emoji/ruler.png" alt="" style="width:12px;height:12px;vertical-align:middle;margin-right:4px;opacity:0.8">
+          Scenario Planner
+        </div>
+        <div style="margin-top:6px">${_buildScenario(state, topHyp)}</div>
+      </div>`;
+    }
+
+    // ─── 6. MARKET STATE DETAIL ───
+    if (state) {
+      const dirCol = state.direction > 20 ? 'var(--green)' : state.direction < -20 ? 'var(--red)' : 'var(--gold)';
+      html += `<div class="engineBlock"><div class="engineBlockTitle">Market Internals</div>
+        <div class="engineRow"><span class="engineLabel">Direction score</span><span class="engineVal" style="color:${dirCol}">${(state.direction > 0 ? '+' : '')}${state.direction?.toFixed(0) || '—'}</span></div>
+        <div class="engineRow"><span class="engineLabel">Participation</span><span class="engineVal">${state.participation?.toFixed(0) || '—'}/100 <small style="color:var(--txt3)">${state.participation_pct != null ? state.participation_pct + 'p' : ''}</small></span></div>
+        <div class="engineBar"><div class="engineBarFill" style="width:${state.participation || 0}%;background:${dirCol}"></div></div>
+        ${state.phase ? `<div class="engineRow"><span class="engineLabel">Phase</span><span class="engineVal">${state.phase}</span></div>` : ''}
+        ${state.leg_sequence ? `<div class="engineRow"><span class="engineLabel">Sequence</span><span class="engineVal" style="font-size:9px">${state.leg_sequence}</span></div>` : ''}
+      </div>`;
+    }
+
+    // ─── 7. PATTERN RECOGNITION ───
+    if (d.patterns && d.patterns.pattern && d.patterns.pattern !== 'None') {
+      const pat  = d.patterns;
+      const conf = Math.round((pat.value || 0) * 100);
+      const bias = pat.bias || 'neutral';
+      const bCol = bias === 'bullish' ? 'var(--green)' : bias === 'bearish' ? 'var(--red)' : 'var(--gold)';
+      const bArrow = bias === 'bullish' ? '▲' : bias === 'bearish' ? '▼' : '◆';
+      const brkLabel = pat.breakout ? '<span style="color:var(--gold);font-size:9px;margin-left:6px">BREAKOUT</span>' : '';
+      const volOk    = pat.volume_confirmed;
+      const volIcon  = volOk ? '<span style="color:var(--green)">&#x2713; vol</span>' : '<span style="color:var(--red);opacity:0.7">no vol</span>';
+      const allPats  = pat.all_patterns || [];
+      const extraPats = allPats.filter(p => p.pattern !== pat.pattern)
+        .map(p => `<span style="font-size:9px;color:var(--txt3);margin-right:8px">${p.pattern} <span style="color:var(--txt3)">${Math.round((p.confidence||0)*100)}%</span></span>`)
+        .join('');
+      const volNotes = (pat.volume_notes || []).map(n =>
+        `<div style="font-size:9px;color:var(--txt3);margin-top:2px;padding-left:4px;border-left:2px solid rgba(255,255,255,0.08)">${n}</div>`).join('');
+
+      html += `<div class="engineBlock" style="border-left:2px solid ${bCol}20">
+        <div class="engineBlockTitle" style="display:flex;align-items:center;gap:6px">
+          Pattern Recognition
+          <span style="margin-left:auto;font-size:9px;color:var(--txt3);font-weight:400">toggle: Patterns checkbox above</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:6px;padding:8px;background:rgba(255,255,255,0.02);border-radius:6px">
+          <div style="text-align:center;min-width:44px">
+            <div style="font-size:18px;font-weight:700;color:${bCol};line-height:1">${conf}</div>
+            <div style="font-size:8px;color:var(--txt3);margin-top:1px">CONF%</div>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:11px;font-weight:700;color:var(--txt1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              <span style="color:${bCol}">${bArrow}</span> ${pat.pattern}${brkLabel}
+            </div>
+            <div style="font-size:9px;color:var(--txt3);margin-top:3px;display:flex;align-items:center;gap:8px">
+              <span style="color:${bCol}">${bias}</span>
+              <span style="color:var(--txt3)">·</span>
+              ${volIcon}
+              <span style="color:var(--txt3)">·</span>
+              <span>${pat.category || ''}</span>
+            </div>
+          </div>
+          <div style="font-size:11px;font-weight:700;color:${pat.signal==='BUY'?'var(--green)':pat.signal==='SELL'?'var(--red)':'var(--txt3)'}">
+            ${pat.signal || 'NEUTRAL'}
+          </div>
+        </div>
+        ${volNotes}
+        ${extraPats ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)">${extraPats}</div>` : ''}
+      </div>`;
+    }
+
+    // ─── 8. ASSET PROFILE ───
+    if (prof) {
+      html += `<div class="engineBlock"><div class="engineBlockTitle">Asset Profile</div>
+        <div class="engineRow"><span class="engineLabel">Sample size</span><span class="engineVal">${prof.n_legs} legs · ${prof.computed_from_bars} bars</span></div>
+        ${prof.typical_impulse_atr ? `<div class="engineRow"><span class="engineLabel">Typical impulse</span><span class="engineVal">${prof.typical_impulse_atr.toFixed(1)} ATR (p50)</span></div>` : ''}
+      </div>`;
+    }
+
+    readout.innerHTML = html;
+    readout.style.display = 'flex';
+    toggles.style.display = 'flex';
+
+    // Cache note
+    if (cacheNote) {
+      if (fromCache && cacheTs) {
+        const ago = Math.round((Date.now() - cacheTs) / 60000);
+        cacheNote.textContent = '↻ cached · ' + (ago < 1 ? 'just now' : ago + 'm ago') + ' — press R to refresh';
+        cacheNote.style.display = 'block';
+      } else {
+        cacheNote.textContent = '';
+        cacheNote.style.display = 'none';
+      }
+    }
+
+    // Regime chip in context bar
+    if (state?.regime) {
+      const regStr = state.regime;
+      const isBull = regStr.includes('BULL'), isBear = regStr.includes('BEAR');
+      const chipCls = isBull ? 'bull' : isBear ? 'bear' : 'range';
+      const participPct = state.participation_pct != null ? ` · ${state.participation_pct}p` : '';
+      const eTf = document.getElementById('engineContextTf');
+      if (eTf?.parentNode) {
+        eTf.parentNode.querySelector('.regimeChip')?.remove();
+        const chipEl = document.createElement('span');
+        chipEl.innerHTML = `<span class="regimeChip ${chipCls}">${regStr.replace(/_/g,' ')}${participPct}</span>`;
+        eTf.after(chipEl.firstChild);
+      }
+      const biasChip = document.getElementById('chevBiasChip');
+      if (biasChip) {
+        biasChip.textContent = isBull ? '▲ BULL' : isBear ? '▼ BEAR' : '◆ RANGE';
+        biasChip.className   = chipCls;
+        biasChip.title       = 'Chev\'s last read: ' + regStr.replace(/_/g,' ');
+        biasChip.style.display = 'inline-block';
+      }
+    }
+
+    // Update Brain State Banner in TRADES pane
+    _updateBrainStateBanner(d, fromCache ? cacheTs : Date.now());
+
+    redrawAll();
+  }
+
+  async function runDexterEngine() {
+    const btn      = document.getElementById('runDexterBtn');
+    const statusEl = document.getElementById('engineStatus');
+    const readout  = document.getElementById('engineReadout');
+    const toggles  = document.getElementById('engineOverlayToggles');
+    btn.disabled = true;
+    btn.classList.add('running');
+    btn.innerHTML = '<img class="accentIcon" src="emoji/time.png" alt="" style="width:14px;height:14px;margin-right:4px;opacity:0.7;vertical-align:middle">Running...';
+    statusEl.textContent = 'Fetching ' + currentSymbol + ' ' + currentTf.toUpperCase() + '...';
+    try {
+      const r = await _apiFetch('/api/analysis/engine?symbol=' + encodeURIComponent(currentSymbol) + '&tf=' + currentTf);
+      if (!r.ok) throw new Error('Dexter ' + r.status + ' — is Dexter running?');
+      const fresh = await r.json();
+      if (fresh.error) throw new Error(fresh.error);
+      const t = new Date().toLocaleTimeString();
+      _setDexterStatus(true);
+      const eSym = document.getElementById('engineContextSym');
+      const eTf  = document.getElementById('engineContextTf');
+      const eLR  = document.getElementById('engineLastRun');
+      if (eSym) eSym.textContent = currentSymbol;
+      if (eTf)  eTf.textContent  = currentTf.toUpperCase();
+      if (eLR)  eLR.textContent  = 'Run ' + t;
+      const d = fresh;
+      statusEl.textContent = t + ' — ' + (d.swings ? d.swings.length : 0) + ' swings, ' + (d.legs ? d.legs.length : 0) + ' legs';
+      _saveEngineCache(currentSymbol, currentTf, fresh);
+      _applyEngineData(fresh, false, null);
+      if (typeof _renderHypHistory === 'function') _renderHypHistory();
+      const regime = (fresh.state?.regime || fresh.market_state?.regime || '').replace(/_/g,' ') || 'analyzed';
+      const topH   = (fresh.hypotheses || [])[0];
+      const hypMsg = topH ? `${(topH.name||'').replace(/_/g,' ')} — ${Math.round((topH.confidence||0)*100)}% conf` : regime;
+      const moodFile = (fresh.state?.direction||0) > 25 ? 'fire.png' : (fresh.state?.direction||0) < -25 ? 'furious.png' : 'lets-see.png';
+      showNotification('Dexter complete', hypMsg, 'success', moodFile, 5000);
+
+    } catch(e) {
+      _setDexterStatus(false);
+      statusEl.textContent = 'Error: ' + e.message;
+      _engineData = null;
+      showNotification('Dexter error', e.message, 'error', 'oh-no.png', 6000);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('running');
+      btn.innerHTML = '<img class="accentIcon" src="emoji/tools.png" alt="" style="width:16px;height:16px;margin-right:6px;opacity:0.9;vertical-align:middle">Run Dexter';
+    }
+  }
+
+  document.getElementById('runDexterBtn').addEventListener('click', runDexterEngine);
+
+  ['engChkSwings','engChkLegs','engChkGeometry','engChkBalance','engChkHypothesis','engChkPatterns'].forEach(function(id) {
+    const chk = document.getElementById(id);
+    if (!chk) return;
+    const key = { engChkSwings:'swings', engChkLegs:'legs', engChkGeometry:'geometry', engChkBalance:'balance', engChkHypothesis:'hypothesis', engChkPatterns:'patterns' }[id];
+    chk.addEventListener('change', function() { _engineOverlayState[key] = chk.checked; redrawAll(); });
+  });
+
+  // Auto-run ENGINE toggle — re-runs Dexter every 5 minutes
+  let _engAutoTimer = null;
+  const _engAutoChk = document.getElementById('engChkAuto');
+  const _engAutoLabel = document.getElementById('engAutoLabel');
+  if (_engAutoChk) {
+    _engAutoChk.addEventListener('change', function() {
+      clearInterval(_engAutoTimer);
+      _engAutoLabel.classList.toggle('active', _engAutoChk.checked);
+      if (_engAutoChk.checked) {
+        _engAutoTimer = setInterval(function() {
+          if (_engAutoChk.checked) runDexterEngine();
+        }, 5 * 60 * 1000);
+      }
+    });
+  }
+
+  /* ============================================================
+     LAYERS TAB — per-tool hide/show checkboxes (added 2026-07-05)
+     Replaces the old #layersList passive management list — each Analysis
+     Tools row now owns its own checkbox instead of a separate list managing
+     all of them. See _wireVisCheckbox below and the ATR-specific handling.
+     ============================================================ */
+  function _wireVisCheckbox(checkboxId, tag) {
+    const chk = document.getElementById(checkboxId);
+    if (!chk) return;
+    chk.addEventListener('change', function() {
+      drawings.forEach(function(d) { if (d[tag]) d.visible = chk.checked; });
+      saveDrawings(); redrawAll(); updateObjTree();
+    });
+  }
+  _wireVisCheckbox('lyrSrVis',  '_sr');
+  _wireVisCheckbox('lyrVpVis',  '_vp');
+  _wireVisCheckbox('lyrFibVis', '_fib_stack');
+  // RSI is deliberately NOT wired through _wireVisCheckbox — _rsi_div drawings are
+  // never persisted (see _clearRsiDivOverlay's comment: saveDrawings() here would
+  // fire the Firebase SSE stream, which replaces drawings[] and wipes them). This
+  // mirrors that same constraint and also needs rsiRedrawAll() for the RSI panel.
+  document.getElementById('lyrRsiVis').addEventListener('change', function() {
+    const checked = this.checked;
+    drawings.forEach(function(d) { if (d._rsi_div) d.visible = checked; });
+    redrawAll(); rsiRedrawAll(); updateObjTree();
+  });
+  // ATR's checkbox IS its on/off state (no chart drawing to toggle visible/hidden
+  // on) — checking it fetches+shows the persistent readout, unchecking hides it.
+  document.getElementById('lyrAtrVis').addEventListener('change', function() {
+    _setAtrVisible(this.checked);
+  });
+
+  // Wire LAYERS tab tool buttons to existing Arsenal functions. Class toggling
+  // AND the per-row checkbox enable/disable state are both handled synchronously
+  // inside the draw functions themselves (2026-07-05) — no external panel refresh
+  // needed anymore now that #layersList/renderLayersPanel are gone.
+  function _rsiArrowClick() {
+    // If RSI is already showing, just reopen the popup so the user can pick a
+    // different timeframe — don't toggle the whole overlay off.
+    if (document.getElementById('lyrRsiCard').classList.contains('active')) _ctpShow('rsi');
+    else showRSIDiv();
+  }
+  (function() {
+    const map = [
+      ['lyrSrBtn',  function() { drawSRZones(); }],
+      ['lyrVpBtn',  function() { drawVP(); }],
+      ['lyrAtrBtn', function() { showATR(); }],
+      ['lyrFibBtn', function() { drawFibStack(); }],
+      ['lyrRsiBtn', function() { showRSIDiv(); }],
+      ['lyrFibArrow', function(e) { e.stopPropagation(); _ctpShow('fib'); }],
+      ['lyrRsiArrow', function(e) { e.stopPropagation(); _rsiArrowClick(); }],
+    ];
+    map.forEach(function(pair) {
+      const el = document.getElementById(pair[0]);
+      if (el) el.addEventListener('click', pair[1]);
+    });
+  })();
+

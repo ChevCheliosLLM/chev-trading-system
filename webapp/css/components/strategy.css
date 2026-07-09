@@ -1,0 +1,330 @@
+/* ============================================================
+   Strategy Dashboard — the strategy dashboard overlay and its charts.
+   ============================================================ */
+#strategyOverlay.open { display: flex; }
+#strategyPanel {
+  width: 94vw; height: 92vh; max-width: 1500px;
+  background: linear-gradient(160deg, #10121f 0%, #0b0c16 100%);
+  border: 1px solid rgba(212,175,55,0.18); border-radius: var(--r-xl);
+  box-shadow: 0 24px 80px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.03);
+  display: flex; flex-direction: column; overflow: hidden;
+  animation: cmdFadeIn 0.15s ease;
+}
+#stratHeader {
+  display: flex; align-items: center; gap: 10px; padding: 14px 18px;
+  border-bottom: 1px solid rgba(255,255,255,0.06); flex-shrink: 0;
+  background: rgba(212,175,55,0.03);
+}
+#stratHeader img { width: 22px; height: 22px; }
+#stratTitle { font-size: 15px; font-weight: 700; color: var(--gold); letter-spacing: 0.02em; }
+#stratSub { font-size: 11px; color: var(--txt2); font-family: 'Share Tech Mono', monospace; }
+#stratModeBadge {
+  margin-left: auto; font-family: 'Share Tech Mono', monospace; font-size: 10.5px;
+  padding: 5px 11px; border-radius: var(--r-pill); border: 1px solid rgba(212,175,55,0.3);
+  background: rgba(212,175,55,0.08); color: var(--gold); white-space: nowrap;
+  cursor: pointer; transition: background 0.12s, border-color 0.12s;
+}
+#stratModeBadge:hover { background: rgba(212,175,55,0.16); border-color: rgba(212,175,55,0.55); }
+#stratCloseBtn {
+  width: 28px; height: 28px; border-radius: var(--r-sm); background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08); color: var(--txt2); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+#stratCloseBtn:hover { background: rgba(242,54,69,0.15); color: var(--red); border-color: rgba(242,54,69,0.4); }
+#stratTabs {
+  display: flex; gap: 2px; padding: 0 14px; border-bottom: 1px solid rgba(255,255,255,0.05);
+  flex-shrink: 0; background: rgba(0,0,0,0.15);
+}
+.stratTab {
+  padding: 10px 16px; font-size: 12px; color: var(--txt2); cursor: pointer;
+  border-bottom: 2px solid transparent; transition: color 0.12s, border-color 0.12s;
+  font-family: 'Inter', sans-serif; user-select: none;
+}
+.stratTab:hover { color: var(--txt1); }
+.stratTab.active { color: var(--gold); border-bottom-color: var(--gold); }
+#stratBody { flex: 1; overflow-y: auto; padding: 18px; min-height: 0; }
+.stratPane { display: none; }
+.stratPane.active { display: block; animation: cmdFadeIn 0.12s ease; }
+
+/* Quiet-system alert */
+#stratQuietAlert {
+  display: none; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 14px;
+  background: rgba(242,54,69,0.08); border: 1px solid rgba(242,54,69,0.3); border-radius: var(--r-md);
+  color: #ff8a95; font-size: 12.5px; font-family: 'Inter', sans-serif;
+}
+#stratQuietAlert.show { display: flex; }
+
+/* Scorecard strip */
+.stratScoreRow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 18px; }
+.stratScoreCard {
+  background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 12px 14px;
+}
+.stratScoreCard .k { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--txt2); font-family: 'Inter', sans-serif; }
+.stratScoreCard .v { font-size: 20px; font-weight: 700; color: var(--txt1); font-family: 'Share Tech Mono', monospace; margin-top: 4px; }
+.stratScoreCard .v.good { color: var(--green); }
+.stratScoreCard .v.bad  { color: var(--red); }
+
+.stratSectionLabel {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--txt2);
+  font-family: 'Inter', sans-serif; font-weight: 600; margin: 20px 0 10px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
+}
+.stratSectionLabel:first-child { margin-top: 0; }
+
+/* PHASE 21: Learn tab. The old Learning Mode toggle is gone -- (i) icons are always
+   visible everywhere and deep-link into the Learn pane instead of popping a tooltip.
+   The Glossary (concepts + tag registry) is now a real .stratPane, so it inherits
+   #stratBody's working overflow-y:auto instead of being clipped by #strategyPanel's
+   fixed height (PHASE 17's bug: it lived outside #stratBody as a plain sibling). */
+.stratLearnIcon {
+  display: inline-flex; width: 14px; height: 14px; border-radius: 50%;
+  background: rgba(155,89,182,0.18); color: #b39ddb; border: 1px solid rgba(155,89,182,0.45);
+  font-size: 9.5px; line-height: 1; align-items: center; justify-content: center;
+  cursor: pointer; flex-shrink: 0; font-family: 'Inter', sans-serif; font-weight: 700;
+  user-select: none;
+}
+.stratLearnIcon:hover { background: rgba(155,89,182,0.3); }
+
+#stratLearnSections { margin-bottom: 22px; }
+.learnEntry { padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04); scroll-margin-top: 12px; }
+.learnEntry:last-child { border-bottom: none; }
+.learnEntry .gName { font-size: 12px; font-weight: 700; color: var(--gold); font-family: 'Inter', sans-serif; }
+.learnEntry .gCode { font-size: 9px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; margin-left: 6px; }
+.learnEntry .gPoints { font-size: 9px; color: #b39ddb; font-family: 'Share Tech Mono', monospace; margin-left: 6px; }
+.learnEntry .gDef { font-size: 11px; color: var(--txt2); font-family: 'Inter', sans-serif; margin-top: 3px; line-height: 1.5; }
+.learnEntry .gHow { font-size: 10.5px; color: var(--txt3); font-family: 'Inter', sans-serif; margin-top: 3px; font-style: italic; }
+/* Persistent highlight after a deep-link jump -- same violet accent as the rest of
+   Learning Mode's UI. Stays lit (survives a Definition/Story Time toggle, which
+   rebuilds this list's HTML) until you click the highlighted entry itself to clear it. */
+.learnEntry.learnPinned { background: rgba(155,89,182,0.22); cursor: pointer; transition: background 0.25s ease-out; }
+
+#glossarySearch {
+  width: 100%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 12px;
+  background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--txt1); font-family: 'Inter', sans-serif; font-size: 12px;
+}
+
+/* Live feed cards */
+#stratFeedFilters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.stratFeedCard {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; margin-bottom: 6px;
+  background: var(--s1); border: 1px solid var(--border); border-left: 3px solid var(--border2);
+  border-radius: var(--r-sm); font-family: 'Inter', sans-serif; position: relative; overflow: hidden;
+}
+.stratFeedCard.isSkip {
+  border-left-color: var(--red);
+  background: linear-gradient(90deg, rgba(242,54,69,0.15) 0%, var(--s1) 40%);
+}
+.stratFeedCard.isPost {
+  border-left-color: var(--green);
+  background: linear-gradient(90deg, rgba(8,153,129,0.15) 0%, var(--s1) 40%);
+}
+.stratFeedCard.isReject {
+  border-left-color: #ff8a3d;
+  background: linear-gradient(90deg, rgba(255,138,61,0.13) 0%, var(--s1) 40%);
+}
+.stratFeedCard .stratEmoji { width: 20px; height: 20px; flex-shrink: 0; margin-top: 1px; }
+.stratFeedCard .stratFeedMain { flex: 1; min-width: 0; }
+.stratFeedCard .stratFeedTop { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; flex-wrap: wrap; }
+.stratFeedCard .stratSym { font-weight: 700; font-size: 12.5px; color: var(--txt1); }
+.stratFeedCard .stratTf { font-size: 10px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; }
+.stratFeedCard .stratDecPill {
+  font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: var(--r-pill);
+  text-transform: uppercase; letter-spacing: 0.05em; font-family: 'Share Tech Mono', monospace;
+}
+.stratDecPill.SKIP { background: rgba(242,54,69,0.15); color: #ff8a95; }
+.stratDecPill.POST { background: rgba(8,153,129,0.18); color: #5fd6bc; }
+.stratDecPill.REJECT, .stratDecPill.GATE_REJECT, .stratDecPill.STRUCT_REJECT,
+.stratDecPill.MTF_TAX_REJECT, .stratDecPill.GEOMETRY_REJECT, .stratDecPill.FORMAT_ERROR {
+  background: rgba(255,138,61,0.15); color: #ffb27a;
+}
+.stratFeedCard .stratScore { font-size: 10px; color: var(--txt2); font-family: 'Share Tech Mono', monospace; margin-left: auto; }
+.stratFeedCard .stratReason { font-size: 12px; color: var(--txt1); line-height: 1.5; }
+.stratFeedCard .stratDetail {
+  font-size: 11px; color: var(--txt2); line-height: 1.5; margin-top: 4px;
+  padding-top: 4px; border-top: 1px dashed rgba(255,255,255,0.06);
+}
+.stratVagueTag {
+  font-size: 8.5px; color: var(--gold); background: rgba(212,175,55,0.1);
+  border: 1px solid rgba(212,175,55,0.3); border-radius: var(--r-pill);
+  padding: 1px 6px; margin-left: auto; font-family: 'Share Tech Mono', monospace;
+}
+.stratFeedCard .stratTs { font-size: 9.5px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; margin-top: 3px; }
+
+/* PHASE 7B-4: feed-card shadow badges -- reuses .stratDecPill's shape/sizing (pill,
+   9px mono, small padding) but with a dashed violet border, the same quarantine accent
+   as the rest of the shadow section, so it never reads as a real decision pill. */
+.stratShadowBadge {
+  font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: var(--r-pill);
+  font-family: 'Share Tech Mono', monospace; border: 1px dashed rgba(147,112,219,0.5);
+}
+.stratShadowBadge.dodged  { background: rgba(8,153,129,0.12); color: #5fd6bc; }
+.stratShadowBadge.missed  { background: rgba(242,54,69,0.12); color: #ff8a95; }
+.stratShadowBadge.pending { background: rgba(255,255,255,0.04); color: var(--txt3); }
+
+/* Funnel */
+.stratFunnelRow { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+.stratFunnelLabel { width: 190px; flex-shrink: 0; font-size: 11.5px; color: var(--txt1); font-family: 'Inter', sans-serif; }
+.stratFunnelBarWrap { flex: 1; background: var(--s2); border-radius: var(--r-xs); height: 20px; overflow: hidden; position: relative; }
+.stratFunnelBar { height: 100%; border-radius: var(--r-xs); transition: width 0.3s ease; }
+.stratFunnelCount { width: 54px; text-align: right; font-size: 12px; font-family: 'Share Tech Mono', monospace; color: var(--txt1); flex-shrink: 0; }
+
+/* Reason breakdown / tag leaderboard bars (shared style) */
+.stratBarRow { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.stratBarLabel { width: 170px; flex-shrink: 0; font-size: 11.5px; color: var(--txt1); font-family: 'Inter', sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stratBarTrack { flex: 1; background: var(--s2); border-radius: var(--r-xs); height: 16px; overflow: hidden; }
+.stratBarFill { height: 100%; border-radius: var(--r-xs); }
+.stratBarVal { width: 64px; text-align: right; font-size: 11px; font-family: 'Share Tech Mono', monospace; color: var(--txt2); flex-shrink: 0; }
+
+/* Heatmap */
+/* PHASE 25: 6 four-hour blocks instead of 24 hour columns. */
+#stratHeatmap { display: grid; grid-template-columns: 34px repeat(6, 1fr); gap: 2px; margin-top: 6px; }
+.stratHeatCell { aspect-ratio: 1; border-radius: 3px; background: var(--s2); }
+.stratHeatHourLabel, .stratHeatDayLabel { font-size: 8px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; text-align: center; }
+.stratHeatDayLabel { text-align: right; padding-right: 4px; align-self: center; }
+
+/* Grade / R-multiple mini bars */
+.stratGradeGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px,1fr)); gap: 10px; }
+.stratGradeCard { background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 12px; text-align: center; }
+.stratGradeCard .g { font-size: 11px; color: var(--txt2); font-family: 'Inter', sans-serif; }
+.stratGradeCard .wr { font-size: 18px; font-weight: 700; font-family: 'Share Tech Mono', monospace; margin-top: 2px; }
+.stratGradeCard .n  { font-size: 9.5px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; }
+
+#stratEquityChart { width: 100%; height: 220px; }
+
+/* PHASE 13: system-over-time charts -- same LightweightCharts sizing convention as the
+   equity curve above, stacked one per row (mobile-first, no side-by-side layout needed). */
+.tsChart { width: 100%; height: 160px; margin-bottom: 10px; }
+.tsAnnotTip {
+  position: absolute; z-index: 20; pointer-events: none; background: #10121f;
+  border: 1px solid rgba(255,255,255,0.12); border-radius: var(--r-sm); padding: 5px 8px;
+  font-size: 10px; font-family: 'Inter', sans-serif; color: var(--txt1); white-space: nowrap;
+  display: none; box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+}
+
+/* Raw table */
+.stratRawCaption { font-size: 10.5px; color: var(--txt3); font-family: 'Inter', sans-serif; font-style: italic; margin-bottom: 8px; }
+#stratRawTable { width: 100%; border-collapse: collapse; font-family: 'Share Tech Mono', monospace; font-size: 11px; }
+#stratRawTable th {
+  text-align: left; padding: 7px 8px; color: var(--txt2); font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: 0.06em; border-bottom: 1px solid var(--border2); position: sticky; top: 0; background: #10121f;
+}
+#stratRawTable td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); color: var(--txt1); vertical-align: top; }
+#stratRawTable tr:hover td { background: rgba(255,255,255,0.02); }
+
+/* PHASE 18: Indicator Scoreboard table. Horizontal scroll on the wrapper (not the whole
+   panel) so 6 columns survive a 380px viewport without breaking anything else. */
+#stratScoreboardTable { width: 100%; min-width: 460px; border-collapse: collapse; font-family: 'Share Tech Mono', monospace; font-size: 11px; }
+#stratScoreboardTable th {
+  text-align: left; padding: 7px 8px; color: var(--txt2); font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: 0.06em; border-bottom: 1px solid var(--border2); white-space: nowrap;
+}
+#stratScoreboardTable th[data-sort] { cursor: pointer; user-select: none; }
+#stratScoreboardTable th[data-sort]:hover { color: var(--txt1); }
+#stratScoreboardTable th .sbSortArrow { opacity: 0.6; margin-left: 3px; }
+#stratScoreboardTable td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); color: var(--txt1); vertical-align: middle; }
+#stratScoreboardTable tr:hover td { background: rgba(255,255,255,0.02); }
+#stratScoreboardTable tr.dimRow td { opacity: 0.4; }
+.sbIndicatorName { font-family: 'Inter', sans-serif; font-size: 11px; }
+.sbIndicatorCode { font-size: 8.5px; color: var(--txt3); margin-left: 5px; }
+.sbSpark { display: flex; align-items: flex-end; gap: 1.5px; height: 20px; width: 64px; }
+.sbSparkBar { width: 3px; border-radius: 1px; min-height: 2px; flex-shrink: 0; }
+/* PHASE 7B-2's quarantine convention (violet, dashed) applied at cell scale -- a shadow
+   number can never be mistaken for a real green/red/gold one, even inside a dense table. */
+.sbShadowWr {
+  display: inline-block; padding: 1px 6px; border: 1px dashed rgba(147,112,219,0.5);
+  border-radius: var(--r-sm); color: #b39ddb; background: rgba(147,112,219,0.06); font-size: 10px;
+}
+
+.stratEmptyState { color: var(--txt3); font-size: 12px; font-family: 'Inter', sans-serif; padding: 20px; text-align: center; }
+
+/* PHASE 7B-2: Shadow Outcomes (counterfactual) — visually quarantined from real stats.
+   Deliberately its own accent hue (violet), unused elsewhere on the page, so shadow
+   numbers can never be mistaken for real green/red/gold performance data at a glance. */
+.stratShadowSection {
+  margin-top: 16px; padding: 14px; border: 1px dashed rgba(147,112,219,0.4);
+  border-radius: var(--r-md); background: rgba(147,112,219,0.04);
+}
+.stratShadowSection .stratSectionLabel:first-child { margin-top: 0; color: #b39ddb; }
+.stratShadowCaveat {
+  font-size: 10.5px; color: var(--txt2); font-family: 'Inter', sans-serif; font-style: italic;
+  margin-bottom: 12px; line-height: 1.5;
+}
+.stratShadowCoverage {
+  font-size: 11px; color: var(--txt2); font-family: 'Share Tech Mono', monospace;
+  margin: 2px 0 14px; text-align: center;
+}
+.stratBarSplit { display: flex; height: 100%; }
+.stratBarSplit .right   { background: var(--green); }
+.stratBarSplit .wrong   { background: var(--red); }
+.stratBarSplit .pending { background: var(--txt3); }
+#stratShadowGateGrid .wr.na { color: var(--txt3); font-size: 14px; }
+/* PHASE 24: shadow leaderboard rows now carry a full plain-English phrase ("If taken:
+   won 71% · would've made +8.28R · from 73 setups") -- too long to share a line with
+   the label+bar at 380px. Scoped ONLY to these two shadow containers (the real
+   #stratTagBars/#stratComboBars rows are untouched, same PHASE 7B-3 isolation as
+   before). The row wraps so the phrase drops to its own line under the label+bar; the
+   phrase's own fragments ALSO wrap independently, so nothing is ever cramped or
+   truncated at any width -- no media query, same flexbox-reflow convention the rest of
+   this page already uses. */
+#stratShadowTagBars .stratBarRow, #stratShadowComboBars .stratBarRow { flex-wrap: wrap; row-gap: 4px; }
+#stratShadowTagBars .stratBarVal, #stratShadowComboBars .stratBarVal {
+  width: 100%; flex-basis: 100%; text-align: left; color: var(--txt2);
+  display: flex; flex-wrap: wrap; gap: 3px 8px; margin-top: 1px;
+}
+#stratShadowTagBars .stratBarVal .svLead, #stratShadowComboBars .stratBarVal .svLead { color: var(--txt3); }
+#stratShadowTagBars .stratBarVal .svFrag, #stratShadowComboBars .stratBarVal .svFrag { white-space: nowrap; }
+/* PHASE 7B-4: hand-rolled sparkline (no charting library — matches the funnel/heatmap's
+   own hand-rolled-div convention rather than the equity curve's LightweightCharts one,
+   since this is a glanceable trend strip, not an interactive chart). */
+.stratSparkRow { display: flex; align-items: flex-end; gap: 5px; height: 50px; margin-top: 6px; }
+.stratSparkBar { flex: 1; min-height: 2px; border-radius: 2px 2px 0 0; background: var(--red); transition: height 0.3s ease; }
+.stratSparkLabels { display: flex; gap: 5px; margin-top: 3px; }
+.stratSparkLabels span { flex: 1; text-align: center; font-size: 8px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; }
+.stratFilterPill {
+  font-size: 10.5px; padding: 4px 10px; border-radius: var(--r-pill); cursor: pointer;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); color: var(--txt2);
+  font-family: 'Inter', sans-serif; transition: all 0.12s;
+}
+.stratFilterPill:hover { color: var(--txt1); }
+.stratFilterPill.active { background: rgba(212,175,55,0.15); color: var(--gold); border-color: rgba(212,175,55,0.4); }
+
+/* Performance stats bar */
+#perfSection { flex-shrink: 0; border-top: 1px solid rgba(255,255,255,0.04); }
+.perfBar {
+  display: flex; align-items: stretch; gap: 0;
+  background: var(--bg); padding: 6px 0;
+}
+.perfBlock {
+  display: flex; flex-direction: column; align-items: center; flex: 1;
+  padding: 4px 6px; border-right: 1px solid rgba(255,255,255,0.04);
+}
+.perfBlock:last-child { border-right: none; }
+.perfLabel { font-size: 7px; color: var(--txt3); text-transform: uppercase; letter-spacing: 0.09em; font-family: 'Inter', sans-serif; font-weight: 600; margin-bottom: 2px; }
+.perfValue { font-size: 14px; font-family: 'Inter', sans-serif; font-weight: 700; color: var(--txt2); }
+.perfValue.up { color: var(--green); }
+.perfValue.down { color: var(--red); }
+.perfValue.gold { color: var(--gold); }
+.perfSipRow { text-align: center; padding: 4px 14px 6px; font-size: 8px; font-family: 'Inter', sans-serif; color: var(--txt3); border-top: 1px solid rgba(255,255,255,0.04); }
+.perfSipRow span { color: var(--gold); }
+
+/* Chev's Read — ENGINE tab narrative */
+.dexterNarrative {
+  background: rgba(212,175,55,0.03); border-left: 3px solid rgba(212,175,55,0.4);
+  border-radius: 0 var(--r-md) var(--r-md) 0; padding: 12px 14px;
+  font-family: 'Share Tech Mono', monospace; font-size: 10px;
+  color: var(--txt2); line-height: 1.8; flex-shrink: 0;
+}
+.dexterNarrative b { color: var(--gold); font-weight: 700; }
+.dexterNarrative .nGreen { color: var(--green); }
+.dexterNarrative .nRed { color: var(--red); }
+
+/* Chat context line */
+#chatContextLine {
+  font-size: 8px; color: var(--txt3); font-family: 'Inter', sans-serif;
+  letter-spacing: 0.04em; padding: 3px 10px 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.04); background: var(--bg);
+  flex-shrink: 0;
+}

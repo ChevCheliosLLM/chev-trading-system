@@ -1,0 +1,94 @@
+/* ============================================================
+   Chart Popups — #objectTree, #chartToolPopup (Fib/RSI),
+   and the drawing context menu (#drawCtx).
+   ============================================================ */
+#objectTree.open { display: block; }
+#objectTree .objHeader {
+  display:flex; align-items:center; padding: 7px 10px;
+  font-size:10px; color:#787b86; text-transform:uppercase; letter-spacing:0.06em;
+  border-bottom:1px solid #1e222d; font-weight:normal;
+}
+#objectTree .objClose { margin-left:auto; cursor:pointer; color:#5d6068; font-size:13px; }
+#objectTree .objClose:hover { color:#f23645; }
+.objRow { display:flex; align-items:center; gap:6px; padding:5px 8px; font-size:11px; color:#9598a1; border-bottom:1px solid #1e222d; cursor:pointer; }
+.objRow:hover { background:#1c2030; }
+.objColor { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.objLabel { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.objSectionLabel { padding:4px 10px 2px; font-size:9px; color:#5d6068; letter-spacing:.5px; text-transform:uppercase; border-top:1px solid #1e222d; margin-top:2px; }
+
+/* ---------- Chart Tool Popup (Fib/RSI, added 2026-07-05) ---------- */
+/* In-chart corner card, same visual language as #objectTree — replaces the old
+   button-anchored dropdowns that got clipped by the panel's right edge. Anchored
+   to #chartWrap (position:relative), bottom-left — clear of #priceInfo (top-left)
+   and #tradeOverlayBar/#overlayAnalysisPanel (top-right, only shown for an active
+   trade idea) and #objectTree (bottom-right). */
+#chartToolPopup {
+  display: none; position: absolute; bottom: 12px; left: 16px; z-index: 120;
+  width: 300px; max-height: 360px; overflow-y: auto;
+  background: #131722; border: 1px solid #2a2e39; border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  font-family: "Share Tech Mono", monospace;
+  /* Explicit size here because it cascades to .rsi-tf-row/.rsi-tf-label/.rsi-tf-type
+     below, none of which set their own font-size — they used to inherit 10px from
+     the old #rsiTfDropdown container, which no longer exists. Without this, they
+     fell back to the page's much larger ambient default, causing everything to
+     wrap/overflow inside the narrow popup (the "squished" text). */
+  font-size: 11px;
+}
+#chartToolPopup.open { display: block; }
+.ctpHeader {
+  display:flex; align-items:center; padding: 9px 12px;
+  font-size:11px; color:#d4af37; text-transform:uppercase; letter-spacing:0.06em;
+  border-bottom:1px solid #1e222d; font-weight:600;
+}
+.ctpClose { margin-left:auto; cursor:pointer; color:#5d6068; font-size:15px; }
+.ctpClose:hover { color:#f23645; }
+#ctpFibBody, #ctpRsiBody { display: none; padding: 8px 10px; }
+#ctpFibBody.shown, #ctpRsiBody.shown { display: block; }
+#ctpFibBody label {
+  display: flex; align-items: center; gap: 8px;
+  color: #9598a1; padding: 6px 3px; cursor: pointer; white-space: nowrap; font-size: 12px;
+}
+#ctpFibBody label:hover { color: #d4af37; }
+#ctpFibBody input[type=checkbox] { accent-color: #d4af37; cursor: pointer; width: 13px; height: 13px; }
+#ctpFibBody .drop-sep { border-top: 1px solid #1e222d; margin: 6px 0; }
+.objEye, .objDel { background:none; border:none; color:#5d6068; cursor:pointer; padding:2px 4px; font-size:11px; line-height:1; }
+.objEye:hover { color:#d1d4dc; }
+.objDel:hover { color:#f23645; }
+
+/* ---------- Drawing context menu ---------- */
+#drawCtx {
+  display:none; position:fixed; z-index:200;
+  background:#0d0f1c; border:1px solid #1e2035; border-radius:6px;
+  padding:0; min-width:210px;
+  font-family:"Share Tech Mono",monospace; box-shadow:0 12px 32px rgba(0,0,0,0.7);
+}
+.ctxHeader {
+  display:flex; align-items:center; justify-content:space-between;
+  cursor:move; padding:6px 12px;
+  background:#0a0c18; border-bottom:1px solid rgba(212,175,55,0.18);
+  border-radius:6px 6px 0 0; user-select:none;
+}
+.ctxTitle { font-size:10px; color:#d4af37; text-transform:uppercase; letter-spacing:0.08em; }
+#ctxClose { background:none; border:none; color:#5d6068; cursor:pointer; font-size:13px; padding:0 2px; line-height:1; font-family:inherit; }
+#ctxClose:hover { color:#f23645; }
+.ctxBody { padding:10px 12px; }
+.ctxRow { display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:10px; color:#787b86; }
+.ctxRow label { min-width:40px; color:#5d6068; }
+#ctxColors { display:flex; gap:4px; flex-wrap:wrap; }
+#analysisToast {
+  display:none; position:absolute; bottom:44px; left:12px;
+  background: rgba(13,15,27,0.92); backdrop-filter:blur(12px);
+  border: 1px solid rgba(255,255,255,0.08); border-radius: var(--r-md);
+  padding: 10px 14px; font-family: 'Inter', sans-serif; font-size: 11px;
+  color: var(--txt1); z-index: 150; max-width: 300px; pointer-events: none;
+  box-shadow: var(--shadow-lg);
+}
+#analysisToast.show { display:block; animation: slideUp 0.2s ease; }
+.tLine { margin:3px 0; }
+
+/* ===== GLOBAL NOTIFICATION TOASTS ===== */
+#toastContainer {
+  position: fixed; bottom: 32px; right: 20px; z-index: 9998;
+  display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+}

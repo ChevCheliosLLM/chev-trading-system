@@ -44,6 +44,7 @@ Ale/
 
 # ─── Third-party tools downloaded locally, not part of this project ─────────
 scrcpy-win64-v4.0/
+node_modules/
 
 # ─── Binaries / executables ──────────────────────────────────────────────────
 *.exe

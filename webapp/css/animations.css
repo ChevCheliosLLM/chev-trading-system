@@ -1,0 +1,40 @@
+/* ============================================================
+   Animations — ALL @keyframes and their dedicated trigger classes.
+   Centralised so repaint-heavy motion is isolated and auditable.
+   Loads last: only additive animation props, no cascade conflicts (verified).
+   ============================================================ */
+@keyframes pulseFlash { 0% { background: rgba(212,175,55,0.25); } 100% { background: transparent; } }
+@keyframes flashDown { 0%,30% { color: #f23645; background: rgba(242,54,69,0.08); } 100% { color: inherit; background: transparent; } }
+.px.flash-up   { animation: flashUp   0.55s ease-out forwards; border-radius: 2px; }
+.px.flash-down { animation: flashDown 0.55s ease-out forwards; border-radius: 2px; }
+
+/* ===== ENGINE run pulse ===== */
+@keyframes enginePulse { 0%,100%{box-shadow:0 0 0 0 rgba(212,175,55,0)} 50%{box-shadow:0 0 12px 2px rgba(212,175,55,0.2)} }
+#runDexterBtn.running { animation: enginePulse 1s ease-in-out infinite; }
+
+/* ===== Readout slide-in ===== */
+@keyframes slideDown { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
+.engineBlock { animation: slideDown 0.3s ease-out both; }
+.engineBlock:nth-child(2) { animation-delay: 0.05s; }
+.engineBlock:nth-child(3) { animation-delay: 0.10s; }
+.engineBlock:nth-child(4) { animation-delay: 0.15s; }
+.dexterNarrative { animation: slideDown 0.3s ease-out both; }
+
+/* ===== Chev-voice empty states ===== */
+.emptyNote {
+  color: #3a3d4d; font-size: 10px; padding: 12px 14px;
+  font-family: 'Share Tech Mono', monospace; line-height: 1.6;
+}
+@keyframes slideUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+@keyframes toastIn { from { opacity:0; transform:translateX(16px); } to { opacity:1; transform:translateX(0); } }
+@keyframes dnaSlideIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:none} }
+@keyframes radarPulse { 0%,100%{opacity:0.5} 50%{opacity:0.9} }
+.zone-pulse { animation: zonePulse 0.8s ease 3; }
+.zone-alert { border-color: rgba(212,175,55,0.5) !important; background: rgba(212,175,55,0.04) !important; }
+
+/* ===== HYPOTHESIS TRACKER ===== */
+#hypTracker { padding: 8px; flex-shrink: 0; }
+@keyframes cmdFadeIn {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}

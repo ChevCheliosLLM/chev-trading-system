@@ -1,0 +1,84 @@
+/* ============================================================
+   Top Bar — #topbar, .tb-row1/.tb-row2, timeframe pills,
+   #vitalsStrip / .vitalsTile, and .freshStamp freshness markers.
+   ============================================================ */
+.tb-row1 {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 14px; height: 40px; flex-shrink: 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.tb-row1-spacer { flex: 1; min-width: 4px; }
+.tb-row2 {
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 14px; height: 36px; flex-shrink: 0;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+}
+.tb-row2::-webkit-scrollbar { display: none; }
+/* PHASE 12: vitals strip -- mobile-first via auto-fit grid, no @media needed (none exist
+   elsewhere in this file); at 380px width six 100px-min tiles naturally wrap to two rows. */
+#vitalsStrip {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 6px; padding: 6px 10px; background: #0d0f1b;
+  border-bottom: 1px solid rgba(255,255,255,0.05); flex-shrink: 0;
+}
+.vitalsTile {
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
+  border-radius: var(--r-sm); padding: 4px 8px; text-align: center; min-width: 0;
+}
+.vitalsTile .vtLabel {
+  font-size: 8px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--txt3);
+  font-family: 'Inter', sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.vitalsTile .vtVal {
+  font-size: 12px; font-weight: 700; font-family: 'Share Tech Mono', monospace;
+  color: var(--txt1); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.vitalsTile.good .vtVal { color: var(--green); }
+.vitalsTile.warn .vtVal { color: var(--gold); }
+.vitalsTile.bad  .vtVal { color: var(--red); }
+#vitalsStrip #vtUnavailable { display: none; }
+#vitalsStrip.vitalsUnavailableMode > .vitalsTile:not(#vtUnavailable) { display: none; }
+#vitalsStrip.vitalsUnavailableMode > #vtUnavailable { display: block; grid-column: 1 / -1; }
+/* PHASE 12: freshness stamps -- tiny "updated Xs ago" markers observing each panel's own
+   last-successful-fetch time; never alters any panel's fetching logic. */
+.freshStamp {
+  font-size: 8px; font-family: 'Share Tech Mono', monospace; color: var(--txt3);
+  white-space: nowrap; margin-left: 4px; display: inline-block;
+}
+.freshStamp.warn { color: var(--gold); }
+.freshStamp.bad  { color: var(--red); }
+#topbar::after {
+  content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(212,175,55,0.15), transparent);
+  pointer-events: none;
+}
+#topbar .label {
+  font-size: 8.5px; color: rgba(255,255,255,0.2); text-transform: uppercase;
+  letter-spacing: 0.12em; margin-right: 2px; margin-left: 8px;
+  font-family: 'Share Tech Mono', monospace; font-weight: 400; white-space: nowrap; flex-shrink: 0;
+}
+.pill {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07);
+  color: var(--txt2); padding: 4px 9px; border-radius: 3px;
+  font-size: 10px; cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s;
+  font-family: 'Share Tech Mono', monospace; font-weight: 400;
+  letter-spacing: 0.04em; white-space: nowrap;
+}
+.pill:hover { background: rgba(255,255,255,0.08); color: var(--txt1); border-color: rgba(255,255,255,0.14); }
+.pill.active { background: rgba(41,98,255,0.18); color: #6e9eff; border-color: rgba(41,98,255,0.45); }
+.pill.chevTools.active { background: rgba(212,175,55,0.15); color: var(--gold); border-color: rgba(212,175,55,0.4); }
+.iconBtn {
+  width: 26px; height: 26px; display: flex; align-items: center;
+  justify-content: center; padding: 0; flex-shrink: 0; border-radius: 3px;
+  transition: background 0.12s;
+}
+.iconBtn:hover { background: rgba(255,255,255,0.07); }
+/* Added 2026-07-05 — #objectTreeToggle had no active-state rule at all (unlike its
+   sibling icon buttons), so it looked permanently grey regardless of whether the
+   Drawings panel was open. Generic on .iconBtn so any icon-only toggle button
+   benefits, not just this one. */
+.iconBtn.active { background: rgba(212,175,55,0.15); color: var(--gold); }
+.iconBtn svg { width: 15px; height: 15px; }
+
+/* ---------- Body layout ---------- */
+#body { flex: 1; display: flex; min-height: 0; position: relative; }

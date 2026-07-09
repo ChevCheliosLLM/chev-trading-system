@@ -1,0 +1,113 @@
+/* ============================================================
+   Chev's Arsenal — #chevArsenal, arsenal cards and dropdown frames.
+   ============================================================ */
+#arsenalToggleBtn:hover { border-color: var(--gold); background: rgba(212,175,55,0.18); box-shadow: var(--glow-gold); }
+#arsenalToggleBtn.open { background: rgba(212,175,55,0.15); border-color: var(--gold); box-shadow: var(--glow-gold); }
+
+#chevArsenal {
+  background: linear-gradient(180deg, var(--s0) 0%, var(--bg) 100%);
+  border-bottom: 1px solid rgba(212,175,55,0.08);
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 0.25s cubic-bezier(0.4,0,0.2,1), padding 0.25s;
+  padding: 0 16px;
+  flex-shrink: 0;
+}
+#chevArsenal.open { max-height: 130px; padding: 8px 16px 10px; }
+
+.arsenal-inner {
+  display: flex; flex-direction: column; gap: 7px;
+}
+.arsenal-brand {
+  display: flex; align-items: center; gap: 10px;
+}
+.arsenal-brand-title {
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 13px;
+  color: #d4af37; letter-spacing: 0.14em; line-height: 1;
+}
+.arsenal-brand-sub {
+  font-family: 'Share Tech Mono', monospace; font-size: 8.5px;
+  color: rgba(212,175,55,0.35); letter-spacing: 0.04em; line-height: 1;
+}
+.arsenal-tools {
+  display: flex; gap: 7px; align-items: flex-start; flex-wrap: nowrap;
+}
+.arsenal-card {
+  display: flex; flex-direction: column; align-items: center;
+  background: #13152a; border: 1px solid #252840;
+  border-radius: 6px; padding: 6px 10px 5px;
+  min-width: 70px; cursor: pointer; position: relative;
+  transition: border-color 0.15s, background 0.15s;
+}
+.arsenal-card:hover { border-color: #d4af37; background: #1a1c38; }
+.arsenal-card.active { border-color: #d4af37; background: #1a1c38; }
+.arsenal-card.active .arsenal-card-btn { color: #d4af37; }
+.arsenal-card-btn {
+  font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 14px;
+  color: #9598a1; letter-spacing: 0.06em; line-height: 1;
+  background: none; border: none; cursor: pointer; padding: 0;
+  transition: color 0.12s;
+}
+.arsenal-card-desc {
+  font-family: 'Share Tech Mono', monospace; font-size: 8px;
+  color: #4a4e68; margin-top: 3px; text-align: center; line-height: 1.2;
+  white-space: nowrap;
+}
+.arsenal-card-drop {
+  display: flex; align-items: center; gap: 2px;
+}
+.arsenal-drop-arrow {
+  font-size: 9px; color: #5d6068; cursor: pointer;
+  padding: 0 3px; transition: color 0.12s;
+}
+.arsenal-drop-arrow:hover { color: #d4af37; }
+
+/* Fib TF dropdown — fixed so it escapes overflow:hidden on arsenal panel */
+#fibTfDropdown {
+  display: none; position: fixed; z-index: 500;
+  background: #131722; border: 1px solid #2a2e39; border-radius: 6px;
+  padding: 6px 8px; min-width: 130px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  font-family: 'Share Tech Mono', monospace; font-size: 10px;
+}
+#fibTfDropdown.open { display: block; }
+#fibTfDropdown label {
+  display: flex; align-items: center; gap: 6px;
+  color: #9598a1; padding: 3px 0; cursor: pointer; white-space: nowrap;
+}
+#fibTfDropdown label:hover { color: #d4af37; }
+#fibTfDropdown input[type=checkbox] { accent-color: #d4af37; cursor: pointer; }
+#fibTfDropdown .drop-sep {
+  border-top: 1px solid #1e222d; margin: 4px 0;
+}
+
+/* RSI div TF dropdown — fixed so it escapes overflow:hidden on arsenal panel */
+#rsiTfDropdown {
+  display: none; position: fixed; z-index: 500;
+  background: #131722; border: 1px solid #2a2e39; border-radius: 6px;
+  padding: 6px 0; min-width: 190px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  font-family: 'Share Tech Mono', monospace; font-size: 10px;
+}
+#rsiTfDropdown.open { display: block; }
+.rsi-tf-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; cursor: pointer; transition: background 0.1s;
+}
+.rsi-tf-row:hover:not(.disabled) { background: #1c2030; }
+.rsi-tf-row.disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+.rsi-tf-row.selected { background: #1a2035; border-left: 2px solid #f0a500; }
+.rsi-tf-label { font-weight: 700; color: #d4af37; min-width: 28px; }
+.rsi-tf-type { color: #9598a1; }
+.rsi-tf-na { color: #4a4e68; font-style: italic; }
+.rsi-loading { padding: 8px 10px; color: #4a4e68; font-size: 9px; }
+/* ========================================= */
+
+/* ---------- Drawing canvas ---------- */
+#drawingCanvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 3;
+}

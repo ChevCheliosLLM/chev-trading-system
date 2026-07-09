@@ -1,0 +1,144 @@
+/* ============================================================
+   Intel Content — brain-state banner, hypothesis cards, scenario planner,
+   structure timeline, and conviction meter.
+   ============================================================ */
+#brainStateBanner.visible { display: flex; }
+#brainStateMain {
+  display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+  background: linear-gradient(90deg, rgba(212,175,55,0.05) 0%, transparent 70%);
+}
+#brainStateRegime {
+  font-family: 'Inter', sans-serif; font-weight: 700; font-size: 10px;
+  padding: 3px 10px; border-radius: var(--r-pill); flex-shrink: 0;
+  letter-spacing: 0.05em; border: 1px solid;
+}
+#brainStateRegime.bull  { color: var(--green); background: rgba(8,153,129,0.1);   border-color: rgba(8,153,129,0.25); }
+#brainStateRegime.bear  { color: var(--red);   background: rgba(242,54,69,0.1);   border-color: rgba(242,54,69,0.25); }
+#brainStateRegime.range { color: var(--gold);  background: var(--gold-dim);       border-color: rgba(212,175,55,0.25); }
+#brainStateHyp {
+  flex: 1; font-size: 11px; color: var(--txt1); font-family: 'Inter', sans-serif;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3;
+}
+#brainStateHyp em { color: var(--txt3); font-style: normal; font-size: 9px; }
+#brainStateConf {
+  font-size: 10px; font-family: 'Share Tech Mono', monospace; flex-shrink: 0;
+  color: var(--txt2);
+}
+#brainStateConf.high { color: var(--green); }
+#brainStateConf.mid  { color: var(--gold); }
+#brainStateConf.low  { color: var(--red); }
+#brainStateBar {
+  height: 2px; background: rgba(255,255,255,0.04); flex-shrink: 0;
+}
+#brainStateBarFill { height: 100%; transition: width 0.5s, background 0.5s; }
+#brainStateAge {
+  font-size: 8px; color: var(--txt3); font-family: 'Inter', sans-serif;
+  padding: 2px 14px 4px;
+}
+
+/* ===== HYPOTHESIS CARDS ===== */
+.hypCard {
+  background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md);
+  overflow: hidden; flex-shrink: 0; transition: border-color 0.15s;
+}
+.hypCard:hover { border-color: var(--border2); }
+.hypCard.primary { border-color: rgba(212,175,55,0.2); }
+.hypCardHeader {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px 8px;
+}
+.hypDir {
+  font-family: 'Inter', sans-serif; font-weight: 700; font-size: 10px;
+  padding: 2px 8px; border-radius: var(--r-pill); flex-shrink: 0; letter-spacing: 0.04em;
+}
+.hypDir.long   { color: var(--green); background: rgba(8,153,129,0.12); border: 1px solid rgba(8,153,129,0.25); }
+.hypDir.short  { color: var(--red);   background: rgba(242,54,69,0.12);  border: 1px solid rgba(242,54,69,0.25); }
+.hypDir.neutral{ color: var(--txt2);  background: var(--s3); border: 1px solid var(--border2); }
+.hypName { flex: 1; font-size: 11px; font-weight: 600; color: var(--txt1); font-family: 'Inter', sans-serif; }
+.hypPct  { font-size: 11px; font-weight: 700; font-family: 'Share Tech Mono', monospace; flex-shrink: 0; }
+.hypPct.high { color: var(--green); }
+.hypPct.mid  { color: var(--gold); }
+.hypPct.low  { color: var(--red); }
+.hypConfTrack { height: 2px; background: var(--border); margin: 0 12px 10px; border-radius: var(--r-pill); overflow: hidden; }
+.hypConfFill  { height: 100%; border-radius: var(--r-pill); transition: width 0.5s; }
+.hypDesc {
+  font-size: 10px; font-family: 'Share Tech Mono', monospace; color: var(--txt2);
+  padding: 0 12px 10px; line-height: 1.65;
+}
+.hypFooter {
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 12px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  background: rgba(0,0,0,0.2);
+}
+.hypFooterRow { display: flex; align-items: flex-start; gap: 7px; font-size: 9px; font-family: 'Inter', sans-serif; line-height: 1.4; }
+.hypFooterIcon { width: 14px; height: 14px; flex-shrink: 0; margin-top: 1px; }
+.hypTrigger { color: var(--green); }
+.hypKill    { color: var(--red); }
+.hypFooterLabel { color: var(--txt3); flex-shrink: 0; }
+.hypFooterText  { color: var(--txt2); }
+
+/* ===== SCENARIO PLANNER ===== */
+.scenarioRow {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px; flex-shrink: 0;
+}
+.scenarioBlock {
+  border-radius: var(--r-sm); padding: 10px 10px 8px; font-family: 'Inter', sans-serif;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.scenarioBull { background: rgba(8,153,129,0.06); border: 1px solid rgba(8,153,129,0.15); }
+.scenarioBear { background: rgba(242,54,69,0.06);  border: 1px solid rgba(242,54,69,0.15); }
+.scenarioLabel { font-size: 8px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 2px; }
+.scenarioBull .scenarioLabel { color: var(--green); }
+.scenarioBear .scenarioLabel { color: var(--red); }
+.scenarioIf    { font-size: 9px; color: var(--txt3); }
+.scenarioThen  { font-size: 10px; color: var(--txt1); font-weight: 500; margin-top: 2px; }
+.scenarioTarget{ font-size: 8px; color: var(--txt2); font-family: 'Share Tech Mono', monospace; }
+
+/* ===== STRUCTURE TIMELINE ===== */
+.structureTimeline {
+  display: flex; align-items: center; gap: 3px; padding: 8px 12px;
+  overflow-x: auto; flex-shrink: 0;
+}
+.legChip {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  flex-shrink: 0; padding: 4px 6px; border-radius: var(--r-sm);
+  font-family: 'Share Tech Mono', monospace; cursor: default;
+}
+.legChip.impl-up   { background: rgba(8,153,129,0.12); }
+.legChip.impl-dn   { background: rgba(242,54,69,0.12); }
+.legChip.corr-up   { background: rgba(255,255,255,0.03); }
+.legChip.corr-dn   { background: rgba(255,255,255,0.03); }
+.legArrow { font-size: 11px; }
+.legChip.impl-up .legArrow { color: var(--green); }
+.legChip.impl-dn .legArrow { color: var(--red); }
+.legChip.corr-up .legArrow, .legChip.corr-dn .legArrow { color: var(--txt3); }
+.legAtr { font-size: 7px; color: var(--txt3); }
+.legConnector { width: 12px; height: 1px; background: var(--border); flex-shrink: 0; }
+.legNow { font-size: 7px; color: var(--gold); font-family: 'Inter', sans-serif;
+          background: var(--gold-dim); border: 1px solid rgba(212,175,55,0.2);
+          border-radius: var(--r-pill); padding: 2px 6px; flex-shrink: 0; margin-left: 4px; }
+
+/* ===== CONVICTION METER ===== */
+.convictionMeter {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md); flex-shrink: 0;
+}
+.convictionGauge {
+  position: relative; width: 52px; height: 52px; flex-shrink: 0;
+}
+.convictionGauge svg { width: 52px; height: 52px; }
+.convictionVal {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  font-family: 'Inter', sans-serif;
+}
+.convictionVal .cvNum { font-size: 14px; font-weight: 700; line-height: 1; }
+.convictionVal .cvLbl { font-size: 6px; color: var(--txt3); text-transform: uppercase; letter-spacing: 0.08em; }
+.convictionBody { flex: 1; }
+.convictionTitle { font-size: 10px; font-weight: 700; color: var(--txt1); font-family: 'Inter', sans-serif; margin-bottom: 3px; }
+.convictionSub   { font-size: 9px; color: var(--txt2); font-family: 'Share Tech Mono', monospace; line-height: 1.5; }
+
+/* ===== DEEP PERFORMANCE STATS ===== */
+.deepStatsGrid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px;
+  flex-shrink: 0;
+}
