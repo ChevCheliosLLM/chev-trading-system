@@ -1,16 +1,20 @@
 CHEV TRADING PLAYBOOK — FOREX
-Last updated: 2026-07-07 04:34:36 | Based on 22 FOREX trades
+Last updated: 2026-07-10 02:39:57 | Based on 34 FOREX trades
 ========================================
 
-CONFLUENCE CONDITIONS  
-- The combination of dv+ema_1h+fib_1h+gp+rsi_form_4h+sr_4h has shown the highest win rate at 100% (n=1), suggesting high-quality structural support.  
-- fib+rsi+sr shows a moderate win rate of 50% (n=2), indicating that while not always reliable, it can be effective when other conditions align.  
-- dv+fib_1h+gp+ms_4h+rsi_form_15m has shown no wins in one attempt (n=1), suggesting this combination is less reliable.
+### CONFLUENCE CONDITIONS
+- **fib_1h+rsi_form_4h+sr_4h** shows 50% win rate (n=2), suggesting strong structural support at 4H levels with RSI divergence.
+- **dv+ema_13+ema_21+fib_1h+gp+rsi_form_4h+sr_4h** has a perfect win rate (1W/0L, n=1) but is tentative due to low sample size.
+- RSI divergence signals are more reliable when combined with 4H SR levels and Fibonacci retracements.
 
-MARKET STRUCTURE RULES  
-- Entries with strong 4H SR levels and multiple confluences tend to perform better than those relying solely on 1H structural support.  
-- RSI divergence signals are most effective when confirmed by other structural indicators like SR or EMA crossovers, rather than standalone.  
-- Trend context improves setup quality when there is clear momentum aligned with the trade direction.
+### MARKET STRUCTURE RULES
+- High-quality setups tend to occur in ranging markets where price respects structural support/resistance (e.g., USD/JPY).
+- Trending markets require additional confirmation from indicators like EMA crossovers or RSI divergence to ensure TP is reached.
+- Entries at 4H SR levels with multiple confluences are more reliable than those based solely on 1H structures.
+
+### ENTRY QUALITY STANDARDS
+- High-conviction entries have clear structural support (e.g., 4H SR) and multiple technical indicators aligned, such as RSI divergence and Fibonacci retracement.
+- Winners often had strong confluence at the entry point with well-defined TP levels within a ranging market context.
 **TRENDING MARKET BEHAVIOUR — CRITICAL**
 - In a confirmed uptrend (4H HH/HL, net move > +2%), resistance levels are CONTINUATION ZONES, not reversal points. Shorting resistance in an uptrend is the lowest-probability trade in forex. The pair will walk through resistance, not bounce from it.
 - In a confirmed downtrend (4H LH/LL, net move < -2%), support levels are CONTINUATION ZONES. Longing support in a downtrend is similarly low probability.
@@ -41,12 +45,31 @@ JANE'S PATTERNS
   
 Insufficient data — revisit next session.
 
+- Marginal entries lacked robust structural support or were in volatile conditions where price action was unpredictable.
+
+### TRADE MANAGEMENT PATTERNS
+- Insufficient data — revisit next session.
+
+### REASONING QUALITY
+- 2 validated and 13 partial reasoning out of the last 30 trades indicate moderate confidence in setup analysis.
+- Invalidated reasoning often stemmed from misreading market structure or timeframe, particularly in volatile conditions.
+- A+ setups show better validation (n=1), but B setups have lower win rates (17%, n=6).
+
+### ASSET NOTES
+- Forex pairs like USD/JPY and GBP/USD tend to respect structural levels more when ranging, while trending markets require additional confirmation from indicators.
+
+### JANE'S PATTERNS
+- Jane's instincts outperform models in high-volatility setups where technical indicators are less reliable.
+- Her consistent wins on BTCUSDT and ETHUSDT suggest she excels in volatile crypto markets where traditional confluences may not hold.
+
 ### STRUCTURAL RISK FACTORS
-- **Marginal Entry Levels Without Clear Structural Support:** Require confirmation of a well-defined SR level beyond just Fibonacci or EMA crossovers.
-- **Presence of Bollinger Bands Squeeze (BBS):** High volatility risk indicated by BBS suggests potential for rapid price movement, necessitating tighter SL placement.
-- **Lack of Confirmed Divergence Before Entry:** RSI forming divergence without confirmation can be unreliable; require a confirmed divergence signal before committing to the setup.
+- **Ranging Market Conditions**: High volatility risk as indicated by a Bollinger Bands squeeze (BBS) or tight trading range, suggesting that price action could be choppy and less directional.
+  
+- **Marginal Structural Levels**: Entry points located between clear support and resistance zones without strong confirmation from multiple timeframes or additional indicators, leading to weaker structural backing.
+
+- **Multiple Indicators Without Clear Directional Bias**: Setup quality based on a high number of confluences (e.g., SR, Fibonacci, EMAs) but lacking a definitive directional bias in the market context, increasing the risk of whipsaws and false breakouts.
 
 ### WIN/LOSS INSIGHT
-- WIN/LOSS INSIGHT:
-  - Winning trades consistently featured RSI formation (`rsi_form_Xtf`) and non-RSI divergence (`dv`), indicating potential momentum shifts that aligned with structural support/resistance levels.
-  - Losing trades often included a broader array of confluences, such as multiple EMAs (e.g., `ema_55`, `ema_21`, `ema_13`) and Bollinger Bands (`bb_Xtf`), which may have introduced noise rather than clarity in the setup quality.
+WIN/LOSS INSIGHT:
+- Winning trades often included tags like `gp` (Golden Pocket) and `dv` (Non-RSI divergence), which were absent in losing trades.
+- Winning setups frequently occurred in trending market conditions as opposed to ranging markets, where price action was more unpredictable and less reliable.
