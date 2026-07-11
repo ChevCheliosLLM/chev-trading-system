@@ -66,8 +66,17 @@
   function _drawFbUrl(sym) {
     return `${FIREBASE_BASE}/drawings/${(sym||currentSymbol).replace('/','_')}.json`;
   }
+  // VP is a live, on-demand overlay, not a persisted drawing — every symbol switch
+  // should land with it off, regardless of whatever was toggled/saved on that pair
+  // before. Stripped here so all three load paths (localStorage, Firebase pull,
+  // Firebase live-stream) stay consistent, and the VP UI (button/checkbox/timer)
+  // is reset to match whenever we're (re)loading a symbol's drawing set.
   function loadDrawings(sym) {
-    try { return JSON.parse(localStorage.getItem('chevDrawings_' + sym) || '[]'); } catch(e) { return []; }
+    if (typeof _deactivateVpUI === 'function') _deactivateVpUI();
+    try {
+      const arr = JSON.parse(localStorage.getItem('chevDrawings_' + sym) || '[]');
+      return arr.filter(d => !d._vp && !d._vp_stack);
+    } catch(e) { return []; }
   }
   function saveDrawings(sym) {
     sym = sym || currentSymbol;
@@ -83,7 +92,7 @@
       const d = await r.json();
       if (!Array.isArray(d)) return;
       const live_rsi = drawings.filter(x => x._rsi_div);
-      drawings = d;
+      drawings = d.filter(x => !x._vp && !x._vp_stack);
       if (live_rsi.length) drawings.push(...live_rsi);
       localStorage.setItem('chevDrawings_' + sym, JSON.stringify(d));
       updateObjTree(); markDirty();
@@ -99,6 +108,12 @@
         try {
           const msg = JSON.parse(ev.data);
           if (msg.path === '/' && msg.data !== undefined) {
+            // NOTE: deliberately NOT filtering out _vp here like loadDrawings/_syncDrawings
+            // do — this listener stays subscribed for as long as you're on this symbol and
+            // receives an echo of every saveDrawings() call you make yourself (including
+            // toggling VP on), so stripping _vp here would wipe out your own VP box moments
+            // after adding it. The "don't inherit VP on pair switch" behavior is handled by
+            // the one-shot loadDrawings/_syncDrawings calls that run once when switching.
             const live_rsi = drawings.filter(d => d._rsi_div);
             drawings = Array.isArray(msg.data) ? msg.data : [];
             if (live_rsi.length) drawings.push(...live_rsi);
@@ -184,37 +199,6 @@
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  /* ---- Volume Profile computation ---- */
-  function computeVP(t1, t2, N) {
-    N = N||40;
-    const lo=Math.min(t1,t2), hi=Math.max(t1,t2);
-    const cc = currentCandles.filter(c=>c.time>=lo&&c.time<=hi);
-    if (!cc.length) return null;
-    const pMin=Math.min(...cc.map(c=>c.low)), pMax=Math.max(...cc.map(c=>c.high));
-    const bs=(pMax-pMin)/N;
-    const vols=Array(N).fill(0);
-    for (const c of cc) {
-      const vol=c.volume||0;
-      for (let i=0;i<N;i++) {
-        const bLo=pMin+i*bs, bHi=bLo+bs;
-        const ov=Math.max(0,Math.min(c.high,bHi)-Math.max(c.low,bLo));
-        const ratio=c.high>c.low?ov/(c.high-c.low):1/N;
-        vols[i]+=vol*ratio;
-      }
-    }
-    // Value area (70% around POC)
-    const pocI=vols.reduce((b,v,i)=>v>vols[b]?i:b,0);
-    const total=vols.reduce((s,v)=>s+v,0);
-    let loI=pocI, hiI=pocI, acc=vols[pocI];
-    while (acc<total*0.70 && (loI>0||hiI<N-1)) {
-      const aLo=loI>0?vols[loI-1]:-1, aHi=hiI<N-1?vols[hiI+1]:-1;
-      if (aLo>=aHi&&loI>0){loI--;acc+=vols[loI];}
-      else if (hiI<N-1){hiI++;acc+=vols[hiI];}
-      else break;
-    }
-    return { vols, pMin, bs, N, pocI, vah: pMin+(hiI+1)*bs, val: pMin+loI*bs };
-  }
-
   /* ---- Measure helpers ---- */
   function countBars(t1,t2) {
     const lo=Math.min(t1,t2), hi=Math.max(t1,t2);
@@ -240,7 +224,12 @@
     for (let i=drawings.length-1;i>=0;i--) {
       const d=drawings[i];
       if (d.visible===false) continue;
-      if (d._sr||d._vp||d._fib_stack||d._rsi_div||d._chev) continue;
+      // Auto-generated overlays (SR/VP/Fib-stack/RSI-div/Chev) are excluded from
+      // generic body hit-testing — EXCEPT type==='vp', which still needs to reach
+      // its own anchor-only case below so a Dexter-detected VP box's anchors stay
+      // draggable; that case only matches within a small radius of the anchor
+      // dots, never the box body, so this doesn't make the whole box selectable.
+      if ((d._sr||d._vp||d._vp_stack||d._fib_stack||d._rsi_div||d._chev) && d.type!=='vp') continue;
       if (d.type==='hline') {
         const y=priceToY(d.price); if (y!=null&&Math.abs(my-y)<H) return i;
       } else if (d.type==='ray') {
@@ -524,6 +513,10 @@
 
   function _drawHoverX(ctx,d) {
     let cx=null,cy=null;
+    // A Dexter-detected VP box (Arsenal button/popup) is managed by its own
+    // button/checkboxes, not the generic hover-delete-X shortcut — only a
+    // manually hand-drawn (untagged) VP box gets the X below.
+    if (d.type==='vp' && (d._vp || d._vp_stack)) { hoverXPos=null; return; }
     if (d.type==='hline') {
       const ly=priceToY(d.price);
       if (ly!=null) { cx=_dw-56; cy=Math.max(10,ly-10); }
@@ -752,7 +745,17 @@
     else if (d.type==='vp') {
       const x1=timeToX(d.time1),x2=timeToX(d.time2);
       if (x1==null||x2==null){ctx.restore();return;}
-      const vp=computeVP(d.time1,d.time2,40); if (!vp){ctx.restore();return;}
+      // Render straight from what Dexter computed — no client-side recompute,
+      // so the chart always shows exactly what Dexter (and Chev) used.
+      if (!d.bin_volumes || !d.bin_volumes.length || !d.bin_edges) { ctx.restore(); return; }
+      const vp = {
+        vols: d.bin_volumes,
+        pMin: d.bin_edges[0],
+        bs:   d.bin_edges[1] - d.bin_edges[0],
+        N:    d.bin_volumes.length,
+        vah:  d.vah,
+        val:  d.val,
+      };
       const xAnchorL=Math.min(x1,x2), xAnchorR=Math.max(x1,x2);
       const xL=Math.max(0,xAnchorL), xR=Math.min(_dw,xAnchorR);
       const maxV=Math.max(...vp.vols,1), maxW=(xR-xL)*.38;
@@ -761,21 +764,21 @@
       vp.vols.forEach((v,i)=>{
         const pr=vp.pMin+(i+.5)*vp.bs, cy=priceToY(pr); if (cy==null) return;
         const bH=Math.max(1,Math.abs((priceToY(vp.pMin+i*vp.bs)||cy)-(priceToY(vp.pMin+(i+1)*vp.bs)||cy)));
-        ctx.save(); ctx.globalAlpha=(isPreview?.6:1)*(i===pocI?.85:.4)*0.25;
+        ctx.save(); ctx.globalAlpha=(isPreview?.6:1)*(i===pocI?.85:.4)*0.35;
         ctx.fillStyle=i===pocI?'#f0b429':'#1a3a8a';
         ctx.fillRect(xL,cy-bH/2,(v/maxV)*maxW,bH); ctx.restore();
       });
       const pocPr=vp.pMin+(pocI+.5)*vp.bs, pocY=priceToY(pocPr);
       if (pocY!=null) {
-        ctx.save(); ctx.globalAlpha=0.25; ctx.strokeStyle='#f23645'; ctx.lineWidth=0.5; ctx.setLineDash([4,3]);
-        ctx.beginPath(); ctx.moveTo(xL,pocY); ctx.lineTo(xR,pocY); ctx.stroke(); ctx.setLineDash([]);
+        ctx.save(); ctx.globalAlpha=0.75; ctx.strokeStyle='#b30000'; ctx.lineWidth=0.65;
+        ctx.beginPath(); ctx.moveTo(xL,pocY); ctx.lineTo(xR,pocY); ctx.stroke();
         _lbl(ctx,`POC ${pocPr.toFixed(5)}`,xL+4,pocY,'#f23645','left',9); ctx.restore();
       }
-      // VAH / VAL — pink solid lines at 30% opacity
-      ctx.save(); ctx.globalAlpha=0.3; ctx.strokeStyle='#e879a0'; ctx.lineWidth=0.5;
+      // VAH / VAL — white (30% darkened) solid lines at 80% opacity, 30% thicker
+      ctx.save(); ctx.globalAlpha=0.8; ctx.strokeStyle='#b3b3b3'; ctx.lineWidth=0.65;
       const vahY=priceToY(vp.vah), valY=priceToY(vp.val);
-      if (vahY!=null){ctx.beginPath();ctx.moveTo(xL,vahY);ctx.lineTo(xR,vahY);ctx.stroke();_lbl(ctx,`VAH ${vp.vah.toFixed(5)}`,xL+4,vahY,'#e879a0','left',8);}
-      if (valY!=null){ctx.beginPath();ctx.moveTo(xL,valY);ctx.lineTo(xR,valY);ctx.stroke();_lbl(ctx,`VAL ${vp.val.toFixed(5)}`,xL+4,valY,'#e879a0','left',8);}
+      if (vahY!=null){ctx.beginPath();ctx.moveTo(xL,vahY);ctx.lineTo(xR,vahY);ctx.stroke();_lbl(ctx,`VAH ${vp.vah.toFixed(5)}`,xL+4,vahY,'#b3b3b3','left',8);}
+      if (valY!=null){ctx.beginPath();ctx.moveTo(xL,valY);ctx.lineTo(xR,valY);ctx.stroke();_lbl(ctx,`VAL ${vp.val.toFixed(5)}`,xL+4,valY,'#b3b3b3','left',8);}
       ctx.restore();
       // Faint vertical origin lines (5% opacity) — shows where the anchor boundaries are
       const _vpAnchorY=18;
@@ -2292,6 +2295,46 @@
     saveDrawings();previewShape=null;clickCount=0;firstClickPos=null;updateObjTree();markDirty();
   });
 
+  // Recompute a VP drawing's histogram/POC/VAH/VAL from currentCandles for its
+  // current time1/time2 — used ONLY when the user manually drags an anchor.
+  // The auto-detected VP box otherwise always renders exactly what Dexter
+  // computed (see the d.type==='vp' render branch); dragging is an explicit,
+  // visible user override of that range, so recomputing locally here (rather
+  // than silently reusing Dexter's stale numbers for a range the user just
+  // changed) is what makes the dragged anchors actually show something.
+  function _recomputeVPFromCandles(d, n_bins) {
+    n_bins = n_bins || 24;
+    const lo=Math.min(d.time1,d.time2), hi=Math.max(d.time1,d.time2);
+    const cc = currentCandles.filter(c=>c.time>=lo&&c.time<=hi);
+    if (!cc.length) return;
+    const pMin=Math.min(...cc.map(c=>c.low)), pMax=Math.max(...cc.map(c=>c.high));
+    if (pMax<=pMin) return;
+    const bs=(pMax-pMin)/n_bins;
+    const vols=Array(n_bins).fill(0);
+    for (const c of cc) {
+      const vol=c.volume||0;
+      for (let i=0;i<n_bins;i++) {
+        const bLo=pMin+i*bs, bHi=bLo+bs;
+        const ov=Math.max(0,Math.min(c.high,bHi)-Math.max(c.low,bLo));
+        const ratio=c.high>c.low?ov/(c.high-c.low):1/n_bins;
+        vols[i]+=vol*ratio;
+      }
+    }
+    const total=vols.reduce((s,v)=>s+v,0);
+    if (total<=0) return;
+    const pocI=vols.reduce((b,v,i)=>v>vols[b]?i:b,0);
+    let loI=pocI, hiI=pocI, acc=vols[pocI];
+    while (acc<total*0.70 && (loI>0||hiI<n_bins-1)) {
+      const aLo=loI>0?vols[loI-1]:-1, aHi=hiI<n_bins-1?vols[hiI+1]:-1;
+      if (aLo>=aHi&&loI>0){loI--;acc+=vols[loI];}
+      else if (hiI<n_bins-1){hiI++;acc+=vols[hiI];}
+      else break;
+    }
+    const bin_edges=[]; for (let i=0;i<=n_bins;i++) bin_edges.push(pMin+i*bs);
+    d.bin_edges=bin_edges; d.bin_volumes=vols;
+    d.poc=pMin+(pocI+0.5)*bs; d.vah=pMin+(hiI+1)*bs; d.val=pMin+loI*bs;
+  }
+
   /* ---- Drag / move ---- */
   drawCanvas.addEventListener('mousedown',e=>{
     if (e.button!==0) return;
@@ -2331,6 +2374,7 @@
           magnetDot=sx!=null?{x:sx,y:18}:null;
           if (dragEndpoint===1) d.time1=nearestCandle.time;
           else if (dragEndpoint===2) d.time2=nearestCandle.time;
+          _recomputeVPFromCandles(d);
         }
         markDirty(); return;
       }

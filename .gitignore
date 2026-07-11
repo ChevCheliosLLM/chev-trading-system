@@ -33,6 +33,8 @@ daily_risk.json
 system_state.jsonl
 tunables.json
 counterfactual_report.txt
+weight_proposal_report.txt
+weight_overrides.json
 *.log
 
 # ─── Not part of this project ────────────────────────────────────────────────

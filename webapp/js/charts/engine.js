@@ -854,7 +854,7 @@
     });
   }
   _wireVisCheckbox('lyrSrVis',  '_sr');
-  _wireVisCheckbox('lyrVpVis',  '_vp');
+  _wireVisCheckbox('lyrVpVis',  '_vp_stack');
   _wireVisCheckbox('lyrFibVis', '_fib_stack');
   _wireVisCheckbox('lyrTlVis',  '_tl');
   // RSI is deliberately NOT wired through _wireVisCheckbox — _rsi_div drawings are

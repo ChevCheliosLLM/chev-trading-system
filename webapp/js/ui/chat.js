@@ -253,55 +253,132 @@
     }
   }
 
-  // Volume Profile — POC, VAH, VAL (toggle)
-  async function drawVP() {
-    if (!currentCandles.length) return;
+  // Reset the VP button/card/checkbox/auto-refresh timer to their off state, without
+  // touching drawings[] itself — called on manual toggle-off AND whenever we load a
+  // (possibly different) symbol's drawing set, since VP is a live, on-demand overlay
+  // that should never silently carry over from whatever pair you were looking at
+  // before (see loadDrawings in drawing.js). Also resets the popup's TF checkboxes
+  // back to the 1h-only default, mirroring Fib's own reset convention.
+  function _deactivateVpUI() {
+    clearInterval(_vpAutoTimer);
+    if (_vpAutoChk)   _vpAutoChk.checked = false;
+    if (_vpAutoLabel) _vpAutoLabel.classList.remove('active');
     const btn  = document.getElementById('lyrVpBtn');
     const card = document.getElementById('lyrVpCard');
     const desc = document.getElementById('lyrVpDesc');
     const vis  = document.getElementById('lyrVpVis');
-    if (drawings.some(d => d._vp)) {
-      for (let i = drawings.length-1; i >= 0; i--) { if (drawings[i]._vp) drawings.splice(i,1); }
-      saveDrawings(); redrawAll(); updateObjTree();
-      btn.textContent = 'VP'; card.classList.remove('active');
-      desc.textContent = 'POC · VAH · VAL';
-      vis.checked = false; vis.disabled = true;
-      return;
-    }
+    if (btn)  btn.textContent = 'VP';
+    if (card) card.classList.remove('active');
+    if (desc) desc.textContent = 'POC · VAH · VAL';
+    if (vis)  { vis.checked = false; vis.disabled = true; }
+    const ck15 = document.getElementById('vpCk15m'), ck1h = document.getElementById('vpCk1h'), ck4h = document.getElementById('vpCk4h');
+    if (ck15) ck15.checked = false;
+    if (ck1h) ck1h.checked = true;
+    if (ck4h) ck4h.checked = false;
+  }
+
+  // Multi-timeframe Volume Profile — mirrors the Fib stack exactly: a popup with
+  // per-TF checkboxes so 15m/1h/4h can be compared side by side instead of having
+  // to change the chart's own timeframe and re-click VP to see each one.
+  function _clearVpDrawings() {
+    for (let i = drawings.length-1; i >= 0; i--) { if (drawings[i]._vp_stack) drawings.splice(i,1); }
+    saveDrawings(); redrawAll(); updateObjTree();
+  }
+
+  async function _fetchAndDrawVpStack() {
+    const btn  = document.getElementById('lyrVpBtn');
+    const card = document.getElementById('lyrVpCard');
+    const vis  = document.getElementById('lyrVpVis');
+    const show15m = document.getElementById('vpCk15m').checked;
+    const show1h  = document.getElementById('vpCk1h').checked;
+    const show4h  = document.getElementById('vpCk4h').checked;
+    const tfFilter = new Set([...(show15m?['15m']:[]), ...(show1h?['1h']:[]), ...(show4h?['4h']:[])]);
     btn.textContent = 'VP…'; btn.disabled = true;
-    const tfSec = {'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400}[currentTf]||3600;
     try {
-      const r = await _apiFetch(`/api/analysis/vp?symbol=${encodeURIComponent(currentSymbol)}&tf=${currentTf}`);
+      const r = await _apiFetch(`/api/analysis/vp_stack?symbol=${encodeURIComponent(currentSymbol)}`);
       if (!r.ok) throw new Error(`Dexter ${r.status} — restart Dexter if this persists`);
-      const d = await r.json();
-      if (d.error) throw new Error(d.error);
-      // Push directly — _pushZonesToDrawings overwrites time1/time2 with full candle range
-      for (let i = drawings.length-1; i >= 0; i--) { if (drawings[i]._vp) drawings.splice(i,1); }
-      drawings.push({type:'vp', time1:d.start_t, time2:d.end_t, color:'#2962ff', visible:true, _vp:true});
+      const data = await r.json();
+      if (data.error) throw new Error(data.error);
+      for (let i = drawings.length-1; i >= 0; i--) { if (drawings[i]._vp_stack) drawings.splice(i,1); }
+      // poc/vah/val/bin_edges/bin_volumes come straight from Dexter per timeframe — the
+      // renderer draws these as-is rather than recomputing its own histogram, so the
+      // chart always shows exactly what Dexter (and Chev) used, for every TF shown.
+      (data.timeframes||[]).filter(tf => tfFilter.has(tf.tf)).forEach(tf => {
+        drawings.push({
+          type:'vp', time1:tf.start_t, time2:tf.end_t, color:tf.color, visible:true, _vp_stack:true,
+          poc:tf.poc, vah:tf.vah, val:tf.val,
+          bin_edges:tf.bin_edges, bin_volumes:tf.bin_volumes,
+        });
+      });
       saveDrawings(); redrawAll(); updateObjTree();
-      const methodShort = {dual_pivot:'RSI', atr_expansion:'ATR', fractal_fallback:'frac'}[d.anchor_method] || d.anchor_method;
-      const anchorActive = d.anchor_active !== false;
-      // Keep the BUTTON label short (this compact layout can't fit a full sentence —
-      // that's what made it "horrible") and put the detail on the description line
-      // underneath instead, where there's room for it.
-      if (!anchorActive) {
-        const why = {price_returned_to_balance:'price back in range', structure_broken:'structure broken'}[d.anchor_invalidation] || 'stale';
-        _showToast(`<span class="tBear">VP anchor is stale (${why}) — showing last detected structure.</span>`, 7000);
-        btn.textContent = 'VP ⚠';
-        desc.textContent = `${d.candles}c · stale`;
-      } else {
-        btn.textContent = 'VP ✓';
-        desc.textContent = `${d.candles}c · ${d.anchor_confidence}% ${methodShort}${d.anchor_confirmed ? '' : ' unconf'}`;
-      }
-      card.classList.add('active');
-      vis.checked = true; vis.disabled = false;
+      const shown = (data.timeframes||[]).filter(tf => tfFilter.has(tf.tf)).length;
+      btn.textContent = shown ? `VP (${shown}TF)` : 'VP';
+      card.classList.toggle('active', shown > 0);
+      vis.checked = shown > 0; vis.disabled = shown === 0;
     } catch(e) {
       _showToast(`<span class="tBear">VP — ${e.message}</span>`, 6000);
-      btn.textContent = 'VP';
-      desc.textContent = 'POC · VAH · VAL';
+      btn.textContent = 'VP'; card.classList.remove('active');
+      vis.checked = false; vis.disabled = true;
     } finally {
       btn.disabled = false;
     }
+  }
+
+  // Volume Profile — button click: toggle off if already drawn, otherwise force a
+  // sane 1h-only default (mirrors drawFibStack's same "don't silently draw nothing"
+  // reasoning) and open the popup so more timeframes can be added immediately.
+  async function drawVP() {
+    if (!currentCandles.length) return;
+    if (drawings.some(d => d._vp_stack)) {
+      _clearVpDrawings();
+      _deactivateVpUI();
+      _ctpHide();
+      return;
+    }
+    const anySelected = document.getElementById('vpCk15m').checked ||
+                        document.getElementById('vpCk1h').checked  ||
+                        document.getElementById('vpCk4h').checked;
+    if (!anySelected) document.getElementById('vpCk1h').checked = true;
+    await _fetchAndDrawVpStack();
+    _ctpShow('vp');
+  }
+
+  // Reactive: redraw whenever a TF checkbox changes, same convention as Fib's
+  // checkbox listeners — no force-default here, only on the initial button click.
+  ['vpCk15m','vpCk1h','vpCk4h'].forEach(id => {
+    document.getElementById(id).addEventListener('change', () => {
+      _clearVpDrawings();
+      const anySelected = document.getElementById('vpCk15m').checked ||
+                          document.getElementById('vpCk1h').checked  ||
+                          document.getElementById('vpCk4h').checked;
+      if (anySelected) {
+        _fetchAndDrawVpStack();
+      } else {
+        document.getElementById('lyrVpBtn').textContent = 'VP';
+        document.getElementById('lyrVpCard').classList.remove('active');
+        document.getElementById('lyrVpVis').checked = false;
+        document.getElementById('lyrVpVis').disabled = true;
+      }
+    });
+  });
+
+  // Auto-run "live" VP toggle — re-fetches whichever timeframes are checked every 5
+  // minutes so the Arsenal VP boxes keep tracking the current auction instead of
+  // freezing at the moment they were drawn (mirrors engine.js's engChkAuto pattern).
+  let _vpAutoTimer = null;
+  const _vpAutoChk   = document.getElementById('lyrVpAuto');
+  const _vpAutoLabel = document.getElementById('lyrVpAutoLabel');
+  if (_vpAutoChk) {
+    _vpAutoChk.addEventListener('change', function() {
+      clearInterval(_vpAutoTimer);
+      if (_vpAutoLabel) _vpAutoLabel.classList.toggle('active', _vpAutoChk.checked);
+      if (_vpAutoChk.checked) {
+        _vpAutoTimer = setInterval(function() {
+          const card = document.getElementById('lyrVpCard');
+          if (_vpAutoChk.checked && card && card.classList.contains('active')) _fetchAndDrawVpStack();
+        }, 5 * 60 * 1000);
+      }
+    });
   }
 
   // ATR — show volatility toast
@@ -870,12 +947,14 @@
   // off, so you can freely click around the chart while it's showing.
   function _ctpShow(which) {
     const pop = document.getElementById('chartToolPopup');
-    const titles = { fib: 'Fibonacci', rsi: 'RSI Divergence', tl: 'Trendlines' };
+    const titles = { fib: 'Fibonacci', rsi: 'RSI Divergence', tl: 'Trendlines', vp: 'Volume Profile' };
     document.getElementById('ctpTitle').textContent = titles[which] || '';
     document.getElementById('ctpFibBody').classList.toggle('shown', which === 'fib');
     document.getElementById('ctpRsiBody').classList.toggle('shown', which === 'rsi');
     const tlBody = document.getElementById('ctpTlBody');
     if (tlBody) tlBody.classList.toggle('shown', which === 'tl');
+    const vpBody = document.getElementById('ctpVpBody');
+    if (vpBody) vpBody.classList.toggle('shown', which === 'vp');
     pop.classList.add('open');
   }
   function _ctpHide() {

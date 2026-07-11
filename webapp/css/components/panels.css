@@ -226,6 +226,14 @@
 }
 .layerToolBtn.active .ltbName { color: #d4af37; }
 .layerToolBtn .ltbDesc { font-family: 'Share Tech Mono', monospace; font-size: 9px; color: #4a4e68; margin-left: auto; padding-left: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+/* VP "live" auto-refresh toggle — mirrors #engAutoLabel's compact style */
+#lyrVpAutoLabel {
+  display: flex; align-items: center; gap: 4px; font-size: 9px;
+  color: #4a4e68; font-family: 'Inter', sans-serif; letter-spacing: 0.03em;
+  cursor: pointer; user-select: none; flex-shrink: 0; padding-left: 6px;
+}
+#lyrVpAutoLabel input { accent-color: #d4af37; cursor: pointer; width: 10px; height: 10px; }
+#lyrVpAutoLabel.active { color: #d4af37; }
 
 /* CHAT pane */
 #chatPane { flex-direction: row; padding: 0; overflow: hidden; }

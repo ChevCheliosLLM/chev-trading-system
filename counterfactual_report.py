@@ -48,6 +48,17 @@ BASELINE_TS = "2026-07-06 04:26:00"
 
 TOP_N = 3   # largest winners/losers shown per bucket in the .txt report
 
+# Read-time cap on cost_R, mirroring labeller.py's COST_R_CAP constant (kept as a
+# local literal, not an import, per this file's own "stays standalone" design —
+# see the module docstring). Historical labels_closed.jsonl records can carry a
+# cost_R computed before labeller.py's own fix, which blew up to 2-3R+ on low-
+# ATR%-relative-to-price instruments (forex swing especially) — a shadow-model
+# artifact, not a real cost the real gauntlet would ever have allowed through.
+# NOTE: keep this in sync with labeller.py's COST_R_CAP (and weight_proposal.py's
+# own copy) — all three are deliberately standalone, not imported, so a change to
+# one won't propagate automatically.
+COST_R_CAP = 0.50
+
 # resolved_items is a flat per-record list -- capped so the JSON endpoint (PHASE 7B-1)
 # never has to serve an unbounded, ever-growing list to a phone. Most recent first.
 RESOLVED_ITEMS_CAP = 300
@@ -176,7 +187,7 @@ def bucket_stats(closed_recs, open_count):
         realized = r.get("realized_R")
         if realized is None:
             continue
-        cost = r.get("cost_R") or 0.0
+        cost = min(r.get("cost_R") or 0.0, COST_R_CAP)
         net_rs.append((round(realized - cost, 4), r))
 
     avg_net_R   = (sum(x[0] for x in net_rs) / len(net_rs)) if net_rs else None
@@ -625,8 +636,11 @@ def build_report(baseline_ts=None,
 
     lines.append("")
     lines.append("-" * 78)
-    lines.append("POST — REALITY ANCHOR (real trades Chev actually took, same shadow lens)")
+    lines.append("POST — SHADOW REPLAY (NOT real trade P&L)")
     lines.append("-" * 78)
+    lines.append("NOTE: this bucket re-simulates Chev's stated entry through the same synthetic")
+    lines.append("±1R box as SKIP. Real fills/stops/P&L live in chev_journal.json and are NOT")
+    lines.append("reflected here.")
     lines.append("NOTE: only trades that survived every gate get an Examiner POST shadow record")
     lines.append("(record_setup fires once a trade is actually locked, not on every Chev POST —")
     lines.append("see handoff.txt PHASE 7 discovery). Sample is typically thin; read accordingly.")

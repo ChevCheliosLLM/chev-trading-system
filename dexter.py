@@ -24,6 +24,9 @@ import patterns
 import risk_gauntlet
 import honest_sim
 import counterfactual_report
+import weight_proposal
+import io
+import contextlib
 
 # Path configuration for cross-platform support (Windows C:\ vs Linux ~/ home dir)
 CHEV_TOOLS_ROOT = os.getenv("CHEV_TOOLS_ROOT", r"C:\ChevTools" if os.name == 'nt' else os.path.expanduser("~/ChevTools"))
@@ -759,6 +762,255 @@ def api_strategy_counterfactual():
     })
 
 
+# =============================================================================
+# WEIGHT LAB — API routes
+#
+# Exposes weight_proposal.py's Ridge-regression tag analysis through a read-only
+# GET route, plus two @require_key mutating routes that let Kev approve/revert a
+# proposed delta into weight_overrides.json. Nothing here ever touches
+# CONFLUENCE_SCORES directly — _apply_weight_overrides() (above) is the ONLY
+# code path that ever mutates it, and only once, at startup.
+# =============================================================================
+WEIGHT_PROPOSAL_CACHE_SECS = 300
+FREEZE_MIN_RECORDS = 200
+_weight_proposal_cache = {"ts": 0.0, "payload": None}
+_weight_proposal_significant_tags = set()   # last-served proposal set with significant=true;
+                                             # /approve checks against this, never the client's claim
+
+
+def _atomic_write_json(path, data):
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp_path, path)
+
+
+def _read_weight_overrides_file():
+    """Returns {"version": 1, "entries": [...]}; empty/default structure if the
+    file is missing or malformed. Never raises."""
+    if not os.path.exists(WEIGHT_OVERRIDES_FILE):
+        return {"version": 1, "entries": []}
+    try:
+        with open(WEIGHT_OVERRIDES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data.get("entries"), list):
+            raise ValueError("'entries' is not a list")
+        return data
+    except Exception:
+        return {"version": 1, "entries": []}
+
+
+def _run_weight_proposal_selftest():
+    """Runs weight_proposal.py's own synthetic self-test, capturing its printed
+    PASS/FAIL lines so a failure can be reported by name, not just true/false —
+    the 'check the checker' gate."""
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ok = weight_proposal.run_selftest()
+    fail_lines = [ln.strip() for ln in buf.getvalue().splitlines() if ln.strip().startswith("FAIL:")]
+    return ok, fail_lines
+
+
+def _tag_raw_crosscheck(tag, records):
+    """Independent of the regression — straight from the records. Returns
+    n_with/winrate_with/avg_netR_with/winrate_without/avg_netR_without."""
+    with_recs    = [r for r in records if tag in r["features"]]
+    without_recs = [r for r in records if tag not in r["features"]]
+
+    def _stats(recs):
+        if not recs:
+            return 0, None, None
+        wins = sum(1 for r in recs if r.get("label") == 1)
+        wr = wins / len(recs) * 100.0
+        avg = sum(weight_proposal.net_r(r) for r in recs) / len(recs)
+        return len(recs), round(wr, 1), round(avg, 4)
+
+    n_with, wr_with, avg_with = _stats(with_recs)
+    n_without, wr_without, avg_without = _stats(without_recs)
+    return {
+        "n_with": n_with, "winrate_with": wr_with, "avg_netR_with": avg_with,
+        "n_without": n_without, "winrate_without": wr_without, "avg_netR_without": avg_without,
+    }
+
+
+def _build_weight_proposal_payload():
+    """Pure computation, no Flask objects. Returns a plain dict — {"ok": False,
+    "error": ...} on self-test failure, otherwise the full proposal payload."""
+    ok, fail_lines = _run_weight_proposal_selftest()
+    if not ok:
+        detail = "; ".join(fail_lines) if fail_lines else "unknown assertion failed"
+        return {"ok": False, "error": f"self-test failed: {detail}"}
+
+    records_raw, malformed = weight_proposal.load_records(weight_proposal.LABELS_CLOSED_FILE)
+    kept, n_post, n_incomplete = weight_proposal.prepare_sample(records_raw)
+
+    overrides = _read_weight_overrides_file()
+    entries = overrides.get("entries", [])
+    freeze_epoch = None
+    if entries:
+        for e in entries:
+            try:
+                ts = datetime.strptime(e["approved_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+            except Exception:
+                continue
+            if freeze_epoch is None or ts > freeze_epoch:
+                freeze_epoch = ts
+
+    eligible = [r for r in kept if (r.get("ts_epoch") or 0) > freeze_epoch] if freeze_epoch is not None else kept
+
+    if len(eligible) < FREEZE_MIN_RECORDS:
+        return {
+            "ok": True, "frozen": True,
+            "records_since_last_change": len(eligible),
+            "needed": FREEZE_MIN_RECORDS,
+            "proposals": [],
+        }
+
+    X, y, tag_names, tag_counts, dropped_tags, control_names, asset_ref, trade_ref = \
+        weight_proposal.build_design_matrix(eligible)
+    beta = weight_proposal.ridge_fit(X, y, weight_proposal.RIDGE_LAMBDA)
+    rng = np.random.default_rng(weight_proposal.SEED)
+    boot_draws = weight_proposal.bootstrap_ci(X, y, weight_proposal.RIDGE_LAMBDA, len(tag_names), rng, weight_proposal.BOOTSTRAP_B)
+    ci_lo = np.percentile(boot_draws, 2.5, axis=0)
+    ci_hi = np.percentile(boot_draws, 97.5, axis=0)
+
+    proposals = []
+    significant_tags = set()
+    for i, tag in enumerate(tag_names):
+        j = 1 + i
+        coef = float(beta[j])
+        lo, hi = float(ci_lo[j]), float(ci_hi[j])
+        significant = (lo > 0) or (hi < 0)
+        current_weight = CONFLUENCE_SCORES.get(tag)
+        row = {
+            "tag": tag, "n": tag_counts[tag], "coef": round(coef, 4),
+            "ci": [round(lo, 4), round(hi, 4)], "significant": significant,
+            "current_weight": current_weight,
+            "proposed_delta": None, "effective_weight_preview": None, "agreement": None,
+        }
+        if significant:
+            significant_tags.add(tag)
+            cross = _tag_raw_crosscheck(tag, eligible)
+            row.update(cross)
+            if cross["avg_netR_with"] is not None and cross["avg_netR_without"] is not None:
+                raw_diff = cross["avg_netR_with"] - cross["avg_netR_without"]
+                row["agreement"] = "agree" if (coef > 0) == (raw_diff > 0) else "conflict"
+            if current_weight is not None:
+                delta = 1 if coef > 0 else -1
+                row["proposed_delta"] = delta
+                row["effective_weight_preview"] = current_weight + delta
+        proposals.append(row)
+
+    proposals.sort(key=lambda r: -abs(r["coef"]))
+    ts_values = [r["ts"] for r in eligible if r.get("ts")]
+
+    return {
+        "ok": True, "frozen": False,
+        "sample": {
+            "n_used": len(eligible), "n_excluded_post": n_post,
+            "n_excluded_incomplete": n_incomplete, "n_malformed": malformed,
+            "date_range": [min(ts_values), max(ts_values)] if ts_values else None,
+            "freeze_active": freeze_epoch is not None,
+        },
+        "proposals": proposals,
+        "pending_overrides": entries,   # every entry in the file is, by definition, not yet
+                                         # applied to THIS running process — only startup applies them
+        "significant_tags": sorted(significant_tags),
+    }
+
+
+@flask_app.route("/api/weight_proposal")
+def api_weight_proposal():
+    """Read-only. Runs weight_proposal.py's Ridge regression in-process on
+    labels_closed.jsonl, gated by its own self-test (never serves numbers if the
+    checker itself is broken). 300s cache, same pattern as
+    /api/strategy/counterfactual."""
+    global _weight_proposal_significant_tags
+    now = time.time()
+    cache_age = now - _weight_proposal_cache["ts"]
+    if _weight_proposal_cache["payload"] is None or cache_age >= WEIGHT_PROPOSAL_CACHE_SECS:
+        payload = _build_weight_proposal_payload()
+        if not payload.get("ok"):
+            # Self-test failure — never cache a broken-checker result, so the
+            # next request retries fresh rather than serving stale bad news.
+            return jsonify(payload)
+        _weight_proposal_cache["ts"] = now
+        _weight_proposal_cache["payload"] = payload
+        _weight_proposal_significant_tags = set(payload.get("significant_tags", []))
+        cache_age = 0.0
+
+    payload = dict(_weight_proposal_cache["payload"])
+    payload["cache_age_secs"] = round(cache_age, 1)
+    return jsonify(payload)
+
+
+@flask_app.route("/api/weight_proposal/approve", methods=["POST"])
+@require_key
+def api_weight_proposal_approve():
+    body = flask_request.get_json(silent=True) or {}
+    tag = body.get("tag")
+    delta = body.get("delta")
+    evidence = body.get("evidence") or {}
+
+    if not isinstance(tag, str) or not tag:
+        return jsonify({"ok": False, "error": "missing tag"}), 400
+    try:
+        delta = int(delta)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "delta must be an integer"}), 400
+    if abs(delta) != 1:
+        return jsonify({"ok": False, "error": "delta must be exactly +1 or -1"}), 400
+    if tag not in CONFLUENCE_SCORES:
+        return jsonify({"ok": False, "error": f"'{tag}' is not a known CONFLUENCE_SCORES tag"}), 400
+    if tag not in _weight_proposal_significant_tags:
+        return jsonify({"ok": False, "error": f"'{tag}' was not in the most recently served significant proposal set"}), 400
+
+    data = _read_weight_overrides_file()
+    entries = data.get("entries", [])
+    if any(e.get("tag") == tag for e in entries):
+        return jsonify({"ok": False, "error": f"a pending override for '{tag}' already exists — revert it first"}), 400
+
+    entry = {
+        "tag": tag, "delta": delta,
+        "approved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "evidence": evidence, "source": "weight_lab",
+    }
+    entries.append(entry)
+    data["entries"] = entries
+    _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+    return jsonify({"ok": True, "pending_overrides": entries})
+
+
+@flask_app.route("/api/weight_proposal/revert", methods=["POST"])
+@require_key
+def api_weight_proposal_revert():
+    body = flask_request.get_json(silent=True) or {}
+    idx = body.get("index")
+    if not isinstance(idx, int):
+        return jsonify({"ok": False, "error": "index must be an integer"}), 400
+
+    data = _read_weight_overrides_file()
+    entries = data.get("entries", [])
+    if idx < 0 or idx >= len(entries):
+        return jsonify({"ok": False, "error": f"index {idx} out of range (0..{len(entries)-1})"}), 400
+
+    entries.pop(idx)
+    data["entries"] = entries
+    _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+    return jsonify({"ok": True, "pending_overrides": entries})
+
+
+@flask_app.route("/api/weight_overrides")
+def api_weight_overrides():
+    """Read-only. Current weight_overrides.json contents, each entry annotated
+    with whether it was already applied this run (compared against the snapshot
+    _apply_weight_overrides() took at startup)."""
+    data = _read_weight_overrides_file()
+    entries = data.get("entries", [])
+    annotated = [{**e, "active": e in _WEIGHT_OVERRIDES_STARTUP_SNAPSHOT} for e in entries]
+    return jsonify({"ok": True, "version": data.get("version", 1), "entries": annotated})
+
+
 @flask_app.route("/api/strategy/heatmap")
 def api_strategy_heatmap():
     """Setup volume by day-of-week x 4-hour block (UTC), from the Examiner's shadow log
@@ -1391,6 +1643,10 @@ def api_analysis_sr():
 
 @flask_app.route("/api/analysis/vp")
 def api_analysis_vp():
+    """Single-timeframe VP — kept for rsi-canvas.js's _fetchAndDrawVP(), which
+    refreshes a Radar idea pill's trade-overlay VP box to the live anchor on the
+    CURRENT chart timeframe (see chev-corner.js's _applyIdeaPill). The Arsenal
+    tool itself now uses /api/analysis/vp_stack below instead."""
     symbol = flask_request.args.get("symbol", "SOLUSDT")
     tf     = flask_request.args.get("tf", "1h")
     clean  = symbol.upper().replace("BINANCE:", "").replace(":", "").replace("/", "")
@@ -1398,7 +1654,7 @@ def api_analysis_vp():
     try:
         sym    = clean if atype == "crypto" else symbol
         df     = fetch_candles(sym, atype, tf, 700)
-        anchor = _detect_auction_anchor(df)
+        anchor = _detect_vp_anchor(df)
         if anchor is None:
             return jsonify({"error": "No significant structure detected — price may be at equilibrium. Try a different timeframe."}), 400
         start_idx = anchor["idx"]
@@ -1414,6 +1670,9 @@ def api_analysis_vp():
             "poc": round(float(vp["poc"]), 5),
             "vah": round(float(vp["vah"]), 5),
             "val": round(float(vp["val"]), 5),
+            "bin_edges":   vp["bin_edges"],
+            "bin_volumes": [round(v, 2) for v in vp["bin_volumes"]],
+            "n_bins":      len(vp["bin_volumes"]),
             "candles":                end_idx - start_idx + 1,
             "anchor_price":           anchor["price"],
             "anchor_type":            anchor["anchor_type"],
@@ -1423,6 +1682,53 @@ def api_analysis_vp():
             "anchor_active":          anchor.get("active", True),
             "anchor_invalidation":    anchor.get("invalidation_reason"),
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@flask_app.route("/api/analysis/vp_stack")
+def api_analysis_vp_stack():
+    """Multi-timeframe VP, mirrors /api/analysis/fib_stack — VP's anchor/POC/VAH/VAL
+    depend on which TF you look at, so rather than making Kev change the chart's TF
+    and re-click VP to compare, this returns every TF at once so the Arsenal popup
+    can draw them simultaneously, each in its own color, exactly like the Fib stack."""
+    symbol = flask_request.args.get("symbol", "SOLUSDT")
+    clean  = symbol.upper().replace("BINANCE:", "").replace(":", "").replace("/", "")
+    atype  = _an_asset_type(symbol)
+    TFS    = [("15m", "#5dade2"), ("1h", "#2962ff"), ("4h", "#e67e22")]
+    results = []
+    try:
+        for ftf, color in TFS:
+            try:
+                sym = clean if atype == "crypto" else symbol
+                df  = fetch_candles(sym, atype, ftf, 700)
+                anchor = _detect_vp_anchor(df)
+                if anchor is None:
+                    continue
+                start_idx = anchor["idx"]
+                end_idx   = len(df) - 1
+                vp = _ca_volume_profile(df, start_idx, end_idx)
+                if not vp:
+                    continue
+                results.append({
+                    "tf": ftf, "color": color,
+                    "start_t": int(df.index[start_idx].timestamp()),
+                    "end_t":   int(df.index[end_idx].timestamp()),
+                    "poc": round(float(vp["poc"]), 5),
+                    "vah": round(float(vp["vah"]), 5),
+                    "val": round(float(vp["val"]), 5),
+                    "bin_edges":   vp["bin_edges"],
+                    "bin_volumes": [round(v, 2) for v in vp["bin_volumes"]],
+                    "candles":             end_idx - start_idx + 1,
+                    "anchor_method":       anchor["method"],
+                    "anchor_confidence":   anchor["confidence"],
+                    "anchor_confirmed":    anchor.get("confirmed", False),
+                    "anchor_active":       anchor.get("active", True),
+                    "anchor_invalidation": anchor.get("invalidation_reason"),
+                })
+            except Exception as e:
+                print(f"[VpStack/{ftf}] {e}")
+        return jsonify({"symbol": symbol, "timeframes": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1498,11 +1804,14 @@ def api_analysis_fib_stack():
             try:
                 sym     = clean if atype == "crypto" else symbol
                 df      = fetch_candles(sym, atype, ftf, 300)
-                # Anchor the fib to the SAME auction structure the Volume Profile
-                # uses (_detect_auction_anchor), so the fib spans the same area as
-                # the VP box: origin = the anchor swing, extended to the opposite
-                # extreme reached since. Falls back to a 150-bar window when no
-                # significant structure is detected.
+                # Anchor the fib to the most recent clean swing pivot
+                # (_detect_auction_anchor) — the origin is that swing, extended to
+                # the opposite extreme reached since. NOTE: as of the VP anchor
+                # rework, Volume Profile uses a separate, VP-specific anchor
+                # (_detect_vp_anchor, tuned to find the TRUE start of the current
+                # range rather than the most recent pivot), so the Fib and VP boxes
+                # may legitimately start at different candles now. Falls back to a
+                # 150-bar window when no significant structure is detected.
                 anchor = _detect_auction_anchor(df)
                 if anchor is not None:
                     a_idx   = anchor["idx"]
@@ -2026,6 +2335,83 @@ CONFLUENCE_SCORES = {
     # Market / price structure (higher timeframe context)
     "ms_1d": 5, "ms_4h": 4, "ms_1h": 3, "ms_30m": 2, "ms_15m": 1, "ms": 3,
 }
+
+# =============================================================================
+# WEIGHT LAB — startup-only override loader
+#
+# Applies human-approved confluence tag weight deltas from weight_overrides.json
+# to CONFLUENCE_SCORES, ONCE at startup only. Deliberately NOT a per-cycle hot-
+# reload like tunables.json (PHASE 14, below) — a weight change is a bigger
+# behavioral commitment than a tunable, so it requires an explicit Dexter
+# restart to arm, never a silent mid-session change. The Weight Lab UI enforces
+# this too (a loud "restart to arm" banner), but this loader does not trust the
+# UI alone — see the hard safety clamp below.
+#
+# File format:
+#   {"version": 1, "entries": [
+#       {"tag": "oi_divergence", "delta": 1, "approved_at": "2026-07-11 14:03:00",
+#        "evidence": {"n": 41, "coef": 0.31, "ci": [0.12, 0.49]}, "source": "weight_lab"}
+#   ]}
+#
+# Deltas for the same tag across multiple entries are summed. A hard safety
+# clamp (independent of the UI's own +/-1-per-approval cap — defense in depth)
+# holds each tag's final value inside [0, 2 * its original value + 2]. A tag not
+# present in CONFLUENCE_SCORES is ignored with a logged warning — never added
+# as a new key. A missing file is the normal steady state (nothing logged); a
+# malformed file logs a warning and applies nothing, startup continues normally.
+# =============================================================================
+WEIGHT_OVERRIDES_FILE = os.path.join(CHEV_TOOLS_ROOT, "weight_overrides.json")
+
+# Snapshot of entries present in the file AT STARTUP (i.e. already baked into
+# CONFLUENCE_SCORES this run). /api/weight_overrides compares the file's CURRENT
+# contents against this to flag each entry "active" (applied this run) or not
+# (approved during this session, awaiting the next restart to take effect).
+_WEIGHT_OVERRIDES_STARTUP_SNAPSHOT = []
+
+
+def _apply_weight_overrides():
+    global _WEIGHT_OVERRIDES_STARTUP_SNAPSHOT
+    if not os.path.exists(WEIGHT_OVERRIDES_FILE):
+        return
+    try:
+        with open(WEIGHT_OVERRIDES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        entries = data.get("entries", [])
+        if not isinstance(entries, list):
+            raise ValueError("'entries' is not a list")
+    except Exception as e:
+        print(f"[WEIGHT OVERRIDES] malformed {WEIGHT_OVERRIDES_FILE}, applying nothing: {e}")
+        return
+
+    _WEIGHT_OVERRIDES_STARTUP_SNAPSHOT = list(entries)
+
+    deltas = {}
+    for entry in entries:
+        try:
+            tag = entry["tag"]
+            delta = float(entry["delta"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        deltas[tag] = deltas.get(tag, 0.0) + delta
+
+    applied = []
+    for tag, total_delta in deltas.items():
+        if tag not in CONFLUENCE_SCORES:
+            print(f"[WEIGHT OVERRIDES] tag '{tag}' not in CONFLUENCE_SCORES -- ignored (never added as a new key)")
+            continue
+        original = CONFLUENCE_SCORES[tag]
+        proposed = original + total_delta
+        clamped = max(0, min(2 * original + 2, proposed))
+        if clamped != original:
+            CONFLUENCE_SCORES[tag] = clamped
+            applied.append((tag, original, clamped))
+
+    if applied:
+        summary = ", ".join(f"{t} {o:g}→{c:g}" for t, o, c in applied)
+        print(f"WEIGHT OVERRIDES: {len(applied)} tags adjusted ({summary})")
+
+
+_apply_weight_overrides()
 
 # =============================================================================
 # PHASE 16: TAG REGISTRY — one entry per confluence code the system can emit, across
@@ -5437,6 +5823,161 @@ def _detect_auction_anchor(df, max_lookback=200, pivot_bars=5):
     return None
 
 
+def _detect_vp_anchor(df, max_lookback=200, pivot_bars=5, recent_window=40):
+    """VP-only auction anchor — finds the TRUE start of the current auction/range,
+    not just the most recent clean pivot.
+
+    Unlike _detect_auction_anchor (which prefers the single strongest dual-pivot
+    swing — correct for Fib/VWAP/SR, which want "the most recent clean swing"),
+    Volume Profile needs to represent the FULL life of the current range. A
+    dual-pivot swing is frequently just a recent retest inside an already-
+    existing range (it scores well because RSI+price coincide there), not the
+    range's true origin — verified against a real chart where the algorithm
+    anchored at a mid-range retest dip instead of the original breakout candle.
+
+    Method: walk ATR compression -> expansion transitions from OLDEST to NEWEST
+    (the reverse of _detect_auction_anchor's ATR fallback, which stops at the
+    first/most-recent transition). For each candidate, oldest first, test
+    whether the value area (POC/VAH/VAL) computed from that candidate to now is
+    still statistically the same as the value area computed from just the
+    recent window — i.e. the whole span is still one auction. The comparison
+    is ATR-scaled, not exact, so an ordinary wick/fakeout candle cannot break
+    the chain (the range doesn't have to be perfect — noise/fakeouts expected).
+    First (oldest) passing candidate wins, since that gives VP the longest
+    history that's still provably the same auction. Falls back to the farthest
+    qualifying fractal (same as _detect_auction_anchor's Method 3) if no
+    candidate passes.
+
+    Returns: { idx, price, anchor_type, confidence, method } (run through
+    _validate_anchor) or None — same shape/failure contract as
+    _detect_auction_anchor, so callers need no changes beyond which function
+    they call.
+    """
+    n = len(df)
+    if n < 30:
+        return None
+
+    atr_s  = _an_atr_series(df, 14).values
+    highs  = df["high"].values
+    lows   = df["low"].values
+    closes = df["close"].values
+
+    atr_now = float(atr_s[-1]) if not np.isnan(atr_s[-1]) else 0.0
+    if atr_now <= 0:
+        return None
+
+    lb      = max(pivot_bars + 1, n - max_lookback)
+    win     = atr_s[lb:]
+    valid_w = win[~np.isnan(win)]
+    med_atr = float(np.median(valid_w)) if len(valid_w) > 5 else atr_now
+
+    # ── Step A: ATR compression -> expansion candidates, OLDEST first ────────
+    # Same thresholds as _detect_auction_anchor's Method 2 (dexter.py ATR
+    # fallback) — this is a generalization (collect every transition across
+    # the lookback), not a re-tune.
+    candidates = []
+    if len(valid_w) >= 15 and med_atr > 0:
+        lo_t = med_atr * 0.70
+        hi_t = med_atr * 1.10
+        m = len(win)
+        in_compression = False
+        for j in range(m):
+            v = win[j]
+            if np.isnan(v):
+                continue
+            if not in_compression:
+                if v <= lo_t:
+                    in_compression = True
+            else:
+                if v >= hi_t:
+                    idx_c = lb + j
+                    if idx_c < n - pivot_bars:  # skip transitions too close to "now"
+                        candidates.append(idx_c)
+                    in_compression = False
+
+    # ── Step B: value-area stability test, oldest candidate first ────────────
+    # ATR-scaled tolerance — a starting constant, expect to retune after real-
+    # chart validation. Requires ALL THREE of POC/VAH/VAL within tolerance (not
+    # an average) so a shape change can't hide behind two levels cancelling out.
+    tol = atr_now * 1.5
+    # A candidate can fail for two very different reasons that this raw number
+    # comparison alone can't tell apart: (a) an ordinary sharp move THAT HAPPENED
+    # INSIDE a single persistent range (ordinary volatility — ordinary noise, not
+    # a regime change) or (b) a genuine, un-retraced breakout/breakdown into a
+    # separate distribution that the older history never traded back into (e.g.
+    # an abandoned old high-price zone merged into a much lower current range).
+    # The distinguishing fact is simple: did the older history ever actually
+    # overlap the current value area, or did it leave and never come back? At
+    # least MIN_OLDER_BARS is required for the check to be meaningful on a short
+    # window; OVERLAP_MIN_FRAC is deliberately low (15%) — this only needs to
+    # rule out "never once traded here again", not demand heavy time-in-zone.
+    MIN_OLDER_BARS   = 10
+    OVERLAP_MIN_FRAC = 0.15
+    for idx_c in candidates:
+        vp_full = _ca_volume_profile(df, idx_c, n - 1, n_bins=24)
+        if not vp_full:
+            continue
+        recent_start = max(idx_c, n - recent_window)
+        if recent_start == idx_c:
+            passed = True  # candidate already inside the recent window — trivially stable
+        else:
+            vp_recent = _ca_volume_profile(df, recent_start, n - 1, n_bins=24)
+            if not vp_recent:
+                continue
+            value_stable = (
+                abs(vp_full["poc"] - vp_recent["poc"]) <= tol and
+                abs(vp_full["vah"] - vp_recent["vah"]) <= tol and
+                abs(vp_full["val"] - vp_recent["val"]) <= tol
+            )
+            older_closes = closes[idx_c:recent_start]
+            if len(older_closes) >= MIN_OLDER_BARS:
+                lo_bound = vp_recent["val"] - tol
+                hi_bound = vp_recent["vah"] + tol
+                overlap_frac = float(np.mean((older_closes >= lo_bound) & (older_closes <= hi_bound)))
+                returned_to_zone = overlap_frac >= OVERLAP_MIN_FRAC
+            else:
+                returned_to_zone = True  # too little older history to judge either way
+            passed = value_stable and returned_to_zone
+        if passed:
+            return _validate_anchor(df, {
+                "idx":         idx_c,
+                "price":       round(float(closes[idx_c]), 8),
+                "anchor_type": "atr_breakout",
+                "confidence":  55,  # above Method 2's flat 50 — stability-validated,
+                                    # not just "most recent transition"
+                "method":      "vp_stability",
+            })
+
+    # ── Fallback: farthest qualifying fractal ≥ 3 ATR (same as
+    # _detect_auction_anchor's Method 3) ──────────────────────────────────────
+    pb = 3
+    current = float(closes[-1])
+    fallback_candidates = []
+    for i in range(lb + pb, n - pb):
+        wh = highs[i - pb: i + pb + 1]
+        if highs[i] == wh.max():
+            d = highs[i] - current
+            if d >= atr_now * 3:
+                fallback_candidates.append((i, d, True))
+        wl = lows[i - pb: i + pb + 1]
+        if lows[i] == wl.min():
+            d = current - lows[i]
+            if d >= atr_now * 3:
+                fallback_candidates.append((i, d, False))
+    if fallback_candidates:
+        best_f = max(fallback_candidates, key=lambda x: x[1])
+        pv = highs[best_f[0]] if best_f[2] else lows[best_f[0]]
+        return _validate_anchor(df, {
+            "idx":         best_f[0],
+            "price":       round(float(pv), 8),
+            "anchor_type": "swing_high" if best_f[2] else "swing_low",
+            "confidence":  30,
+            "method":      "fractal_fallback",
+        })
+
+    return None
+
+
 def _ca_find_structure_start(df, **kwargs):
     """Thin wrapper — returns candle index only. Call _detect_auction_anchor for the full dict."""
     result = _detect_auction_anchor(df, **kwargs)
@@ -5480,7 +6021,13 @@ def _ca_volume_profile(df, start_idx, end_idx, n_bins=24):
             included.add(right); included_vol += bin_volumes[right]; right += 1
         else:
             break
-    return {"poc": poc_price, "vah": bin_edges[max(included) + 1], "val": bin_edges[min(included)]}
+    return {
+        "poc": poc_price,
+        "vah": bin_edges[max(included) + 1],
+        "val": bin_edges[min(included)],
+        "bin_edges": bin_edges.tolist(),
+        "bin_volumes": bin_volumes.tolist(),
+    }
 
 
 def _ca_volume_profile_signals(df, vp, lookback=20):
@@ -5981,7 +6528,7 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zon
         try:
             _df4 = tf_data.get("4h")
             if _df4 is not None and len(_df4) >= 30:
-                _anc4 = _detect_auction_anchor(_df4)
+                _anc4 = _detect_vp_anchor(_df4)
                 if _anc4:
                     vp_4h = _ca_volume_profile(_df4, _anc4["idx"], len(_df4) - 1)
                     if vp_4h:
@@ -5994,7 +6541,7 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zon
         try:
             _df1 = tf_data.get("1h") if tf_data.get("1h") is not None else primary_df
             if _df1 is not None and len(_df1) >= 30:
-                _anc1 = _detect_auction_anchor(_df1)
+                _anc1 = _detect_vp_anchor(_df1)
                 if _anc1:
                     vp_1h = _ca_volume_profile(_df1, _anc1["idx"], len(_df1) - 1)
                     if vp_1h:
@@ -7500,7 +8047,7 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                 _dfv = tf_data.get(_vp_tf)
                 if _dfv is None or len(_dfv) < 30:
                     continue
-                _anc = _detect_auction_anchor(_dfv)
+                _anc = _detect_vp_anchor(_dfv)
                 if not _anc:
                     continue
                 if not _anc.get("active", True):

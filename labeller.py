@@ -42,6 +42,18 @@ _FEE_SIDE   = {"crypto": 0.0005, "forex": 0.00015, "stock": 0.0002}
 _SLIP_SIDE  = {"crypto": 0.0002, "forex": 0.0001,  "stock": 0.0002}
 _FUND_SWING = 0.0006
 
+# Shadow cost can never exceed this, mirroring the real gauntlet's philosophy
+# (risk_gauntlet.py's MAX_COST_R caps real trades at 0.20-0.45R depending on mode/
+# trade_type). Without this cap, _compute_cost_R() divides a fixed round-trip cost
+# by a flat R_MULT x ATR box width, which blows up to 2-3R+ on low-ATR%-relative-
+# to-price instruments (forex swing especially) — a shadow-model artifact, not a
+# real trading cost the real gauntlet would ever have allowed through.
+# NOTE: counterfactual_report.py and weight_proposal.py each keep their own local
+# copy of this same 0.50 value (by design — both stay standalone, no cross-file
+# imports). If this ever changes, update it in all three places or the reports
+# will silently drift out of sync with what labeller.py itself now produces.
+COST_R_CAP = 0.50
+
 
 # ── REASON_MAP (ordered: longest/most-specific first, first match wins) ──────
 # Built against actual dexter scan strings. See scan_pair_tf() in dexter.py.
@@ -258,7 +270,7 @@ def _compute_cost_R(asset_type: str, trade_type: str, r_dist: float, entry_ref: 
     cost_rt = 2 * (_FEE_SIDE.get(asset_type, 0.0005) + _SLIP_SIDE.get(asset_type, 0.0002))
     if trade_type == "swing":
         cost_rt += _FUND_SWING
-    return round(cost_rt / stop_pct, 4)
+    return min(round(cost_rt / stop_pct, 4), COST_R_CAP)
 
 
 def _window(rec: dict) -> tuple:
