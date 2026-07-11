@@ -25,8 +25,19 @@ import risk_gauntlet
 import honest_sim
 import counterfactual_report
 
-flask_app = Flask(__name__, static_folder=None)
-WEBAPP_FOLDER = r"C:\ChevTools\webapp"
+# Path configuration for cross-platform support (Windows C:\ vs Linux ~/ home dir)
+CHEV_TOOLS_ROOT = os.getenv("CHEV_TOOLS_ROOT", r"C:\ChevTools" if os.name == 'nt' else os.path.expanduser("~/ChevTools"))
+
+# Fallback logic: If the expected root doesn't contain the 'webapp' folder, 
+# check if it exists in the directory where this script is located.
+if not os.path.exists(os.path.join(CHEV_TOOLS_ROOT, "webapp")):
+    _local_root = os.path.dirname(os.path.abspath(__file__))
+    if os.path.exists(os.path.join(_local_root, "webapp")):
+        print(f"[INIT] Webapp not found in {CHEV_TOOLS_ROOT}. Falling back to project dir: {_local_root}")
+        CHEV_TOOLS_ROOT = _local_root
+
+WEBAPP_FOLDER = os.path.join(CHEV_TOOLS_ROOT, "webapp")
+flask_app = Flask(__name__, static_folder=WEBAPP_FOLDER, static_url_path='')
 
 # PHASE 9: shared-secret auth for every mutating route. secrets.local is a plain
 # key=value file, never committed (gitignored), created by Kev by hand -- e.g.
@@ -34,7 +45,7 @@ WEBAPP_FOLDER = r"C:\ChevTools\webapp"
 #   GITHUB_TOKEN=<a github personal access token, read by push_dashboard.py>
 # Missing file or missing DASHBOARD_KEY -- never fall back to open access; every
 # @require_key route returns 503 instead.
-SECRETS_FILE = r"C:\ChevTools\secrets.local"
+SECRETS_FILE = os.path.join(CHEV_TOOLS_ROOT, "secrets.local")
 
 def _load_secrets():
     out = {}
@@ -85,11 +96,7 @@ def api_ping():
 
 @flask_app.route("/")
 def serve_index():
-    return send_from_directory(WEBAPP_FOLDER, "index.html")
-
-@flask_app.route("/<path:filename>")
-def serve_static(filename):
-    return send_from_directory(WEBAPP_FOLDER, filename)
+    return flask_app.send_static_file("index.html")
 
 @flask_app.route("/api/trades")
 def api_trades():
@@ -1491,17 +1498,35 @@ def api_analysis_fib_stack():
             try:
                 sym     = clean if atype == "crypto" else symbol
                 df      = fetch_candles(sym, atype, ftf, 300)
-                touches = _an_get_timed_touches(df)
-                impulse = _an_find_last_impulse(touches)
-                if impulse:
-                    ts1, p1, ts2, p2 = impulse
-                    sw_low, sw_high = (p1, p2) if p1 < p2 else (p2, p1)
-                    going_up = p2 > p1
-                    try:
-                        ts_high = int(ts2.timestamp()) if going_up else int(ts1.timestamp())
-                        ts_low  = int(ts1.timestamp()) if going_up else int(ts2.timestamp())
-                    except Exception:
-                        ts_high = ts_low = None
+                # Anchor the fib to the SAME auction structure the Volume Profile
+                # uses (_detect_auction_anchor), so the fib spans the same area as
+                # the VP box: origin = the anchor swing, extended to the opposite
+                # extreme reached since. Falls back to a 150-bar window when no
+                # significant structure is detected.
+                anchor = _detect_auction_anchor(df)
+                if anchor is not None:
+                    a_idx   = anchor["idx"]
+                    a_price = float(anchor["price"])
+                    win     = df.iloc[a_idx:]
+                    a_ts    = int(df.index[a_idx].timestamp())
+                    end_ts  = int(df.index[-1].timestamp())   # right edge of the chart (now)
+                    # First anchor = the auction origin; the second anchor keeps the
+                    # extreme PRICE but is pinned to the end of the graph, so the fib
+                    # spans anchor → now exactly like the Volume Profile box.
+                    if anchor["anchor_type"] == "swing_low":
+                        # move began at a low → impulse up, retracement pulls down
+                        going_up = True
+                        sw_low   = a_price
+                        sw_high  = float(win["high"].max())
+                        ts_low   = a_ts
+                        ts_high  = end_ts
+                    else:
+                        # move began at a high → impulse down
+                        going_up = False
+                        sw_high  = a_price
+                        sw_low   = float(win["low"].min())
+                        ts_high  = a_ts
+                        ts_low   = end_ts
                 else:
                     w = df.tail(150)
                     sw_high, sw_low = float(w["high"].max()), float(w["low"].min())
@@ -1749,6 +1774,7 @@ def api_analysis_engine():
             dexter_lows  = [s for s in (survey.swings or []) if s.kind == "LOW"]
             patterns_out = patterns.run(df, dexter_highs=dexter_highs, dexter_lows=dexter_lows)
         except Exception:
+            import traceback; print("[patterns.run] FAILED:"); traceback.print_exc()
             patterns_out = {"signal": "NEUTRAL", "pattern": "None", "bias": "neutral",
                             "breakout": False, "volume_confirmed": False,
                             "volume_notes": [], "all_patterns": [],
@@ -1919,13 +1945,13 @@ OPENWEBUI_URL     = "http://localhost:3000/api/chat/completions"
 ESCALATION_MODEL_ID = "chev-chelios-clone"  # lean escalation model in Open WebUI — its API id is "chev-chelios-clone" (display name "chev-escalation"); must match the model id registered in Open WebUI
 
 FIREBASE_URL  = "https://chev-monitor-default-rtdb.firebaseio.com"
-JOURNAL_PATH       = r"C:\ChevTools\chev_journal.json"
-JANE_JOURNAL_PATH  = r"C:\ChevTools\jane_journal.json"
-PLAYBOOK_PATH      = r"C:\ChevTools\chev_playbook.txt"            # legacy / generic fallback
+JOURNAL_PATH       = os.path.join(CHEV_TOOLS_ROOT, "chev_journal.json")
+JANE_JOURNAL_PATH  = os.path.join(CHEV_TOOLS_ROOT, "jane_journal.json")
+PLAYBOOK_PATH      = os.path.join(CHEV_TOOLS_ROOT, "chev_playbook.txt")            # legacy / generic fallback
 PLAYBOOK_PATHS     = {
-    "forex":  r"C:\ChevTools\chev_playbook_forex.txt",
-    "crypto": r"C:\ChevTools\chev_playbook_crypto.txt",
-    "stocks": r"C:\ChevTools\chev_playbook_stocks.txt",
+    "forex":  os.path.join(CHEV_TOOLS_ROOT, "chev_playbook_forex.txt"),
+    "crypto": os.path.join(CHEV_TOOLS_ROOT, "chev_playbook_crypto.txt"),
+    "stocks": os.path.join(CHEV_TOOLS_ROOT, "chev_playbook_stocks.txt"),
 }
 MODEL_ID = "chev-chelios"
 
@@ -1946,7 +1972,7 @@ MAX_LEVERAGE_BY_TYPE = {
 }
 
 # Google Sheets connection
-GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
+GOOGLE_CREDENTIALS_FILE = os.path.join(CHEV_TOOLS_ROOT, "google_credentials.json")
 SHEET_ID = "1V1b2aU3SJu_R7VjFKGp9J6uFwucGSamhRWyq6jgCbFs"
 TRADE_LOG_TAB         = "Trade Log"
 JANE_TAB              = "Jane"
@@ -2920,7 +2946,7 @@ _last_escalated: dict  = {}   # symbol → unblock_timestamp; block escalation u
 _ESCALATION_COOLDOWN   = 600   # 10 min cooldown after SKIP or malformed reply
 _POST_COOLDOWN         = 14400 # 4 hour cooldown after a POST (trade is live — don't re-hammer same pair)
 _force_closed_rows: set = set()  # row numbers force-closed by user; price thread skips these
-_CHEV_DECISIONS_LOG = r"C:\ChevTools\chev_decisions.jsonl"  # one JSON-line per Chev decision
+_CHEV_DECISIONS_LOG = os.path.join(CHEV_TOOLS_ROOT, "chev_decisions.jsonl")  # one JSON-line per Chev decision
 _recent_losses: list = []  # rolling store of loss fingerprints for confluence re-entry cooldown
 
 
@@ -10692,7 +10718,7 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
 # recorder trader logic calls for: you journal your trades, this journals your rules.
 # Written ONLY here. Never read by any gate/decision path -- pure observability, so a
 # failure here (disk full, locked file, permissions) must never affect trading logic.
-SYSTEM_STATE_FILE = r"C:\ChevTools\system_state.jsonl"
+SYSTEM_STATE_FILE = os.path.join(CHEV_TOOLS_ROOT, "system_state.jsonl")
 
 
 def snapshot_tunables():
@@ -10797,7 +10823,7 @@ def record_system_state(event, source, changed=None):
 # immediately by a "file" change record showing tunables.json's values being reapplied --
 # that's the system working, not double-toggling.
 # =============================================================================
-TUNABLES_FILE = r"C:\ChevTools\tunables.json"
+TUNABLES_FILE = os.path.join(CHEV_TOOLS_ROOT, "tunables.json")
 
 TUNABLES_BOUNDS = {
     "escalation_thresholds.normal.score.crypto":      (1, 20),

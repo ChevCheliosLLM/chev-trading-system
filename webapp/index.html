@@ -23,7 +23,7 @@
 <link rel="stylesheet" href="css/components/trading-logs.css">
 <link rel="stylesheet" href="css/components/arsenal.css">
 <link rel="stylesheet" href="css/components/chart.css">
-<link rel="stylesheet" href="css/components/chart-popups.css">
+<link rel="stylesheet" href="css/components/chart-popups.css?v=20260710-6">
 <link rel="stylesheet" href="css/components/toasts.css">
 <link rel="stylesheet" href="css/components/intel.css">
 <link rel="stylesheet" href="css/components/hypothesis-tracker.css">
@@ -486,6 +486,17 @@
           <label><input type="checkbox" id="fibCkLevels"> All levels (low opacity)</label>
         </div>
         <div id="ctpRsiBody"></div>
+        <div id="ctpTlBody">
+          <div class="ctpGroupLbl">Lines per side</div>
+          <label><input type="radio" name="tlPerSide" value="1"> 1</label>
+          <label><input type="radio" name="tlPerSide" value="2" checked> 2</label>
+          <label><input type="radio" name="tlPerSide" value="3"> 3</label>
+          <div class="drop-sep"></div>
+          <div class="ctpGroupLbl">Sensitivity</div>
+          <label><input type="radio" name="tlStrict" value="0.4"> Tight — fewer, cleaner</label>
+          <label><input type="radio" name="tlStrict" value="0.6" checked> Normal</label>
+          <label><input type="radio" name="tlStrict" value="0.9"> Loose — more lines</label>
+        </div>
       </div>
       <div id="priceInfo">
         <div><span class="sym" id="symLabel">SOLUSDT</span><span class="price" id="priceLabel">--</span></div>
@@ -785,6 +796,21 @@
             </div>
             <div class="ltbDesc">Divergence</div>
           </div>
+          <div class="layerToolBtn" id="lyrPatCard" title="Chart Patterns — triangles, wedges, H&amp;S, double/triple tops (patterns.py)">
+            <input type="checkbox" class="toolVis" id="lyrPatVis" disabled title="Show/hide (only available once drawn)">
+            <span class="toolDot" style="background:#26c6da"></span>
+            <button class="ltbName" id="lyrPatBtn">PAT</button>
+            <div class="ltbDesc">Chart Patterns</div>
+          </div>
+          <div class="layerToolBtn" id="lyrTlCard" title="Auto Trendlines — support &amp; resistance lines from swing pivots" style="position:relative">
+            <input type="checkbox" class="toolVis" id="lyrTlVis" disabled title="Show/hide (only available once drawn)">
+            <span class="toolDot" style="background:#ff9800"></span>
+            <div class="ltbDrop" style="display:flex;align-items:center;gap:2px">
+              <button class="ltbName" id="lyrTlBtn">TL</button>
+              <span style="font-size:9px;color:#5d6068;cursor:pointer" id="lyrTlArrow" title="Trendline options">▾</span>
+            </div>
+            <div class="ltbDesc">Trendlines</div>
+          </div>
         </div>
       </div>
 
@@ -943,10 +969,10 @@
 <script src="js/ui/jane.js?v=20260709-2"></script>
 <script src="js/charts/indicators.js?v=20260709-2"></script>
 <script src="js/charts/rsi-canvas.js?v=20260709-2"></script>
-<script src="js/ui/chat.js?v=20260709-2"></script>
+<script src="js/ui/chat.js?v=20260710-7"></script>
 <script src="js/charts/timeframe-load.js?v=20260709-2"></script>
 <script src="js/charts/drawing.js?v=20260709-2"></script>
-<script src="js/charts/engine.js?v=20260709-2"></script>
+<script src="js/charts/engine.js?v=20260710-6"></script>
 <script src="js/ui/sparklines.js?v=20260709-2"></script>
 <script src="js/ui/radar.js?v=20260709-2"></script>
 <script src="js/ui/trade-dna.js?v=20260709-2"></script>

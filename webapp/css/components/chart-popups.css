@@ -52,6 +52,16 @@
 #ctpFibBody label:hover { color: #d4af37; }
 #ctpFibBody input[type=checkbox] { accent-color: #d4af37; cursor: pointer; width: 13px; height: 13px; }
 #ctpFibBody .drop-sep { border-top: 1px solid #1e222d; margin: 6px 0; }
+#ctpTlBody { display: none; padding: 8px 10px; }
+#ctpTlBody.shown { display: block; }
+#ctpTlBody label {
+  display: flex; align-items: center; gap: 8px;
+  color: #9598a1; padding: 6px 3px; cursor: pointer; white-space: nowrap; font-size: 12px;
+}
+#ctpTlBody label:hover { color: #ff9800; }
+#ctpTlBody input[type=radio] { accent-color: #ff9800; cursor: pointer; width: 13px; height: 13px; }
+#ctpTlBody .drop-sep { border-top: 1px solid #1e222d; margin: 6px 0; }
+#ctpTlBody .ctpGroupLbl { font-size: 10px; color: #5d6068; text-transform: uppercase; letter-spacing: 0.06em; margin: 2px 0 4px; }
 .objEye, .objDel { background:none; border:none; color:#5d6068; cursor:pointer; padding:2px 4px; font-size:11px; line-height:1; }
 .objEye:hover { color:#d1d4dc; }
 .objDel:hover { color:#f23645; }

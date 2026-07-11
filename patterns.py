@@ -159,7 +159,9 @@ def _vol_contracting(df: pd.DataFrame, start_bar: int) -> bool:
         return False
     x = np.arange(len(seg), dtype=float)
     slope = np.polyfit(x, seg, 1)[0]
-    return slope < 0.0
+    # bool(...) — np.polyfit returns numpy.float64, so `slope < 0.0` is a
+    # numpy.bool_, which Flask's JSON encoder cannot serialize. Cast to native.
+    return bool(slope < 0.0)
 
 
 def _vol_expanding_on_breakout(df: pd.DataFrame,
@@ -222,8 +224,8 @@ class DetectedPattern:
             "bias":         self.bias,
             "category":     self.category,
             "signal":       self.signal,
-            "confidence":   round(self.confidence, 3),
-            "breakout":     self.breakout,
+            "confidence":   round(float(self.confidence), 3),
+            "breakout":     bool(self.breakout),
             "volume_notes": self.volume_notes,
             **self.details,
         }
@@ -613,8 +615,8 @@ def run(
         "pattern":         best.name,
         "bias":            best.bias,
         "category":        best.category,
-        "breakout":        best.breakout,
-        "volume_confirmed": vol_expansion if (breakout_up or breakout_dn) else vol_contraction,
+        "breakout":        bool(best.breakout),
+        "volume_confirmed": bool(vol_expansion if (breakout_up or breakout_dn) else vol_contraction),
         "volume_notes":    list(dict.fromkeys(all_vol_notes)),  # deduplicated
         "all_patterns":    [p.to_dict() for p in all_found],
         "swing_highs":     [int(i) + offset for i in swing_highs],
@@ -623,6 +625,6 @@ def run(
         "pivot_lows":      pivot_lows,
         "upper_trendline": upper_ep,
         "lower_trendline": lower_ep,
-        "breakout_up":     breakout_up,
-        "breakout_dn":     breakout_dn,
+        "breakout_up":     bool(breakout_up),
+        "breakout_dn":     bool(breakout_dn),
     }

@@ -11,6 +11,12 @@
   let _engineOverlayState = {
     swings: true, legs: true, geometry: false, balance: true, hypothesis: false, patterns: false
   };
+  // The ENGINE-tab overlays (swings/legs/balance) default to ON, but they should
+  // only appear once the user actually engages the ENGINE tab ("Run Dexter" →
+  // _applyEngineData). The Arsenal "PAT" tool loads _engineData purely to draw
+  // pattern lines and must NOT drag those default-on overlays onto the chart.
+  // This flag gates them; patterns draw independently of it.
+  let _engineReadoutActive = false;
 
   function _drawEngineOverlays() {
     if (!_engineData) return;
@@ -18,7 +24,7 @@
     dctx.save();
 
     // 1. Balance zone
-    if (_engineOverlayState.balance && d.auction) {
+    if (_engineReadoutActive && _engineOverlayState.balance && d.auction) {
       const y1 = priceToY(d.auction.balance_high);
       const y2 = priceToY(d.auction.balance_low);
       if (y1 != null && y2 != null) {
@@ -46,7 +52,7 @@
     }
 
     // 2. Legs
-    if (_engineOverlayState.legs && d.legs) {
+    if (_engineReadoutActive && _engineOverlayState.legs && d.legs) {
       const recent = d.legs.slice(-10);
       recent.forEach(leg => {
         const x1 = timeToX(leg.start_ts), y1 = priceToY(leg.start_price);
@@ -73,7 +79,7 @@
     }
 
     // 3. Swing dots
-    if (_engineOverlayState.swings && d.swings) {
+    if (_engineReadoutActive && _engineOverlayState.swings && d.swings) {
       d.swings.slice(-20).forEach(sw => {
         const x = timeToX(sw.ts), y = priceToY(sw.price);
         if (x == null || y == null) return;
@@ -115,50 +121,11 @@
         dctx.lineTo(x2, y2);
         dctx.stroke();
         dctx.setLineDash([]);
-
-        // Touch-point dots — use pivot_highs/pivot_lows already in the payload
-        const pivots = isUpper ? (pat.pivot_highs || []) : (pat.pivot_lows || []);
-        pivots.forEach(pv => {
-          const px = timeToX(pv.ts), py = priceToY(pv.price);
-          if (px == null || py == null) return;
-          dctx.fillStyle = baseCol;
-          dctx.globalAlpha = 0.55;
-          dctx.beginPath();
-          dctx.arc(px, py, 3, 0, Math.PI * 2);
-          dctx.fill();
-        });
-
         dctx.restore();
       }
 
       _drawPatternLine(pat.upper_trendline, true);
       _drawPatternLine(pat.lower_trendline, false);
-
-      // Pattern label at top-right of upper line
-      if (pat.pattern && pat.pattern !== 'None' && pat.upper_trendline) {
-        const ep = pat.upper_trendline;
-        const x2 = timeToX(ep.t2), y2 = priceToY(ep.p2);
-        if (x2 != null && y2 != null) {
-          dctx.save();
-          dctx.globalAlpha = 0.90;
-          const bias = pat.bias || 'neutral';
-          const lCol = bias === 'bullish' ? '#089981' : bias === 'bearish' ? '#f23645' : '#d4af37';
-          const conf = Math.round((pat.value || 0) * 100);
-          const txt  = pat.pattern + (conf ? ' ' + conf + '%' : '');
-          const fw = dctx.measureText(txt).width + 10;
-          const fh = 14;
-          const lx = Math.max(4, Math.min(x2 - fw / 2, _dw - fw - 4));
-          const ly = Math.max(fh + 4, y2 - 14);
-          dctx.fillStyle = 'rgba(13,15,27,0.82)';
-          dctx.beginPath();
-          dctx.roundRect(lx, ly - fh + 2, fw, fh, 3);
-          dctx.fill();
-          dctx.font = 'bold 9px Share Tech Mono, monospace';
-          dctx.fillStyle = lCol;
-          dctx.fillText(txt, lx + 5, ly);
-          dctx.restore();
-        }
-      }
     }
 
     dctx.restore();
@@ -483,6 +450,7 @@
   /* ─── Main ENGINE data renderer ─── */
   function _applyEngineData(d, fromCache, cacheTs) {
     _engineData = d;
+    _engineReadoutActive = true;  // ENGINE tab engaged → its overlays may draw
     const readout   = document.getElementById('engineReadout');
     const toggles   = document.getElementById('engineOverlayToggles');
     const cacheNote = document.getElementById('engineCacheNote');
@@ -741,6 +709,120 @@
     chk.addEventListener('change', function() { _engineOverlayState[key] = chk.checked; redrawAll(); });
   });
 
+  /* ============================================================
+     ARSENAL — Chart Patterns tool (patterns.py output)
+     Draws the upper/lower pattern boundary trendlines + pivot
+     touch-points that patterns.py returns in the engine payload under
+     `patterns`. Rather than duplicate the drawing code, this reuses the
+     existing _drawEngineOverlays pattern renderer (section 4) by flipping
+     _engineOverlayState.patterns — so the Arsenal "PAT" card, the ENGINE
+     tab "Patterns" checkbox, and the chart overlay all stay in sync.
+     Data comes from the same /api/analysis/engine endpoint "Run Dexter"
+     uses; if it's already loaded (or cached) for the current symbol+tf we
+     draw instantly, otherwise we fetch it on click.
+     ============================================================ */
+  function _syncPatternCardUI(on, label) {
+    const btn  = document.getElementById('lyrPatBtn');
+    const card = document.getElementById('lyrPatCard');
+    const vis  = document.getElementById('lyrPatVis');
+    const eng  = document.getElementById('engChkPatterns');
+    if (btn)  btn.textContent = label || 'PAT';
+    if (card) card.classList.toggle('active', on);
+    if (vis)  { vis.checked = on; vis.disabled = !on; }
+    if (eng)  eng.checked = on;
+  }
+
+  function _patternCardLabel(pat) {
+    if (!pat) return 'PAT';
+    if (pat.pattern && pat.pattern !== 'None') {
+      const conf = Math.round((pat.value || 0) * 100);
+      return 'PAT ✓' + (conf ? ' ' + conf + '%' : '');
+    }
+    // No named pattern, but the boundary trendlines are still drawable
+    return (pat.upper_trendline || pat.lower_trendline) ? 'PAT ~' : 'PAT';
+  }
+
+  async function drawPatternLines() {
+    const btn = document.getElementById('lyrPatBtn');
+    // Toggle OFF — hide the overlay, keep the data
+    if (_engineOverlayState.patterns) {
+      _engineOverlayState.patterns = false;
+      _syncPatternCardUI(false, 'PAT');
+      redrawAll();
+      return;
+    }
+    if (!currentCandles || !currentCandles.length) {
+      showNotification('No chart', 'Load a chart first', 'error', 'oh-no.png', 4000);
+      return;
+    }
+    // Already have engine data for THIS symbol+tf? Draw instantly.
+    const haveMatch = _engineData && _engineData.patterns &&
+                      _engineData.symbol === currentSymbol && _engineData.tf === currentTf;
+    if (!haveMatch) {
+      // Try the engine cache first, then fetch fresh from the same endpoint.
+      const cached = (typeof _loadEngineCache === 'function') ? _loadEngineCache(currentSymbol, currentTf) : null;
+      if (cached && cached.data && cached.data.patterns &&
+          cached.data.symbol === currentSymbol && cached.data.tf === currentTf) {
+        _engineData = cached.data;
+      } else {
+        btn.textContent = 'PAT…'; btn.disabled = true;
+        try {
+          const r = await _apiFetch('/api/analysis/engine?symbol=' + encodeURIComponent(currentSymbol) + '&tf=' + currentTf);
+          // Read the body even on a non-OK status — the backend puts the real
+          // reason in {"error": ...}, which is far more useful than "Dexter 500".
+          let fresh = null;
+          try { fresh = await r.json(); } catch (_) {}
+          if (!r.ok) throw new Error((fresh && fresh.error) ? fresh.error : ('Dexter ' + r.status + ' — is Dexter running?'));
+          if (!fresh) throw new Error('Dexter returned no data');
+          if (fresh.error) throw new Error(fresh.error);
+          _engineData = fresh;
+          if (typeof _saveEngineCache === 'function') _saveEngineCache(currentSymbol, currentTf, fresh);
+        } catch (e) {
+          _syncPatternCardUI(false, 'PAT');
+          showNotification('Patterns error', e.message, 'error', 'oh-no.png', 6000);
+          return;
+        } finally {
+          btn.disabled = false;
+        }
+      }
+    }
+    const pat = _engineData && _engineData.patterns;
+    if (!pat || (!pat.upper_trendline && !pat.lower_trendline)) {
+      _syncPatternCardUI(false, 'PAT');
+      showNotification('No patterns', 'No chart-pattern structure on ' + currentSymbol + ' ' + (currentTf || '').toUpperCase(), 'info', 'lets-see.png', 5000);
+      return;
+    }
+    _engineOverlayState.patterns = true;
+    _syncPatternCardUI(true, _patternCardLabel(pat));
+    redrawAll();
+    const named = pat.pattern && pat.pattern !== 'None';
+    showNotification('Patterns drawn',
+      named ? (pat.pattern + ' · ' + Math.round((pat.value || 0) * 100) + '% conf')
+            : 'Boundary trendlines drawn — no named pattern',
+      'success', 'ruler.png', 4500);
+  }
+
+  // PAT visibility checkbox — hide/show the overlay without refetching.
+  (function() {
+    const pv = document.getElementById('lyrPatVis');
+    if (pv) pv.addEventListener('change', function() {
+      _engineOverlayState.patterns = pv.checked;
+      const card = document.getElementById('lyrPatCard');
+      if (card) card.classList.toggle('active', pv.checked);
+      const eng = document.getElementById('engChkPatterns');
+      if (eng) eng.checked = pv.checked;
+      redrawAll();
+    });
+    // Reverse sync — toggling the ENGINE-tab "Patterns" checkbox reflects on the card.
+    const eng = document.getElementById('engChkPatterns');
+    if (eng) eng.addEventListener('change', function() {
+      const card = document.getElementById('lyrPatCard');
+      const vis  = document.getElementById('lyrPatVis');
+      if (card) card.classList.toggle('active', eng.checked);
+      if (vis)  { vis.checked = eng.checked; vis.disabled = !eng.checked; }
+    });
+  })();
+
   // Auto-run ENGINE toggle — re-runs Dexter every 5 minutes
   let _engAutoTimer = null;
   const _engAutoChk = document.getElementById('engChkAuto');
@@ -774,6 +856,7 @@
   _wireVisCheckbox('lyrSrVis',  '_sr');
   _wireVisCheckbox('lyrVpVis',  '_vp');
   _wireVisCheckbox('lyrFibVis', '_fib_stack');
+  _wireVisCheckbox('lyrTlVis',  '_tl');
   // RSI is deliberately NOT wired through _wireVisCheckbox — _rsi_div drawings are
   // never persisted (see _clearRsiDivOverlay's comment: saveDrawings() here would
   // fire the Firebase SSE stream, which replaces drawings[] and wipes them). This
@@ -806,6 +889,9 @@
       ['lyrAtrBtn', function() { showATR(); }],
       ['lyrFibBtn', function() { drawFibStack(); }],
       ['lyrRsiBtn', function() { showRSIDiv(); }],
+      ['lyrPatBtn', function() { drawPatternLines(); }],
+      ['lyrTlBtn',  function() { drawTrendlines(); }],
+      ['lyrTlArrow', function(e) { e.stopPropagation(); _ctpShow('tl'); }],
       ['lyrFibArrow', function(e) { e.stopPropagation(); _ctpShow('fib'); }],
       ['lyrRsiArrow', function(e) { e.stopPropagation(); _rsiArrowClick(); }],
     ];

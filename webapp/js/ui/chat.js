@@ -481,6 +481,182 @@
     });
   });
 
+  // ── Trendlines — auto-detect support/resistance trendlines from pivots ──
+  // Self-contained (no backend): finds swing pivots on the visible candles, fits
+  // straight lines through pairs of same-type pivots and keeps CLASSIC trend
+  // lines — descending resistance through a series of lower highs, ascending
+  // support through a series of higher lows — that price respected (never pierced
+  // beyond an ATR-scaled tolerance), then extends each to the latest bar.
+  // Resistance lines (through swing highs) draw red, support lines (lows) green. Pushed as normal
+  // 'trendline' drawings so they're movable / deletable / hide-able like any
+  // hand-drawn trendline, and toggle off by clearing the _tl-tagged drawings.
+  function _computeTrendlines(candles, opts) {
+    opts = opts || {};
+    const N  = Math.min(candles.length, opts.lookback || 260);
+    const cs = candles.slice(-N);
+    if (cs.length < 30) return [];
+    const highs = cs.map(c => c.high), lows = cs.map(c => c.low), times = cs.map(c => c.time);
+    const last  = cs.length - 1;
+
+    // ATR-ish tolerance — mean true range of the last 14 bars
+    let atr = 0, cnt = 0;
+    for (let i = Math.max(1, cs.length - 14); i < cs.length; i++) {
+      atr += Math.max(cs[i].high - cs[i].low,
+                      Math.abs(cs[i].high - cs[i-1].close),
+                      Math.abs(cs[i].low  - cs[i-1].close));
+      cnt++;
+    }
+    atr = cnt ? atr / cnt : (highs[last] * 0.01);
+    const tol = atr * (opts.tolAtr || 0.6);
+
+    // Fractal pivots: strict local extreme within ±k bars
+    const k = opts.pivotK || 3;
+    const pivHi = [], pivLo = [];
+    for (let i = k; i < cs.length - k; i++) {
+      let isHi = true, isLo = true;
+      for (let j = i - k; j <= i + k; j++) {
+        if (j === i) continue;
+        if (highs[j] >= highs[i]) isHi = false;
+        if (lows[j]  <= lows[i])  isLo = false;
+      }
+      if (isHi) pivHi.push(i);
+      if (isLo) pivLo.push(i);
+    }
+
+    // Build & validate candidate lines for one side.
+    //   'res' → line sits ABOVE prices (no high pierces above line + tol)
+    //   'sup' → line sits BELOW prices (no low  pierces below line - tol)
+    function build(pivots, vals, kind) {
+      if (pivots.length < 2) return [];
+      const isRes  = kind === 'res';
+      const recent = pivots.slice(-Math.min(pivots.length, opts.recentB || 6));
+      const cands  = [];
+      recent.forEach(b => {
+        pivots.forEach(a => {
+          if (a >= b || (b - a) < (opts.minSpan || 8)) return;
+          const slope = (vals[b] - vals[a]) / (b - a);
+          // Classic trend line direction: resistance must ride a series of
+          // DESCENDING lower highs, support a series of ASCENDING higher lows.
+          // Require the line to move by at least one tolerance over its span so
+          // it's genuinely trending (flat lines belong to the S/R tool, not here).
+          const rise = slope * (b - a);
+          if (isRes ? (rise > -tol) : (rise < tol)) return;
+          // Reject if any bar between the anchors pierces through the line
+          let ok = true;
+          for (let i = a; i <= b; i++) {
+            const line = vals[a] + slope * (i - a);
+            if (isRes ? (highs[i] > line + tol) : (lows[i] < line - tol)) { ok = false; break; }
+          }
+          if (!ok) return;
+          // Touches: same-side pivots lying within tol of the line
+          let touches = 0;
+          pivots.forEach(pi => {
+            if (Math.abs(vals[pi] - (vals[a] + slope * (pi - a))) <= tol) touches++;
+          });
+          if (touches < 2) return;
+          const projNow = vals[a] + slope * (last - a);
+          const distNow = Math.abs(projNow - vals[last]) / (atr || 1);
+          const score   = touches * 1000 + (b - a) + b * 0.5 - distNow * 20;
+          cands.push({ a, slope, touches, projNow, score, kind });
+        });
+      });
+      cands.sort((x, y) => y.score - x.score);
+      const kept = [];
+      for (const c of cands) {
+        const dup = kept.some(kc =>
+          Math.abs(kc.projNow - c.projNow) < tol * 1.5 &&
+          Math.abs(kc.slope - c.slope) < (atr / cs.length) * 3);
+        if (!dup) kept.push(c);
+        if (kept.length >= (opts.perSide || 2)) break;
+      }
+      return kept.map(c => ({
+        t1: times[c.a], p1: vals[c.a],
+        t2: times[last], p2: vals[c.a] + c.slope * (last - c.a),
+        kind: c.kind, touches: c.touches,
+      }));
+    }
+
+    return [...build(pivHi, highs, 'res'), ...build(pivLo, lows, 'sup')];
+  }
+
+  // Read the current dropdown settings (lines per side + sensitivity).
+  function _tlOpts() {
+    const ps = document.querySelector('input[name="tlPerSide"]:checked');
+    const st = document.querySelector('input[name="tlStrict"]:checked');
+    return {
+      perSide: ps ? parseInt(ps.value, 10) : 2,
+      tolAtr:  st ? parseFloat(st.value) : 0.6,
+    };
+  }
+  function _clearTrendlineDrawings() {
+    for (let i = drawings.length-1; i >= 0; i--) { if (drawings[i]._tl) drawings.splice(i,1); }
+  }
+  function _pushTrendlineDrawings(lines) {
+    lines.forEach(L => drawings.push({
+      type: 'trendline',
+      time1: L.t1, price1: L.p1, time2: L.t2, price2: L.p2,
+      color: L.kind === 'res' ? '#f23645' : '#089981',
+      lineWidth: 1.4, dashed: false, opacity: 0.9,
+      visible: true, _tl: true,
+    }));
+  }
+
+  async function drawTrendlines() {
+    if (!currentCandles.length) return;
+    const btn  = document.getElementById('lyrTlBtn');
+    const card = document.getElementById('lyrTlCard');
+    const vis  = document.getElementById('lyrTlVis');
+    // Toggle off — remove the auto trendlines
+    if (drawings.some(d => d._tl)) {
+      _clearTrendlineDrawings();
+      saveDrawings(); redrawAll(); updateObjTree();
+      btn.textContent = 'TL'; card.classList.remove('active');
+      vis.checked = false; vis.disabled = true;
+      _ctpHide();
+      return;
+    }
+    btn.textContent = 'TL…'; btn.disabled = true;
+    try {
+      const lines = _computeTrendlines(currentCandles, _tlOpts());
+      if (!lines.length) {
+        showNotification('Trendlines', 'No clean trendlines found — try Loose sensitivity (▾)', 'info', 'lets-see.png', 4000);
+        btn.textContent = 'TL'; card.classList.remove('active');
+        vis.checked = false; vis.disabled = true;
+        return;
+      }
+      _pushTrendlineDrawings(lines);
+      saveDrawings(); redrawAll(); updateObjTree();
+      const res = lines.filter(l => l.kind === 'res').length;
+      const sup = lines.length - res;
+      btn.textContent = `TL (${lines.length})`;
+      card.classList.add('active');
+      vis.checked = true; vis.disabled = false;
+      showNotification('Trendlines drawn', `${res} resistance · ${sup} support`, 'success', 'ruler.png', 3500);
+    } catch (e) {
+      showNotification('Trendlines error', e.message, 'error', 'oh-no.png', 5000);
+      btn.textContent = 'TL'; card.classList.remove('active');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Reactive: when the Trendlines dropdown changes, recompute live if lines are
+  // already showing (mirrors the Fib checkbox behavior). If nothing is drawn yet,
+  // the change just sets the preference for the next draw.
+  ['tlPerSide','tlStrict'].forEach(name => {
+    document.querySelectorAll('input[name="' + name + '"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        if (!drawings.some(d => d._tl)) return;   // only live-update when active
+        _clearTrendlineDrawings();
+        const lines = _computeTrendlines(currentCandles, _tlOpts());
+        _pushTrendlineDrawings(lines);
+        saveDrawings(); redrawAll(); updateObjTree();
+        const btn = document.getElementById('lyrTlBtn');
+        if (btn) btn.textContent = lines.length ? 'TL (' + lines.length + ')' : 'TL';
+      });
+    });
+  });
+
   // RSI Divergence — multi-TF scan, visual overlay on price + RSI canvas
   let _rsiDivData = {};   // {tf: [divs]} from last scan
 
@@ -694,9 +870,12 @@
   // off, so you can freely click around the chart while it's showing.
   function _ctpShow(which) {
     const pop = document.getElementById('chartToolPopup');
-    document.getElementById('ctpTitle').textContent = which === 'fib' ? 'Fibonacci' : 'RSI Divergence';
+    const titles = { fib: 'Fibonacci', rsi: 'RSI Divergence', tl: 'Trendlines' };
+    document.getElementById('ctpTitle').textContent = titles[which] || '';
     document.getElementById('ctpFibBody').classList.toggle('shown', which === 'fib');
     document.getElementById('ctpRsiBody').classList.toggle('shown', which === 'rsi');
+    const tlBody = document.getElementById('ctpTlBody');
+    if (tlBody) tlBody.classList.toggle('shown', which === 'tl');
     pop.classList.add('open');
   }
   function _ctpHide() {
