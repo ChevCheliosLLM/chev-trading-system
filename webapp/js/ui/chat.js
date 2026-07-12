@@ -930,12 +930,23 @@
   // were removed 2026-07-05 (dead, permanently-hidden legacy UI; see arsenalToggleBtn
   // below — nothing has re-opened that topbar strip in a long time).
 
-  // Arsenal button → opens LAYERS tab in right intel panel
+  // Arsenal button → true toggle: opens the LAYERS tab in the right intel panel, and
+  // a second click (while already open and showing Layers) closes the panel again.
+  // PHASE 2 bug fix: previously this only ever opened (re-clicking an already-active
+  // Layers tab does nothing), which read as "the drawer won't close." Both branches
+  // below sync #arsenalToggleBtn's own .active state via panel-toggle.js's
+  // _syncArsenalBtnState(), called internally by _toggleChevPanel()/the tab click
+  // handler — so this button can never show a stale open/closed state.
   document.getElementById('arsenalToggleBtn').addEventListener('click', () => {
-    // Close the topbar Arsenal strip if it happens to be open
+    // Close the topbar Arsenal strip if it happens to be open (legacy pre-2026-07-05
+    // UI, permanently collapsed today, its Fib/RSI cards long removed — this is a
+    // harmless no-op safety net, not a live code path).
     document.getElementById('chevArsenal').classList.remove('open');
-    document.getElementById('arsenalToggleBtn').classList.remove('open');
-    // Programmatically click the LAYERS tab — its handler opens the panel and switches panes
+    const btn = document.getElementById('arsenalToggleBtn');
+    if (btn.classList.contains('active')) {
+      window._toggleChevPanel?.();
+      return;
+    }
     const layersTab = document.querySelector('#intelTabBar [data-tab="layers"]');
     if (layersTab) layersTab.click();
   });

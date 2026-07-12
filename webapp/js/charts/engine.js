@@ -662,7 +662,12 @@
     const toggles  = document.getElementById('engineOverlayToggles');
     btn.disabled = true;
     btn.classList.add('running');
-    btn.innerHTML = '<img class="accentIcon" src="emoji/time.png" alt="" style="width:14px;height:14px;margin-right:4px;opacity:0.7;vertical-align:middle">Running...';
+    // PHASE 3: was an emoji/time.png <img> — kept in sync with the button's own
+    // static markup (index.html), which now uses the Lucide sprite. Left as its
+    // own fix (not blanket-applied to every emoji in this file) because the mood/
+    // conviction icons elsewhere in this function are Chev's personality voice,
+    // explicitly out of scope for the icon-set sweep.
+    btn.innerHTML = '<svg class="icon runDexterIcon"><use href="#icon-wrench"/></svg>Running...';
     statusEl.textContent = 'Fetching ' + currentSymbol + ' ' + currentTf.toUpperCase() + '...';
     try {
       const r = await _apiFetch('/api/analysis/engine?symbol=' + encodeURIComponent(currentSymbol) + '&tf=' + currentTf);
@@ -696,7 +701,7 @@
     } finally {
       btn.disabled = false;
       btn.classList.remove('running');
-      btn.innerHTML = '<img class="accentIcon" src="emoji/tools.png" alt="" style="width:16px;height:16px;margin-right:6px;opacity:0.9;vertical-align:middle">Run Dexter';
+      btn.innerHTML = '<svg class="icon runDexterIcon"><use href="#icon-wrench"/></svg>Run Dexter';
     }
   }
 

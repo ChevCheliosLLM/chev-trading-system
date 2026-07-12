@@ -42,7 +42,8 @@
 /* PHASE 12: freshness stamps -- tiny "updated Xs ago" markers observing each panel's own
    last-successful-fetch time; never alters any panel's fetching logic. */
 .freshStamp {
-  font-size: 8px; font-family: 'Share Tech Mono', monospace; color: var(--txt3);
+  /* PHASE 4 Task 3: rem (8px was today's Compact value: 8/16rem). */
+  font-size: 0.5rem; font-family: 'Share Tech Mono', monospace; color: var(--txt3);
   white-space: nowrap; margin-left: 4px; display: inline-block;
 }
 .freshStamp.warn { color: var(--gold); }
@@ -53,14 +54,17 @@
   pointer-events: none;
 }
 #topbar .label {
-  font-size: 8.5px; color: rgba(255,255,255,0.2); text-transform: uppercase;
+  /* PHASE 4 Task 3: rem so topbar text scales with the density setting
+     (8.5px was today's Compact value: 8.5/16rem). */
+  font-size: 0.53125rem; color: rgba(255,255,255,0.2); text-transform: uppercase;
   letter-spacing: 0.12em; margin-right: 2px; margin-left: 8px;
   font-family: 'Share Tech Mono', monospace; font-weight: 400; white-space: nowrap; flex-shrink: 0;
 }
 .pill {
   background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07);
   color: var(--txt2); padding: 4px 9px; border-radius: 3px;
-  font-size: 10px; cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s;
+  /* PHASE 4 Task 3: rem (10px was today's Compact value: 10/16rem). */
+  font-size: 0.625rem; cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s;
   font-family: 'Share Tech Mono', monospace; font-weight: 400;
   letter-spacing: 0.04em; white-space: nowrap;
 }
@@ -68,7 +72,7 @@
 .pill.active { background: rgba(41,98,255,0.18); color: #6e9eff; border-color: rgba(41,98,255,0.45); }
 .pill.chevTools.active { background: rgba(212,175,55,0.15); color: var(--gold); border-color: rgba(212,175,55,0.4); }
 .iconBtn {
-  width: 26px; height: 26px; display: flex; align-items: center;
+  width: var(--btn-h); height: var(--btn-h); display: flex; align-items: center;
   justify-content: center; padding: 0; flex-shrink: 0; border-radius: 3px;
   transition: background 0.12s;
 }
@@ -78,7 +82,13 @@
    Drawings panel was open. Generic on .iconBtn so any icon-only toggle button
    benefits, not just this one. */
 .iconBtn.active { background: rgba(212,175,55,0.15); color: var(--gold); }
-.iconBtn svg { width: 15px; height: 15px; }
+/* PHASE 1 FOUNDATION Task 4: #strategyBtn/#rightToggle used inline-styled <img> emoji
+   at various sizes (#rightToggle's was overridden to 31x31 in toasts.css) while
+   #leftToggle/#cmdPaletteBtn's inline <svg> only picked up the svg half of this rule --
+   all four now resolve to the same --icon-s footprint regardless of tag. */
+.iconBtn svg, .iconBtn img { width: var(--icon-s); height: var(--icon-s); object-fit: contain; }
+.label.flush { margin-left: 0; }
+.tbBtnGroup { display: inline-flex; align-items: center; }
 
 /* ---------- Body layout ---------- */
 #body { flex: 1; display: flex; min-height: 0; position: relative; }

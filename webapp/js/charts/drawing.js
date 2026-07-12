@@ -30,13 +30,38 @@
   let magnetDot    = null;  // {x,y} snap point shown before click
   let overlayDrawings = []; // temporary analysis overlay (not saved)
 
-  // Undo / Copy-Paste
+  // Undo / Redo / Copy-Paste
   const MAX_UNDO = 10;
   let undoStack = [];
+  let redoStack = [];
   let _copiedDrawing = null;
   function pushUndo() {
     undoStack.push(JSON.parse(JSON.stringify(drawings)));
     if (undoStack.length > MAX_UNDO) undoStack.shift();
+    // A genuinely new action invalidates whatever you could previously redo to —
+    // standard undo/redo convention, so redo never resurrects a branch of history
+    // that a fresh edit has already written over.
+    redoStack = [];
+  }
+  // PHASE 2 bug fix: shared by the Ctrl+Z keydown handler AND the command palette's
+  // "Undo" entry, which used to duplicate this logic slightly differently (missing
+  // markDirty(), so a palette-triggered undo didn't repaint the canvas until
+  // something else happened to trigger one). One implementation now, called both ways.
+  function _undoLastAction() {
+    if (!undoStack.length) return;
+    redoStack.push(JSON.parse(JSON.stringify(drawings)));
+    if (redoStack.length > MAX_UNDO) redoStack.shift();
+    drawings = undoStack.pop();
+    saveDrawings(); updateObjTree(); markDirty();
+  }
+  // Bonus (Task 3): Ctrl+Y / Ctrl+Shift+Z. Symmetric with _undoLastAction — pushes
+  // the state being replaced back onto undoStack so a redo can itself be undone.
+  function _redoLastAction() {
+    if (!redoStack.length) return;
+    undoStack.push(JSON.parse(JSON.stringify(drawings)));
+    if (undoStack.length > MAX_UNDO) undoStack.shift();
+    drawings = redoStack.pop();
+    saveDrawings(); updateObjTree(); markDirty();
   }
 
   // Two-click state
@@ -56,6 +81,7 @@
   let dragEndpoint = null;  // null=whole shape, 1=ep1, 2=ep2
   let dragStartRaw = null;
   let dragOrigDraw = null;
+  let _dragPreState = null; // full drawings[] snapshot from the instant the drag started (undo)
   let hoverIndex   = -1;
   let hoverXPos    = null;
   let hoverEP      = null;  // which endpoint is under the cursor (null/1/2)
@@ -904,7 +930,8 @@
       { group:'Tabs', label:'Chat',       sub:'Ask Chev anything',       kbd:'4',   icon:'emoji/call.png',    action:()=>clickTab('chat') },
       { group:'Tabs', label:'Radar',      sub:'Chev\'s read on all symbols', kbd:'5', icon:'',                  action:()=>clickTab('radar') },
       { group:'Tools', label:'Run Engine',sub:'Analyze current chart',   kbd:'R',   icon:'emoji/tools.png',   action:()=>{ closePalette(); runDexterEngine?.(); } },
-      { group:'Tools', label:'Undo',      sub:'Undo last drawing',       kbd:'⌘Z',  icon:'',                  action:()=>{ closePalette(); if(undoStack?.length){drawings=undoStack.pop();saveDrawings?.();updateObjTree?.();} } },
+      { group:'Tools', label:'Undo',      sub:'Undo last drawing',       kbd:'⌘Z',  icon:'',                  action:()=>{ closePalette(); _undoLastAction(); } },
+      { group:'Tools', label:'Redo',      sub:'Redo last undone drawing',kbd:'⌘Y',  icon:'',                  action:()=>{ closePalette(); _redoLastAction(); } },
       { group:'Tools', label:'Clear Drawings', sub:'Remove all drawings',kbd:'',   icon:'',                  action:()=>{ closePalette(); if(confirm('Clear all drawings?')){drawings=[];saveDrawings?.();updateObjTree?.();redrawAll?.();} } },
       { group:'TF', label:'15m',          sub:'Switch to 15 minute',     kbd:'',    icon:'',                  action:()=>{ closePalette(); document.querySelector('[data-tf="15m"]')?.click(); } },
       { group:'TF', label:'1h',           sub:'Switch to 1 hour',        kbd:'',    icon:'',                  action:()=>{ closePalette(); document.querySelector('[data-tf="1h"]')?.click(); } },
@@ -2250,10 +2277,32 @@
       window._openCmdPalette?.();
       return;
     }
-    if (e.key==='Escape'){ window._closeCmdPalette?.(); deactivateTool();hideCtx(); }
-    if ((e.key==='z'||e.key==='Z')&&(e.ctrlKey||e.metaKey)&&!activeTool) {
+    if (e.key==='Escape'){
+      window._closeCmdPalette?.(); window._closeShortcuts?.(); window._closeTradePnlCard?.(); deactivateTool();hideCtx();
+      // PHASE 2 bug fix: Escape also closes the Arsenal/Layers view specifically —
+      // scoped to only when it's the thing currently showing (checked via the
+      // button's own synced .active state, see panel-toggle.js), not a blanket
+      // "Escape always closes the whole right panel" for every tab.
+      if (document.getElementById('arsenalToggleBtn')?.classList.contains('active')) {
+        window._toggleChevPanel?.();
+      }
+    }
+    if ((e.key==='z'||e.key==='Z')&&e.shiftKey&&(e.ctrlKey||e.metaKey)&&!activeTool&&
+        !['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) {
       e.preventDefault();
-      if (undoStack.length) { drawings=undoStack.pop(); saveDrawings(); updateObjTree(); markDirty(); }
+      _redoLastAction();
+      return;
+    }
+    if ((e.key==='z'||e.key==='Z')&&!e.shiftKey&&(e.ctrlKey||e.metaKey)&&!activeTool&&
+        !['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) {
+      e.preventDefault();
+      _undoLastAction();
+      return;
+    }
+    if ((e.key==='y'||e.key==='Y')&&(e.ctrlKey||e.metaKey)&&!activeTool&&
+        !['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) {
+      e.preventDefault();
+      _redoLastAction();
       return;
     }
     if ((e.key==='c'||e.key==='C')&&(e.ctrlKey||e.metaKey)&&!activeTool&&
@@ -2284,7 +2333,17 @@
     }
     if ((e.key==='Delete'||e.key==='Backspace')&&!activeTool&&
         !['INPUT','TEXTAREA'].includes(document.activeElement.tagName)){
-      pushUndo();drawings.pop();saveDrawings();updateObjTree();
+      // PHASE 6 Task 2 bug fix: this used to be drawings.pop() -- always removing
+      // the LAST drawing regardless of what was actually hovered/under the cursor.
+      // hoverIndex is the same hover-based "selection" this codebase already uses
+      // for Ctrl+C (see the copy handler above) -- Delete now matches that same
+      // model instead of deleting something arbitrary and unrelated to the cursor.
+      if (hoverIndex>=0&&drawings[hoverIndex]) {
+        pushUndo();
+        drawings.splice(hoverIndex,1);
+        hoverIndex=-1;hoverXPos=null;
+        saveDrawings();updateObjTree();markDirty();
+      }
     }
     // Number key tab shortcuts (no modifier, no input focused)
     if (!e.ctrlKey && !e.metaKey && !e.altKey &&
@@ -2302,6 +2361,14 @@
         e.preventDefault();
         const qs = document.getElementById('quickSearchInput');
         if (qs) { qs.focus(); qs.select(); }
+        return;
+      }
+      // `?` (Shift+/) — keyboard shortcuts panel. `/` alone already focuses
+      // search (above); e.key reports '?' only when Shift is held on this key,
+      // so the two never fire on the same press.
+      if (e.key === '?') {
+        e.preventDefault();
+        window._openShortcuts?.();
         return;
       }
       // `R` — run Dexter engine (works whenever ENGINE tab is active)
@@ -2487,6 +2554,12 @@
     if ((drawings[idx].type==='vp'||drawings[idx].type==='channel')&&dragEndpoint===null) return; // endpoints only
     if ((drawings[idx].type==='rect'||drawings[idx].type==='measure')&&dragEndpoint===null) return; // corners only — no body drag
     dragMode=true;dragIndex=idx;dragStartRaw=raw;dragOrigDraw=JSON.parse(JSON.stringify(drawings[idx]));
+    // PHASE 2 bug fix: undo must snapshot the state BEFORE the drag mutates it. This
+    // used to be captured in mouseup via pushUndo(), by which point mousemove had
+    // already mutated drawings[dragIndex] in place — so Ctrl+Z after a move just
+    // "restored" the identical already-moved position (a no-op). Stashed here,
+    // pushed onto undoStack in mouseup only if the shape actually changed.
+    _dragPreState=JSON.parse(JSON.stringify(drawings));
     e.stopPropagation();
   });
   window.addEventListener('mousemove',e=>{
@@ -2567,8 +2640,17 @@
       return;
     }
     if (!dragMode) return;
-    pushUndo();saveDrawings();updateObjTree();
-    dragMode=false;dragIndex=-1;dragStartRaw=null;dragOrigDraw=null;dragEndpoint=null;magnetDot=null;
+    // Only a genuine move gets an undo entry (and it's the PRE-drag snapshot stashed
+    // in mousedown, not a fresh one now — the shape has already moved by this point).
+    // A mousedown+mouseup with no actual movement (a plain click landing on a shape)
+    // stays a no-op instead of burning one of the MAX_UNDO slots on nothing.
+    if (_dragPreState && JSON.stringify(drawings[dragIndex]) !== JSON.stringify(dragOrigDraw)) {
+      undoStack.push(_dragPreState);
+      if (undoStack.length > MAX_UNDO) undoStack.shift();
+      redoStack = [];
+    }
+    saveDrawings();updateObjTree();
+    dragMode=false;dragIndex=-1;dragStartRaw=null;dragOrigDraw=null;dragEndpoint=null;magnetDot=null;_dragPreState=null;
   });
 
   /* ---- Right-click: context menu ---- */
@@ -2621,7 +2703,9 @@
     document.getElementById('ctxFontVal').textContent=this.value+'px'; ctxApply('fontSize',parseInt(this.value));
   });
   document.getElementById('ctxDelete').addEventListener('click',()=>{
-    if (ctxTarget>=0){drawings.splice(ctxTarget,1);saveDrawings();updateObjTree();}hideCtx();
+    // PHASE 2 bug fix: this delete path had no pushUndo() at all — deleting a shape
+    // via the right-click context menu was permanent, unlike every other delete path.
+    if (ctxTarget>=0){pushUndo();drawings.splice(ctxTarget,1);saveDrawings();updateObjTree();}hideCtx();
   });
   document.querySelectorAll('#ctxColors .swatch').forEach(sw=>{
     sw.addEventListener('click',()=>{
@@ -2749,7 +2833,9 @@
         drawings[i].visible=drawings[i].visible===false;saveDrawings();redrawAll();updateObjTree();
       }));
       list.querySelectorAll('.objDel').forEach(btn=>btn.addEventListener('click',e=>{
-        e.stopPropagation();drawings.splice(+btn.dataset.i,1);saveDrawings();redrawAll();updateObjTree();
+        // PHASE 2 bug fix: same missing-pushUndo() gap as the context menu's Delete —
+        // the Object Tree's own delete button bypassed undo entirely.
+        e.stopPropagation();pushUndo();drawings.splice(+btn.dataset.i,1);saveDrawings();redrawAll();updateObjTree();
       }));
     }
     // RSI section — only shown when RSI panel is active

@@ -2,6 +2,81 @@
    Layout Shell — page-level structure only.
    Global reset (*), body, #body flex shell, and scrollbar styling.
    ============================================================ */
+/* ===== PHASE 1 FOUNDATION: small generic layout utilities =====
+   Two one-off inline styles (margin-left:auto / flex:1) recurred in unrelated
+   parts of the page with no natural component file of their own -- generic
+   enough to live here, next to the other page-level layout rules. */
+.mlAuto { margin-left: auto; }
+.flexSpacer { flex: 1; }
+.hidden { display: none; }
+/* PHASE 3: base size for every vendored Lucide <svg class="icon"><use .../></svg>
+   instance (see the sprite at the top of <body>). Generic default only — contexts
+   that need a different size already have a more specific rule that wins
+   (.iconBtn svg, .tradeSectionHeader svg, etc.), same override pattern Phase 1
+   established for icon sizing. */
+.icon { width: 14px; height: 14px; flex-shrink: 0; vertical-align: middle; }
+/* Small-icon variant — reused by every compact icon replacement that sits inside
+   a tight space (dropdown chevrons, the drawing-canvas/RSI close buttons, sidebar
+   search icons) instead of one-off inline sizing per instance. */
+.icon.sm { width: 11px; height: 11px; }
+
+/* ============================================================
+   PHASE 3 Task 3: delayed plain-word tooltip (js/ui/tooltip.js).
+   Replaces slow, sentence-long native title="" tooltips with a small,
+   one-line, dark tooltip that appears after a 2s hover delay. Built from
+   Phase 1 tokens (--card-bg/--card-border/--card-radius/--shadow-md) —
+   the same visual language as the quick-search dropdown, not a new look.
+   ============================================================ */
+#chevTooltip {
+  position: fixed; z-index: 9999; display: none;
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius);
+  box-shadow: var(--shadow-md); padding: var(--pad-s) var(--pad-m);
+  font-size: 10.5px; font-family: 'Inter', sans-serif; color: var(--txt1);
+  white-space: nowrap; pointer-events: none;
+}
+#chevTooltip.show { display: block; }
+
+/* ============================================================
+   PHASE 6 Task 1: universal press (:active) + keyboard focus feedback.
+   ONE shared recipe here, not per-component one-offs -- hover itself was
+   mostly already handled per-component (each keeps its own color via its
+   own :hover rule; this doesn't touch those), but nothing anywhere had a
+   press state or a keyboard focus ring before this. filter:brightness (not
+   transform:scale) for the press state, deliberately -- several components
+   already use `transform` on :hover for a lift/pop effect (.ideaCard,
+   .emaDot); brightness never collides with those since it's a different
+   property, so both can be true at once (hovering AND pressing) with no
+   fight over which wins. :where() keeps this at zero specificity so it
+   can never out-rank a more specific existing color rule -- e.g. .active's
+   own background stays exactly as bright/dim as it already is; only the
+   transient press moment darkens on top of whatever's already showing.
+   ============================================================ */
+:where(
+  .pill, .iconBtn, .groupTab, .intelTab, .arsenal-card, .watchRow, .logRow,
+  .layerToolBtn, .layerRow, .radarCard, .ideaCard, .densityOpt, .cmdItem,
+  .qsItem, .stratTab, .stratFilterPill, .hypTrackItem, .ovBtn, .starBtn,
+  .removeBtn, .logDNABtn, .chatListItem, #newChatBtn, #chatSendBtn,
+  #runDexterBtn, #resetBalance, #addRow button, #ctxDelete,
+  #ctxAligns button, #ctxLabelPos button, .swatch, .emaDot, .ideaAskBtn,
+  #stratCloseBtn, #stratModeBadge, #intelCloseBtn, #weightLabRefreshBtn
+):active {
+  filter: brightness(0.88);
+}
+/* Keyboard-only focus ring -- scoped to elements that can already receive
+   Tab focus today (every control listed above is a real <button>/<input>,
+   confirmed by reading index.html). Several other clickable-looking rows
+   (.groupTab, .intelTab, .watchRow, .arsenal-card, .radarCard, .ideaCard,
+   .layerToolBtn, .stratTab, .cmdItem, .qsItem) are plain <div>s with no
+   tabindex -- a mouse click already works on them, but they're not in the
+   Tab order at all today, so a focus ring on them would never actually be
+   reachable by keyboard. Making those genuinely keyboard-operable (tabindex
+   + Enter/Space activation) is a bigger, separate change than "add a focus
+   style" -- flagged in the handoff as a follow-up, not silently skipped. */
+:where(button, input, select, textarea, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
 /* ===== SCROLLBARS ===== */
 ::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -10,8 +85,18 @@
 * { scrollbar-width: thin; scrollbar-color: var(--border2) transparent; }
 
 /* ===== LEFT SIDEBAR ===== */
+/* PHASE 4 Task 1: converted from an absolute-positioned overlay (floated ON TOP of
+   the chart, never actually reflowing anything) to a real flex sibling of #body —
+   confirmed with Kev before making this change (see handoff.txt PHASE 4 entry for
+   the full recon: only watchlist.js's leftToggle handler and this file's own rules
+   referenced the old overlay behavior). Opening/closing now genuinely pushes the
+   new tool rail and the chart over via the same width transition, instead of a
+   JS-driven "reposition these two floating labels" hack. flex-shrink:0 is required
+   — without it, #chartColumn's flex:1 would be free to squeeze this panel's width
+   under pressure. z-index dropped: no longer an overlay, nothing needs to stack
+   above/below it, and #rightPanel (still a genuine overlay) keeps its own z-index. */
 #leftPanel {
-  position: absolute; top: 0; left: 0; height: 100%; z-index: 50;
+  position: relative; height: 100%; flex-shrink: 0;
   width: 0; overflow: hidden;
   background: linear-gradient(180deg, var(--s0) 0%, var(--bg) 100%);
   border-right: 1px solid rgba(255,255,255,0.04);

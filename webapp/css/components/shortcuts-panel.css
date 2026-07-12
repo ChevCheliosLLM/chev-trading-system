@@ -1,0 +1,40 @@
+/* ============================================================
+   PHASE 6 Task 2: keyboard shortcuts panel. Same centered-modal-overlay
+   convention as #cmdPaletteOverlay; reuses .cmdKbd's key-badge look
+   (command-palette.css) rather than inventing a second kbd style.
+   ============================================================ */
+#shortcutsOverlay {
+  position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px); display: none; align-items: flex-start; justify-content: center;
+  padding-top: 14vh;
+}
+#shortcutsOverlay.open { display: flex; }
+#shortcutsPanel {
+  width: 420px; max-width: 92vw; max-height: 70vh; overflow-y: auto;
+  background: linear-gradient(135deg, #13162a 0%, #0d0f1b 100%);
+  border: 1px solid rgba(255,255,255,0.08); border-radius: var(--r-xl);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.04);
+  animation: cmdFadeIn 0.15s ease;
+}
+#shortcutsHeader {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 700; color: var(--txt1);
+  position: sticky; top: 0; background: #13162a;
+}
+#shortcutsCloseBtn {
+  background: none; border: none; color: var(--txt3); cursor: pointer;
+  padding: 2px; display: flex; align-items: center; border-radius: var(--r-xs);
+}
+#shortcutsCloseBtn:hover { color: var(--red); }
+#shortcutsBody { padding: 6px 18px 18px; }
+.shortcutsGroup { margin-top: 16px; }
+.shortcutsGroup:first-child { margin-top: 12px; }
+.shortcutsGroupTitle {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--txt3); font-family: 'Inter', sans-serif; margin-bottom: 6px;
+}
+.shortcutRow {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 6px 0; font-family: 'Inter', sans-serif; font-size: 12px; color: var(--txt2);
+}

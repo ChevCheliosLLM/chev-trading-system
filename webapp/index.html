@@ -8,6 +8,15 @@
      are installed before every subsequent script parses. It never blocks the terminal.
      See js/utils/error-handler.js. Does NOT alter app logic (zero-regression invariant). -->
 <script src="js/utils/error-handler.js?v=20260709-2"></script>
+<!-- PHASE 4 Task 3: apply the saved UI density BEFORE first paint, so the page
+     never flashes at the wrong size then jumps. Brief calls for a data-density
+     attribute "on <body>", but <body> doesn't exist yet while <head> is still
+     parsing -- documentElement (<html>) is the substitution that actually
+     works for this, and is what every rem-based rule (variables.css's
+     :root[data-density=...] blocks, plus the topbar/tab/watchlist/tool-rail
+     font-sizes) targets via :root. Default "comfortable" per the brief --
+     today's sizing becomes roughly Compact. -->
+<script>document.documentElement.setAttribute('data-density', localStorage.getItem('chevDensity') || 'comfortable');</script>
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/twemoji@14.0.2/dist/twemoji.min.js" crossorigin="anonymous"></script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap">
@@ -16,23 +25,133 @@
      Load order is cascade-critical: variables -> layout -> components -> animations.
      All 803 original CSS rules preserved 1:1 (byte-exact, verified). See css/ dir.
      ============================================================ -->
-<link rel="stylesheet" href="css/variables.css">
-<link rel="stylesheet" href="css/layout.css">
-<link rel="stylesheet" href="css/components/topbar.css">
-<link rel="stylesheet" href="css/components/panels.css">
-<link rel="stylesheet" href="css/components/trading-logs.css">
-<link rel="stylesheet" href="css/components/arsenal.css">
-<link rel="stylesheet" href="css/components/chart.css">
-<link rel="stylesheet" href="css/components/chart-popups.css?v=20260710-6">
-<link rel="stylesheet" href="css/components/toasts.css">
-<link rel="stylesheet" href="css/components/intel.css">
-<link rel="stylesheet" href="css/components/hypothesis-tracker.css">
+<link rel="stylesheet" href="css/variables.css?v=20260719-1">
+<link rel="stylesheet" href="css/layout.css?v=20260720-1">
+<link rel="stylesheet" href="css/components/topbar.css?v=20260719-1">
+<link rel="stylesheet" href="css/components/panels.css?v=20260720-1">
+<link rel="stylesheet" href="css/components/tool-rail.css?v=20260719-1">
+<link rel="stylesheet" href="css/components/symbol-header.css?v=20260719-1">
+<link rel="stylesheet" href="css/components/density.css?v=20260719-1">
+<link rel="stylesheet" href="css/components/trading-logs.css?v=20260719-1">
+<link rel="stylesheet" href="css/components/arsenal.css?v=20260716-2">
+<link rel="stylesheet" href="css/components/chart.css?v=20260718-1">
+<link rel="stylesheet" href="css/components/chart-popups.css?v=20260716-2">
+<link rel="stylesheet" href="css/components/trade-pnl-card.css?v=20260720-1">
+<link rel="stylesheet" href="css/components/toasts.css?v=20260720-1">
+<link rel="stylesheet" href="css/components/intel.css?v=20260716-2">
+<link rel="stylesheet" href="css/components/hypothesis-tracker.css?v=20260718-1">
 <link rel="stylesheet" href="css/components/command-palette.css">
-<link rel="stylesheet" href="css/components/strategy.css">
-<link rel="stylesheet" href="css/components/weight-lab.css">
+<link rel="stylesheet" href="css/components/shortcuts-panel.css?v=20260720-1">
+<link rel="stylesheet" href="css/components/strategy.css?v=20260716-2">
+<link rel="stylesheet" href="css/components/weight-lab.css?v=20260716-2">
 <link rel="stylesheet" href="css/animations.css">
 </head>
 <body>
+
+  <!-- ============================================================
+       PHASE 3 Task 1: local Lucide icon sprite (vendored, not CDN-loaded —
+       vendoring means the raw SVG markup lives in this file; nothing at runtime
+       ever fetches lucide.dev or any icon CDN). Source: lucide-static v1.24.0
+       (ISC license — functionally MIT-equivalent permissive terms; the phase
+       brief said "MIT licensed," Lucide's own package.json says ISC, noting the
+       correction here rather than silently calling it MIT). Chosen over a
+       js/ui/icons.js module (the phase's other offered option) because a sprite
+       renders immediately with zero JS dependency or load-order risk — every
+       icon below is just a named <symbol>, referenced elsewhere via
+       <svg class="icon"><use href="#icon-NAME"/></svg>. Edit an icon once here,
+       every use of it updates. stroke="currentColor" throughout so existing
+       color theming (button states, hover, .active, etc.) keeps working
+       unchanged — nothing about how color is applied to icons changed.
+       ============================================================ -->
+  <svg style="display:none" aria-hidden="true">
+    <symbol id="icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 5h16"/><path d="M4 12h16"/><path d="M4 19h16"/>
+    </symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>
+    </symbol>
+    <symbol id="icon-flame" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3q1 4 4 6.5t3 5.5a1 1 0 0 1-14 0 5 5 0 0 1 1-3 1 1 0 0 0 5 0c0-2-1.5-3-1.5-5q0-2 2.5-4"/>
+    </symbol>
+    <symbol id="icon-message-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/>
+    </symbol>
+    <symbol id="icon-magnet" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m12 15 4 4"/><path d="M2.352 10.648a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.029-6.029a1 1 0 1 1 3 3l-6.029 6.029a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.365-6.367A1 1 0 0 0 8.716 4.282z"/><path d="m5 8 4 4"/>
+    </symbol>
+    <symbol id="icon-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/>
+    </symbol>
+    <symbol id="icon-trash-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+    </symbol>
+    <symbol id="icon-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+    </symbol>
+    <symbol id="icon-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m6 9 6 6 6-6"/>
+    </symbol>
+    <symbol id="icon-refresh-cw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>
+    </symbol>
+    <symbol id="icon-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>
+    </symbol>
+    <symbol id="icon-radar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/><path d="M4 6h.01"/><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35"/><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67"/><path d="M12 18h.01"/><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67"/><circle cx="12" cy="12" r="2"/><path d="m13.41 10.59 5.66-5.66"/>
+    </symbol>
+    <symbol id="icon-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>
+    </symbol>
+    <symbol id="icon-check-circle-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>
+    </symbol>
+    <symbol id="icon-bar-chart-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 21v-6"/><path d="M12 21V3"/><path d="M19 21V9"/>
+    </symbol>
+    <symbol id="icon-history" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>
+    </symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 12h14"/><path d="M12 5v14"/>
+    </symbol>
+    <symbol id="icon-wrench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/>
+    </symbol>
+    <symbol id="icon-rotate-ccw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
+    </symbol>
+    <symbol id="icon-ruler" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z"/><path d="m14.5 12.5 2-2"/><path d="m11.5 9.5 2-2"/><path d="m8.5 6.5 2-2"/><path d="m17.5 15.5 2-2"/>
+    </symbol>
+    <symbol id="icon-pencil" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>
+    </symbol>
+    <symbol id="icon-triangle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13.73 4a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+    </symbol>
+    <symbol id="icon-square" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect width="18" height="18" x="3" y="3" rx="2"/>
+    </symbol>
+    <symbol id="icon-minus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 12h14"/>
+    </symbol>
+    <symbol id="icon-arrow-up-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M7 7h10v10"/><path d="M7 17 17 7"/>
+    </symbol>
+    <symbol id="icon-trending-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M16 7h6v6"/><path d="m22 7-8.5 8.5-5-5L2 17"/>
+    </symbol>
+    <symbol id="icon-bar-chart-horizontal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 16h8"/><path d="M7 11h12"/><path d="M7 6h3"/>
+    </symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/>
+    </symbol>
+    <symbol id="icon-keyboard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/>
+    </symbol>
+  </svg>
 
   <!-- Command Palette (Ctrl+K) -->
   <div id="cmdPaletteOverlay">
@@ -43,6 +162,42 @@
         <span>↑↓ navigate</span>
         <span>↵ select</span>
         <span>Esc close</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- PHASE 6 Task 2: keyboard shortcuts panel (? or the topbar keyboard icon).
+       Every shortcut listed here was verified against the actual keydown handlers
+       in drawing.js before being written down -- nothing aspirational, nothing
+       that doesn't really work. -->
+  <div id="shortcutsOverlay">
+    <div id="shortcutsPanel" role="dialog" aria-label="Keyboard Shortcuts">
+      <div id="shortcutsHeader">
+        <span>Keyboard Shortcuts</span>
+        <button id="shortcutsCloseBtn" data-tip="Close"><svg class="icon sm"><use href="#icon-x"/></svg></button>
+      </div>
+      <div id="shortcutsBody">
+        <div class="shortcutsGroup">
+          <div class="shortcutsGroupTitle">Navigation</div>
+          <div class="shortcutRow"><span>Jump to symbol</span><span class="cmdKbd">/</span></div>
+          <div class="shortcutRow"><span>Command palette</span><span class="cmdKbd">Ctrl+K</span></div>
+          <div class="shortcutRow"><span>Trades / Engine / Layers / Chat tabs</span><span class="cmdKbd">1–4</span></div>
+          <div class="shortcutRow"><span>This panel</span><span class="cmdKbd">?</span></div>
+        </div>
+        <div class="shortcutsGroup">
+          <div class="shortcutsGroupTitle">Chart</div>
+          <div class="shortcutRow"><span>Run Dexter (Engine tab only)</span><span class="cmdKbd">R</span></div>
+        </div>
+        <div class="shortcutsGroup">
+          <div class="shortcutsGroupTitle">Drawing</div>
+          <div class="shortcutRow"><span>Undo</span><span class="cmdKbd">Ctrl+Z</span></div>
+          <div class="shortcutRow"><span>Redo</span><span class="cmdKbd">Ctrl+Y</span></div>
+          <div class="shortcutRow"><span>Copy hovered drawing</span><span class="cmdKbd">Ctrl+C</span></div>
+          <div class="shortcutRow"><span>Paste</span><span class="cmdKbd">Ctrl+V</span></div>
+          <div class="shortcutRow"><span>Delete hovered drawing</span><span class="cmdKbd">Delete</span></div>
+          <div class="shortcutRow"><span>Quick-start Measure tool</span><span class="cmdKbd">Shift+Click</span></div>
+          <div class="shortcutRow"><span>Cancel tool / close popup</span><span class="cmdKbd">Esc</span></div>
+        </div>
       </div>
     </div>
   </div>
@@ -80,7 +235,7 @@
                weight_lab_approve items link to the Weight Lab tab's own existing approve
                controls -- no second approval path lives on this card. manual items are
                display-only with their evidence expandable via <details>. -->
-          <div class="stratSectionLabel">🧑‍💻 Elliot's Suggestions <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">— read one card instead of auditing every tool</span><span class="stratLearnIcon" data-learn="elliot_suggestions" title="What is this?">ⓘ</span></div>
+          <div class="stratSectionLabel">🧑‍💻 Elliot's Suggestions <span class="stratSectionSub">— read one card instead of auditing every tool</span><span class="stratLearnIcon" data-learn="elliot_suggestions" title="What is this?">ⓘ</span></div>
           <div id="elliotSuggestionsBody" class="stratShadowSection"></div>
 
           <div class="stratSectionLabel">🩸 Scorecard (all-time, paper)<span class="stratLearnIcon" data-learn="scorecard" title="What is this?">ⓘ</span></div>
@@ -92,9 +247,9 @@
             <div class="stratScoreCard"><div class="k">Net P&L</div><div class="v" id="scTotalPnl">—</div></div>
             <div class="stratScoreCard"><div class="k">Scratches</div><div class="v" id="scScratches">—</div></div>
           </div>
-          <div class="stratSectionLabel">📈 Equity Curve <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">Your paper account balance over time — every closed trade moves this line.</span><span class="stratLearnIcon" data-learn="equity_curve" title="What is this?">ⓘ</span></div>
+          <div class="stratSectionLabel">📈 Equity Curve <span class="stratSectionSub">Your paper account balance over time — every closed trade moves this line.</span><span class="stratLearnIcon" data-learn="equity_curve" title="What is this?">ⓘ</span></div>
           <div id="stratEquityChart"></div>
-          <div class="stratSectionLabel">🗺️ Setup Volume <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">When opportunities show up — which days and hours (UTC) the scanner finds the most setups.</span><span class="stratLearnIcon" data-learn="setup_volume_heatmap" title="What is this?">ⓘ</span></div>
+          <div class="stratSectionLabel">🗺️ Setup Volume <span class="stratSectionSub">When opportunities show up — which days and hours (UTC) the scanner finds the most setups.</span><span class="stratLearnIcon" data-learn="setup_volume_heatmap" title="What is this?">ⓘ</span></div>
           <div id="stratHeatmap"></div>
         </div>
 
@@ -122,7 +277,7 @@
           <div class="stratShadowSection" id="stratShadowSection">
             <div class="stratSectionLabel">🕯️ Shadow Outcomes — hypothetical, costs modelled<span class="stratLearnIcon" data-learn="shadow_outcomes" title="What is this?">ⓘ</span></div>
             <div class="stratShadowCaveat">These are "what-if" numbers from trades we did NOT take. They assume everything went perfectly — treat them as clues for tuning, never as results.</div>
-            <div class="stratScoreRow" style="grid-template-columns: repeat(2, 1fr);">
+            <div class="stratScoreRow cols2">
               <div class="stratScoreCard">
                 <div class="k">🟢 Bullets Dodged (shadow R)</div>
                 <div class="v good" id="stratShadowDodged">—</div>
@@ -138,16 +293,16 @@
 
             <!-- PHASE 7B-3: shadow tag/combo leaderboards — skipped/killed setups only,
                  never merged with or shown in the real Performance pane's leaderboards. -->
-            <div class="stratSectionLabel">🏷️ Shadow Tag Leaderboard <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">— skipped/killed setups only</span><span class="stratLearnIcon" data-learn="shadow_tag_leaderboard" title="What is this?">ⓘ</span></div>
+            <div class="stratSectionLabel">🏷️ Shadow Tag Leaderboard <span class="stratSectionSub">— skipped/killed setups only</span><span class="stratLearnIcon" data-learn="shadow_tag_leaderboard" title="What is this?">ⓘ</span></div>
             <div class="stratShadowCaveat">Skips are ~95% of escalations — a 15–20× multiplier of labeled evidence on which tags precede winning moves. But skipped setups are not a random sample; Chev skipped them for reasons. Evidence Chev may be under-trusting these — leads for review, not verdicts.</div>
             <div id="stratShadowTagBars"></div>
-            <div class="stratSectionLabel">🧬 Shadow Combo Leaderboard <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">— skipped/killed setups only, greyed out below the shadow trust minimum</span><span class="stratLearnIcon" data-learn="shadow_combo_leaderboard" title="What is this?">ⓘ</span></div>
+            <div class="stratSectionLabel">🧬 Shadow Combo Leaderboard <span class="stratSectionSub">— skipped/killed setups only, greyed out below the shadow trust minimum</span><span class="stratLearnIcon" data-learn="shadow_combo_leaderboard" title="What is this?">ⓘ</span></div>
             <div id="stratShadowComboBars"></div>
 
             <!-- PHASE 7B-4: weekly regret trend -- hand-rolled bars (no charting library),
                  matching the page's existing funnel/heatmap convention. Full history, NOT
                  scoped to baseline_ts -- see build_weekly_regret() in counterfactual_report.py. -->
-            <div class="stratSectionLabel">📉 Weekly Regret Trend <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">Missed profits by week — what the trades we skipped would have earned. Falling is good.</span><span class="stratLearnIcon" data-learn="weekly_regret_trend" title="What is this?">ⓘ</span></div>
+            <div class="stratSectionLabel">📉 Weekly Regret Trend <span class="stratSectionSub">Missed profits by week — what the trades we skipped would have earned. Falling is good.</span><span class="stratLearnIcon" data-learn="weekly_regret_trend" title="What is this?">ⓘ</span></div>
             <div class="stratSparkRow" id="stratShadowSpark"></div>
             <div class="stratSparkLabels" id="stratShadowSparkLabels"></div>
           </div>
@@ -159,9 +314,9 @@
           <div class="stratGradeGrid" id="stratGradeGrid"></div>
           <div class="stratSectionLabel">🏆 Confluence Tag Leaderboard (real win rate)<span class="stratLearnIcon" data-learn="tag_leaderboard" title="What is this?">ⓘ</span></div>
           <div id="stratTagBars"></div>
-          <div class="stratSectionLabel">🧬 Confluence Combination Leaderboard <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">— greyed out = not enough closed trades to trust yet</span><span class="stratLearnIcon" data-learn="combo_leaderboard" title="What is this?">ⓘ</span></div>
+          <div class="stratSectionLabel">🧬 Confluence Combination Leaderboard <span class="stratSectionSub">— greyed out = not enough closed trades to trust yet</span><span class="stratLearnIcon" data-learn="combo_leaderboard" title="What is this?">ⓘ</span></div>
           <div id="stratComboBars"></div>
-          <div class="stratSectionLabel">📊 Planned R:R Distribution <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">— Dexter's actual cost-adjusted formula, at entry time</span><span class="stratLearnIcon" data-learn="planned_rr_distribution" title="What is this?">ⓘ</span></div>
+          <div class="stratSectionLabel">📊 Planned R:R Distribution <span class="stratSectionSub">— Dexter's actual cost-adjusted formula, at entry time</span><span class="stratLearnIcon" data-learn="planned_rr_distribution" title="What is this?">ⓘ</span></div>
           <div id="stratRHist"></div>
 
           <!-- PHASE 13: system-over-time charts, annotated with system_state.jsonl events.
@@ -171,11 +326,11 @@
           <div class="stratSectionLabel">📉 System Over Time<span class="stratLearnIcon" data-learn="system_over_time" title="What is this?">ⓘ</span></div>
           <div id="tsEmptyNote" class="stratEmptyState" style="display:none"></div>
           <div id="tsChartsWrap">
-            <div class="stratSectionLabel" style="font-size:10px;opacity:0.75">R:R Pressure — enforced floor, EV-advisory, Chev's proposals (median, min–max band)</div>
+            <div class="stratSectionLabel stratSubCaption">R:R Pressure — enforced floor, EV-advisory, Chev's proposals (median, min–max band)</div>
             <div id="tsRrChart" class="tsChart"></div>
-            <div class="stratSectionLabel" style="font-size:10px;opacity:0.75">Threshold vs Flow — escalation-score threshold, escalations/day, surviving POSTs/day</div>
+            <div class="stratSectionLabel stratSubCaption">Threshold vs Flow — escalation-score threshold, escalations/day, surviving POSTs/day</div>
             <div id="tsFlowChart" class="tsChart"></div>
-            <div class="stratSectionLabel" style="font-size:10px;opacity:0.75">Stop-Distance Reality — median stop_pct (P10–P90 band) vs crypto day-trade cost floor</div>
+            <div class="stratSectionLabel stratSubCaption">Stop-Distance Reality — median stop_pct (P10–P90 band) vs crypto day-trade cost floor</div>
             <div id="tsStopChart" class="tsChart"></div>
           </div>
 
@@ -185,7 +340,7 @@
                (PHASE 18's own new /api/strategy/tag_trends), and Shadow WR (quarantine-
                styled, from the existing counterfactual endpoint). -->
           <div class="stratSectionLabel">🧰 Indicator Scoreboard<span class="stratLearnIcon" data-learn="indicator_scoreboard" title="What is this?">ⓘ</span></div>
-          <div id="stratScoreboardWrap" style="overflow-x:auto">
+          <div id="stratScoreboardWrap">
             <table id="stratScoreboardTable">
               <thead>
                 <tr>
@@ -207,7 +362,7 @@
                check (labeller.py's Examiner has no reasoning-validation logic) -- named
                and worded honestly rather than "Learning Gauge" so it isn't mistaken for
                one. Reuses .stratShadowSection's quarantine treatment for that reason. -->
-          <div class="stratSectionLabel">🪞 Self-Check Rate <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">— Chev grading his own reasoning, not an independent check</span><span class="stratLearnIcon" data-learn="self_check_rate" title="What is this?">ⓘ</span></div>
+          <div class="stratSectionLabel">🪞 Self-Check Rate <span class="stratSectionSub">— Chev grading his own reasoning, not an independent check</span><span class="stratLearnIcon" data-learn="self_check_rate" title="What is this?">ⓘ</span></div>
           <div id="stratValidationKpi" class="stratShadowSection"></div>
         </div>
 
@@ -230,7 +385,7 @@
              background refresh silently wiping that would be its own small bug. -->
         <div class="stratPane" data-spane="weightlab">
           <div class="stratSectionLabel">⚖️ Weight Lab — loop-closer<span class="stratLearnIcon" data-learn="weight_lab" title="What is this?">ⓘ</span>
-            <button id="weightLabRefreshBtn" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:11px;color:var(--txt3);padding:0 4px" title="Refresh">⟳</button>
+            <button id="weightLabRefreshBtn" title="Refresh">⟳</button>
           </div>
           <div id="weightLabBody" class="stratShadowSection"></div>
         </div>
@@ -244,7 +399,7 @@
         <div class="stratPane" data-spane="learn">
           <!-- PHASE 27: Definition / Story Time toggle -- reuses the existing .pill
                component, default Definition, remembered per device via localStorage. -->
-          <div style="display:flex; gap:6px; margin-bottom:16px;">
+          <div class="learnModeToggleRow">
             <button class="pill active" id="learnModeDef" type="button">Definition</button>
             <button class="pill" id="learnModeStory" type="button">📖 Story Time</button>
           </div>
@@ -253,7 +408,7 @@
           <div class="stratSectionLabel">📖 Glossary</div>
           <input id="glossarySearch" type="text" placeholder="Search the glossary…" autocomplete="off" spellcheck="false">
           <div id="stratConceptGlossary"></div>
-          <div class="stratSectionLabel" style="margin-top:18px">Confluence Tags</div>
+          <div class="stratSectionLabel stratSectionSpaced">Confluence Tags</div>
           <div id="stratTagGlossary"></div>
         </div>
 
@@ -264,16 +419,15 @@
   <div id="topbar">
     <!-- ROW 1: identity + timeframe + pinned actions -->
     <div class="tb-row1">
-      <button class="pill iconBtn" id="leftToggle" title="Sidebar">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
-        </svg>
+      <button class="pill iconBtn" id="leftToggle" data-tip="Sidebar">
+        <svg class="icon"><use href="#icon-menu"/></svg>
       </button>
       <span id="chevWordmark">CHEV</span>
       <span id="chevBiasChip"></span>
-      <div id="quickSearchWrap" title="Jump to symbol (press /)">
-        <span id="quickSearchIcon">⌕</span>
+      <div id="quickSearchWrap" data-tip="Jump to symbol">
+        <span id="quickSearchIcon"><svg class="icon"><use href="#icon-search"/></svg></span>
         <input id="quickSearchInput" type="text" placeholder="Go to…" autocomplete="off" spellcheck="false" maxlength="20">
+        <div id="quickSearchDropdown"></div>
       </div>
       <span class="label">Timeframe</span>
       <button class="pill" data-tf="15m">15m</button>
@@ -282,98 +436,44 @@
       <button class="pill" data-tf="4h">4h</button>
       <button class="pill" data-tf="1d">1d</button>
       <div class="tb-row1-spacer"></div>
-      <button class="pill iconBtn" id="strategyBtn" title="Strategy Dashboard" onclick="window._openStrategy?.()">
-        <img src="emoji/fire.png" alt="Strategy" style="width:15px;height:15px"
-             onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
-        <svg style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 3v18h18"/><path d="M18.7 8 12 14.7l-3.5-3.5L3 16.5"/>
-        </svg>
+      <button class="pill iconBtn" id="strategyBtn" data-tip="Strategy" onclick="window._openStrategy?.()">
+        <svg class="icon"><use href="#icon-flame"/></svg>
       </button>
-      <button class="pill iconBtn" id="cmdPaletteBtn" title="Command Palette (Ctrl+K)" onclick="window._openCmdPalette?.()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>
-        </svg>
+      <button class="pill iconBtn" id="cmdPaletteBtn" data-tip="Command palette" onclick="window._openCmdPalette?.()">
+        <svg class="icon"><use href="#icon-search"/></svg>
       </button>
-      <button class="pill iconBtn" id="rightToggle" title="Call Chev">
-        <img class="accentIcon" src="emoji/call.png" alt="Chev"
-             onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
-        <svg style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
-        </svg>
+      <button class="pill iconBtn" id="rightToggle" data-tip="Call Chev">
+        <svg class="icon"><use href="#icon-message-circle"/></svg>
+      </button>
+      <!-- PHASE 4 Task 3: UI density control. js/ui/density.js applies the
+           choice and persists it; see the inline anti-FOUC snippet in <head>
+           for how it's applied before first paint. -->
+      <button class="pill iconBtn" id="densityBtn" data-tip="UI density">
+        <svg class="icon"><use href="#icon-settings"/></svg>
+      </button>
+      <div id="densityPopover">
+        <button class="densityOpt" data-density="compact">Compact</button>
+        <button class="densityOpt" data-density="comfortable">Comfortable</button>
+        <button class="densityOpt" data-density="large">Large</button>
+      </div>
+      <!-- PHASE 6 Task 2: keyboard shortcuts panel. Also opened by pressing ? -->
+      <button class="pill iconBtn" id="shortcutsBtn" data-tip="Shortcuts">
+        <svg class="icon"><use href="#icon-keyboard"/></svg>
       </button>
     </div>
 
-    <!-- ROW 2: indicators + drawing tools (always visible, scrolls only if window is very narrow) -->
+    <!-- ROW 2: indicators only now — drawing tools moved to #toolRail (PHASE 4
+         Task 1). Kept as its own row (not merged into row 1) since indicators +
+         Arsenal is still a full row's worth of content on its own, not the "nearly
+         empty" case the phase brief said to merge. -->
     <div class="tb-row2">
-      <span class="label" style="margin-left:0">Indicators</span>
-      <span style="display:inline-flex;align-items:center"><button class="pill" id="emaMainBtn" title="Toggle all EMAs (13/21/55)">EMA</button><button class="pill" id="emaDropBtn" title="EMA line settings">▾</button></span>
-      <button class="pill" id="indRsiBtn" title="RSI (14)">RSI</button>
-      <button class="pill" id="indBBBtn" title="Bollinger Bands (20,2)">BB</button>
-      <button class="pill" id="indVwapBtn" title="VWAP (resets at midnight UTC)">VWAP</button>
+      <span class="label flush">Indicators</span>
+      <span class="tbBtnGroup"><button class="pill" id="emaMainBtn" data-tip="EMAs">EMA</button><button class="pill" id="emaDropBtn" data-tip="EMA settings"><svg class="icon sm"><use href="#icon-chevron-down"/></svg></button></span>
+      <button class="pill" id="indRsiBtn" data-tip="RSI">RSI</button>
+      <button class="pill" id="indBBBtn" data-tip="Bollinger Bands">BB</button>
+      <button class="pill" id="indVwapBtn" data-tip="VWAP">VWAP</button>
       <div class="drawSep"></div>
-      <span class="label" style="margin-left:0">Draw</span>
-      <button class="pill drawTool iconBtn" data-tool="hline" title="Horizontal Line">
-        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="2"><line x1="1" y1="7" x2="19" y2="7"/></svg>
-      </button>
-      <button class="pill drawTool iconBtn" data-tool="ray" title="Ray">
-        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="2" y1="12" x2="17" y2="3"/><polygon points="17,3 13.5,4.5 16,7.5" fill="currentColor" stroke="none"/></svg>
-      </button>
-      <button class="pill drawTool iconBtn" data-tool="trendline" title="Trendline">
-        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="4" cy="11" r="1.8" fill="currentColor"/><line x1="4" y1="11" x2="16" y2="3"/><circle cx="16" cy="3" r="1.8" fill="currentColor"/></svg>
-      </button>
-      <button class="pill drawTool iconBtn" data-tool="rect" title="Rectangle">
-        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="2" width="16" height="10" rx="1"/></svg>
-      </button>
-      <button class="pill drawTool iconBtn" data-tool="fib" title="Fibonacci">
-        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.2">
-          <line x1="1" y1="1.5" x2="19" y2="1.5"/>
-          <line x1="1" y1="5" x2="19" y2="5" stroke="#5d6068" stroke-dasharray="3,2"/>
-          <rect x="1" y="7" width="18" height="2.5" fill="#d4af37" stroke="none" opacity="0.6"/>
-          <line x1="1" y1="11" x2="19" y2="11" stroke="#5d6068" stroke-dasharray="3,2"/>
-          <line x1="1" y1="13.5" x2="19" y2="13.5"/>
-        </svg>
-      </button>
-      <button class="pill drawTool iconBtn" data-tool="channel" title="Parallel Channel">
-        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="2" y1="10" x2="18" y2="4"/><line x1="2" y1="14" x2="18" y2="8" stroke-dasharray="3,2"/></svg>
-      </button>
-      <button class="pill drawTool iconBtn" data-tool="triangle" title="Triangle Pattern (3 clicks)">
-        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="10,1 1,13 19,13" stroke-linejoin="round"/></svg>
-      </button>
-      <button class="pill drawTool iconBtn" data-tool="vp" title="Volume Profile">
-        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.2">
-          <rect x="10" y="1" width="8" height="2.5" fill="currentColor" opacity="0.9" rx="0.5"/>
-          <rect x="7"  y="4.5" width="11" height="2.5" fill="currentColor" opacity="0.7" rx="0.5"/>
-          <rect x="12" y="8" width="6" height="2.5" fill="currentColor" opacity="0.5" rx="0.5"/>
-          <rect x="14" y="11.5" width="4" height="2" fill="currentColor" opacity="0.35" rx="0.5"/>
-          <line x1="2" y1="1" x2="2" y2="13" stroke-width="1.5"/>
-        </svg>
-      </button>
-      <button class="pill drawTool iconBtn" data-tool="measure" title="Measure">
-        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.5">
-          <rect x="2" y="3" width="16" height="8" rx="1" stroke-dasharray="3,2"/>
-          <line x1="2" y1="7" x2="5" y2="7"/>
-          <line x1="15" y1="7" x2="18" y2="7"/>
-          <line x1="2" y1="3" x2="2" y2="11"/>
-          <line x1="18" y1="3" x2="18" y2="11"/>
-        </svg>
-      </button>
-      <button class="pill drawTool iconBtn" data-tool="pencil" title="Pencil / Marker  (freehand)">
-        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.4">
-          <path d="M4 11 L14 2 L17 5 L7 13 Z" stroke-linejoin="round"/>
-          <path d="M4 11 L2.5 13 L5.5 13 Z" fill="currentColor" opacity="0.65" stroke="none"/>
-          <line x1="4" y1="11" x2="7" y2="13" stroke-width="1"/>
-        </svg>
-      </button>
-      <button id="arsenalToggleBtn" title="Chev's analysis toolkit"><svg style="height:13px;width:auto;vertical-align:middle;margin-right:4px;margin-bottom:1px" viewBox="0 0 44 28" fill="none"><rect x="8" y="7" width="26" height="8" rx="4" fill="currentColor"/><rect x="30" y="9" width="10" height="4" rx="2" fill="currentColor"/><rect x="6" y="7" width="5" height="10" rx="1" fill="currentColor" opacity="0.7"/><circle cx="11" cy="18" r="4" fill="currentColor"/><circle cx="25" cy="18" r="4" fill="currentColor"/><circle cx="11" cy="18" r="1.5" fill="rgba(0,0,0,0.45)"/><circle cx="25" cy="18" r="1.5" fill="rgba(0,0,0,0.45)"/></svg>Chev's Arsenal</button>
-      <button class="pill" id="magnetToggle" title="Magnet">🧲</button>
-      <button class="pill iconBtn" id="objectTreeToggle" title="Objects">
-        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.6">
-          <line x1="6" y1="2.5" x2="19" y2="2.5"/><circle cx="3" cy="2.5" r="1.3" fill="currentColor"/>
-          <line x1="6" y1="7" x2="19" y2="7"/><circle cx="3" cy="7" r="1.3" fill="currentColor"/>
-          <line x1="6" y1="11.5" x2="19" y2="11.5"/><circle cx="3" cy="11.5" r="1.3" fill="currentColor"/>
-        </svg>
-      </button>
-      <button class="pill drawClear" id="clearDrawings" title="Clear all drawings">✕</button>
+      <button id="arsenalToggleBtn" data-tip="Arsenal"><svg class="arsenalToggleIcon" viewBox="0 0 44 28" fill="none"><rect x="8" y="7" width="26" height="8" rx="4" fill="currentColor"/><rect x="30" y="9" width="10" height="4" rx="2" fill="currentColor"/><rect x="6" y="7" width="5" height="10" rx="1" fill="currentColor" opacity="0.7"/><circle cx="11" cy="18" r="4" fill="currentColor"/><circle cx="25" cy="18" r="4" fill="currentColor"/><circle cx="11" cy="18" r="1.5" fill="rgba(0,0,0,0.45)"/><circle cx="25" cy="18" r="1.5" fill="rgba(0,0,0,0.45)"/></svg>Chev's Arsenal</button>
     </div>
   </div>
 
@@ -382,7 +482,7 @@
     <div class="arsenal-inner">
       <div class="arsenal-brand">
         <img src="arsenal.png" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"
-             style="height:20px;width:auto;opacity:0.75;flex-shrink:0" alt="Arsenal">
+             class="arsenal-brand-logo" alt="Arsenal">
         <svg style="display:none;height:20px;width:auto;flex-shrink:0" viewBox="0 0 44 28" fill="none">
           <rect x="8" y="7" width="26" height="8" rx="4" fill="#EF0107"/>
           <rect x="30" y="9" width="10" height="4" rx="2" fill="#EF0107"/>
@@ -393,7 +493,7 @@
           <circle cx="25" cy="18" r="1.5" fill="#9B1C1C"/>
         </svg>
         <div class="arsenal-brand-title">CHEV'S ARSENAL</div>
-        <div style="width:1px;height:12px;background:rgba(212,175,55,0.2);margin:0 2px;flex-shrink:0"></div>
+        <div class="arsenal-brand-sep"></div>
         <div class="arsenal-brand-sub">Call the tools. Then decide.</div>
       </div>
       <div class="arsenal-tools">
@@ -454,12 +554,12 @@
     <!-- LEFT SIDEBAR -->
     <div id="leftPanel">
       <div id="leftInner">
-        <div class="sectionHeader sidebarToggle" onclick="toggleSidebar('watchlist')" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
-          <span>Watchlist</span><span class="freshStamp" id="freshWatchlist"></span><span id="watchlistArrow" style="font-size:9px;opacity:0.5">▼</span>
+        <div class="sectionHeader sidebarToggle" onclick="toggleSidebar('watchlist')">
+          <span>Watchlist</span><span class="freshStamp" id="freshWatchlist"></span><span id="watchlistArrow"><svg class="icon sm"><use href="#icon-chevron-down"/></svg></span>
         </div>
         <div id="watchlistGroup">
           <div id="watchlistSearchWrap">
-            <span id="watchlistSearchIcon">⌕</span>
+            <span id="watchlistSearchIcon"><svg class="icon sm"><use href="#icon-search"/></svg></span>
             <input id="watchlistSearch" type="text" placeholder="Search symbol…" autocomplete="off" spellcheck="false">
           </div>
           <div id="groupTabs">
@@ -474,8 +574,78 @@
       </div>
     </div>
 
+    <!-- PHASE 4 Task 1: vertical tool rail — drawing tools relocated here out of
+         topbar .tb-row2. A flex sibling between #leftPanel and #chartColumn (not
+         position:fixed), so it never overlaps the chart and reflows naturally when
+         the sidebar opens/closes. Every button below keeps its original id/class/
+         data-tool/data-tip verbatim — no JS changes needed, click handlers in
+         drawing.js already select by id/class/dataset, not DOM position. -->
+    <div id="toolRail">
+      <button class="pill drawTool iconBtn" data-tool="hline" data-tip="H-Line">
+        <svg class="icon"><use href="#icon-minus"/></svg>
+      </button>
+      <button class="pill drawTool iconBtn" data-tool="ray" data-tip="Ray">
+        <svg class="icon"><use href="#icon-arrow-up-right"/></svg>
+      </button>
+      <button class="pill drawTool iconBtn" data-tool="trendline" data-tip="Trendline">
+        <svg class="icon"><use href="#icon-trending-up"/></svg>
+      </button>
+      <button class="pill drawTool iconBtn" data-tool="rect" data-tip="Rectangle">
+        <svg class="icon"><use href="#icon-square"/></svg>
+      </button>
+      <button class="pill drawTool iconBtn" data-tool="fib" data-tip="Fibonacci">
+        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.2">
+          <line x1="1" y1="1.5" x2="19" y2="1.5"/>
+          <line x1="1" y1="5" x2="19" y2="5" stroke="#5d6068" stroke-dasharray="3,2"/>
+          <rect x="1" y="7" width="18" height="2.5" fill="#d4af37" stroke="none" opacity="0.6"/>
+          <line x1="1" y1="11" x2="19" y2="11" stroke="#5d6068" stroke-dasharray="3,2"/>
+          <line x1="1" y1="13.5" x2="19" y2="13.5"/>
+        </svg>
+      </button>
+      <button class="pill drawTool iconBtn" data-tool="channel" data-tip="Channel">
+        <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="2" y1="10" x2="18" y2="4"/><line x1="2" y1="14" x2="18" y2="8" stroke-dasharray="3,2"/></svg>
+      </button>
+      <button class="pill drawTool iconBtn" data-tool="triangle" data-tip="Triangle">
+        <svg class="icon"><use href="#icon-triangle"/></svg>
+      </button>
+      <button class="pill drawTool iconBtn" data-tool="vp" data-tip="Vol Profile">
+        <svg class="icon"><use href="#icon-bar-chart-horizontal"/></svg>
+      </button>
+      <button class="pill drawTool iconBtn" data-tool="measure" data-tip="Measure">
+        <svg class="icon"><use href="#icon-ruler"/></svg>
+      </button>
+      <button class="pill drawTool iconBtn" data-tool="pencil" data-tip="Pencil">
+        <svg class="icon"><use href="#icon-pencil"/></svg>
+      </button>
+      <div class="toolRailSep"></div>
+      <button class="pill iconBtn" id="magnetToggle" data-tip="Magnet">
+        <svg class="icon"><use href="#icon-magnet"/></svg>
+      </button>
+      <button class="pill iconBtn" id="objectTreeToggle" data-tip="Objects">
+        <svg class="icon"><use href="#icon-list"/></svg>
+      </button>
+      <button class="pill drawClear iconBtn" id="clearDrawings" data-tip="Clear drawings">
+        <svg class="icon"><use href="#icon-trash-2"/></svg>
+      </button>
+    </div>
+
     <!-- CENTER CHART -->
     <div id="chartColumn">
+    <!-- PHASE 4 Task 2: symbol header strip — symbol, live price, 24h change,
+         small muted 24h high/low/volume stats. Populated by js/ui/symbol-header.js,
+         which hooks the existing chart-data and watchlist-ticker call sites (no
+         new backend endpoints, no Python touched). -->
+    <div id="symbolHeader">
+      <span id="symHeaderName"></span>
+      <span id="symHeaderPrice"></span>
+      <span id="symHeaderChangePct"></span>
+      <span id="symHeaderChangeAbs"></span>
+      <span class="symHeaderStats">
+        <span class="symHeaderStat">24h H <b id="symHeaderHigh">—</b></span>
+        <span class="symHeaderStat">24h L <b id="symHeaderLow">—</b></span>
+        <span class="symHeaderStat">24h Vol <b id="symHeaderVol">—</b></span>
+      </span>
+    </div>
     <!-- Position strip: shown when an idea or trade is selected -->
     <div id="chevActiveIdeaBanner"></div>
     <div id="chartWrap">
@@ -485,8 +655,8 @@
       <div id="toastContainer"></div>
       <!-- Trade overlay toggles — shown when a trade row is active -->
       <div id="tradeOverlayBar" style="display:none">
-        <button id="btnOverlayEntry" class="ovBtn" title="Show entry candle">Entry</button>
-        <button id="btnOverlayAnalysis" class="ovBtn ovAnalysisToggle" title="Toggle analysis on/off">Analysis</button><button id="btnOverlayAnalysisArrow" class="ovBtn ovAnalysisArrow" title="Layer options">▾</button>
+        <button id="btnOverlayEntry" class="ovBtn" data-tip="Entry candle">Entry</button>
+        <button id="btnOverlayAnalysis" class="ovBtn ovAnalysisToggle" data-tip="Analysis">Analysis</button><button id="btnOverlayAnalysisArrow" class="ovBtn ovAnalysisArrow" data-tip="Layers"><svg class="icon sm"><use href="#icon-chevron-down"/></svg></button>
       </div>
       <div id="overlayAnalysisPanel" style="display:none">
         <label id="ovLabelSR"  class="ovCheck"><input type="checkbox" id="ovChkSR"  checked> S/R Levels</label>
@@ -497,11 +667,11 @@
         <label id="ovLabelBB"   class="ovCheck" style="display:none"><input type="checkbox" id="ovChkBB">   BB (20,2)</label>
         <label id="ovLabelVwap" class="ovCheck" style="display:none"><input type="checkbox" id="ovChkVwap"> VWAP</label>
         <label id="ovLabelMTF"  class="ovCheck" style="display:none"><input type="checkbox" id="ovChkMTF" checked> MTF Structure</label>
-        <div id="ovTagBadges" style="display:flex;flex-wrap:wrap;gap:3px;padding:4px 0 0"></div>
+        <div id="ovTagBadges"></div>
       </div>
       <!-- Object tree panel -->
       <div id="objectTree">
-        <div class="objHeader">Drawings<span class="objClose" id="objClose">✕</span></div>
+        <div class="objHeader">Drawings<span class="objClose" id="objClose"><svg class="icon sm"><use href="#icon-x"/></svg></span></div>
         <div id="objectList"></div>
         <div id="rsiObjSection" style="display:none">
           <div class="objSectionLabel">RSI Lines</div>
@@ -513,7 +683,7 @@
            clipped by the window edge. Stays open until the X is pressed or the tool
            itself is toggled off — does not auto-close on outside clicks. -->
       <div id="chartToolPopup">
-        <div class="ctpHeader"><span id="ctpTitle">Fibonacci</span><span class="ctpClose" id="ctpClose" title="Close">✕</span></div>
+        <div class="ctpHeader"><span id="ctpTitle">Fibonacci</span><span class="ctpClose" id="ctpClose" data-tip="Close"><svg class="icon sm"><use href="#icon-x"/></svg></span></div>
         <div id="ctpFibBody">
           <label><input type="checkbox" id="fibCk15m"> 15m</label>
           <label><input type="checkbox" id="fibCk1h" checked> 1h</label>
@@ -539,6 +709,19 @@
           <label><input type="radio" name="tlStrict" value="0.9"> Loose — more lines</label>
         </div>
       </div>
+      <!-- PHASE 6 Task 3: click a live trade's entry line to show this. Read-only --
+           no close/modify controls ever go here, only a look at the numbers. -->
+      <div id="tradePnlCard">
+        <div id="tpcHeader">
+          <span id="tpcDirection"></span>
+          <span id="tpcSymbol"></span>
+          <button id="tpcCloseBtn" data-tip="Close"><svg class="icon sm"><use href="#icon-x"/></svg></button>
+        </div>
+        <div class="tpcRow"><span>Entry</span><span id="tpcEntry">—</span></div>
+        <div class="tpcRow"><span>P&amp;L</span><span id="tpcPnl">—</span></div>
+        <div class="tpcRow"><span>Stop distance</span><span id="tpcStopDist">—</span></div>
+        <div class="tpcRow"><span>Target distance</span><span id="tpcTpDist">—</span></div>
+      </div>
       <div id="priceInfo">
         <div><span class="sym" id="symLabel">SOLUSDT</span><span class="price" id="priceLabel">--</span></div>
         <div id="ohlcInfo"></div>
@@ -549,9 +732,9 @@
     </div>
     <!-- RSI sub-panel -->
     <div id="rsiPanelWrap" style="display:none">
-      <div id="rsiResizeBar" title="Drag to resize RSI panel"></div>
+      <div id="rsiResizeBar" data-tip="Resize"></div>
       <div id="rsiLabel">RSI (14)</div>
-      <button id="rsiCloseBtn" title="Close RSI">✕</button>
+      <button id="rsiCloseBtn" data-tip="Close"><svg class="icon sm"><use href="#icon-x"/></svg></button>
       <canvas id="rsiDrawCanvas"></canvas>
       <div id="rsiChart"></div>
     </div>
@@ -561,14 +744,14 @@
     <!-- RIGHT INTEL PANEL — 4 tabs -->
     <div id="rightPanel">
       <!-- Tab bar -->
-      <div id="intelHeader" style="display:flex;flex-direction:column;flex-shrink:0">
+      <div id="intelHeader">
         <div id="intelTabBar">
-          <div class="intelTab active" data-tab="trades"><img class="accentIcon" src="emoji/fire.png" alt="" style="width:12px;height:12px;margin-right:3px;opacity:0.7">Trades</div>
-          <div class="intelTab" data-tab="engine"><img class="accentIcon" src="emoji/tools.png" alt="" style="width:12px;height:12px;margin-right:3px;opacity:0.7">Engine</div>
-          <div class="intelTab" data-tab="layers"><svg style="height:10px;width:auto;margin-right:3px;vertical-align:middle;opacity:0.8" viewBox="0 0 44 28" fill="none"><rect x="8" y="7" width="26" height="8" rx="4" fill="currentColor"/><rect x="30" y="9" width="10" height="4" rx="2" fill="currentColor"/><rect x="6" y="7" width="5" height="10" rx="1" fill="currentColor" opacity="0.7"/><circle cx="11" cy="18" r="4" fill="currentColor"/><circle cx="25" cy="18" r="4" fill="currentColor"/><circle cx="11" cy="18" r="1.5" fill="rgba(0,0,0,0.45)"/><circle cx="25" cy="18" r="1.5" fill="rgba(0,0,0,0.45)"/></svg>Arsenal</div>
-          <div class="intelTab" data-tab="chat"><img class="accentIcon" src="emoji/call.png" alt="" style="width:12px;height:12px;margin-right:3px;opacity:0.7">Chat</div>
-          <div class="intelTab" data-tab="radar" title="Chev's read on every watched symbol">⚡ Radar</div>
-          <button id="intelCloseBtn" title="Close panel">✕</button>
+          <div class="intelTab active" data-tab="trades"><svg class="icon intelTabIcon"><use href="#icon-flame"/></svg>Trades</div>
+          <div class="intelTab" data-tab="engine"><svg class="icon intelTabIcon"><use href="#icon-wrench"/></svg>Engine</div>
+          <div class="intelTab" data-tab="layers"><svg viewBox="0 0 44 28" fill="none"><rect x="8" y="7" width="26" height="8" rx="4" fill="currentColor"/><rect x="30" y="9" width="10" height="4" rx="2" fill="currentColor"/><rect x="6" y="7" width="5" height="10" rx="1" fill="currentColor" opacity="0.7"/><circle cx="11" cy="18" r="4" fill="currentColor"/><circle cx="25" cy="18" r="4" fill="currentColor"/><circle cx="11" cy="18" r="1.5" fill="rgba(0,0,0,0.45)"/><circle cx="25" cy="18" r="1.5" fill="rgba(0,0,0,0.45)"/></svg>Arsenal</div>
+          <div class="intelTab" data-tab="chat"><svg class="icon intelTabIcon"><use href="#icon-message-circle"/></svg>Chat</div>
+          <div class="intelTab" data-tab="radar" data-tip="Symbol scan"><svg class="icon intelTabIcon"><use href="#icon-zap"/></svg>Radar</div>
+          <button id="intelCloseBtn" data-tip="Close panel"><svg class="icon sm"><use href="#icon-x"/></svg></button>
         </div>
       </div>
 
@@ -596,8 +779,8 @@
             <div class="tsbLabel">Open</div>
             <div class="tsbValue" id="tsbOpenCount">0</div>
           </div>
-          <div style="margin-left:auto">
-            <button id="resetBalance" title="Reset Dexter's paper balance to $10,000 and clear all trades" style="background:rgba(242,54,69,0.06);border:1px solid rgba(242,54,69,0.2);color:var(--red);padding:3px 8px;border-radius:var(--r-pill);cursor:pointer;font-size:9px;font-family:'Inter',sans-serif;display:inline-flex;align-items:center;gap:3px;transition:all 0.15s"><img class="accentIcon" src="emoji/wrench.png" alt="" style="width:12px;height:12px;opacity:0.8">Reset</button>
+          <div class="mlAuto">
+            <button id="resetBalance" data-tip="Reset balance"><svg class="icon"><use href="#icon-rotate-ccw"/></svg>Reset</button>
           </div>
         </div>
 
@@ -614,33 +797,33 @@
 
         <!-- PIPELINE: ON RADAR (pending ideas) -->
         <div class="tradeSectionHeader" id="hdrOnRadar">
-          <img class="accentIcon" src="emoji/chilling.png" alt="" style="width:14px;height:14px;opacity:0.9">
+          <svg class="icon"><use href="#icon-radar"/></svg>
           On Radar
           <span class="sectionBadge" id="radarBadge" style="display:none">0</span>
-          <span style="margin-left:auto;font-size:8px;color:var(--txt3);font-family:'Inter',sans-serif">Chev's pending setups</span>
+          <span class="tsHeaderNote">Chev's pending setups</span>
         </div>
         <div id="chevsCorner">
-          <div id="chevIdeas"><div class="emptyNote chev"><img src="emoji/lets-see.png" style="width:16px;height:16px;vertical-align:middle;margin-right:6px;opacity:0.6">No setups on radar. Chev's watching.</div></div>
+          <div id="chevIdeas"><div class="emptyNote chev"><img src="emoji/lets-see.png" alt="">No setups on radar. Chev's watching.</div></div>
         </div>
 
         <!-- PIPELINE: LIVE (open positions) -->
         <div class="tradeSectionHeader" id="hdrLive">
-          <img class="accentIcon" src="emoji/fire.png" alt="" style="width:14px;height:14px;opacity:0.9">
+          <svg class="icon"><use href="#icon-flame"/></svg>
           Live
           <span class="sectionBadge" id="chevOpenBadge" style="display:none">0</span>
         </div>
-        <div id="tradingLogs"><div class="emptyNote chev"><img src="emoji/time.png" style="width:16px;height:16px;vertical-align:middle;margin-right:6px;opacity:0.6">Waiting on Dexter…</div></div>
+        <div id="tradingLogs"><div class="emptyNote chev"><img src="emoji/time.png" alt="">Waiting on Dexter…</div></div>
 
         <!-- PIPELINE: CLOSED -->
         <div class="tradeSectionHeader" id="hdrClosed">
-          <img class="accentIcon" src="emoji/ruler.png" alt="" style="width:14px;height:14px;opacity:0.9">
+          <svg class="icon"><use href="#icon-check-circle-2"/></svg>
           Closed
         </div>
-        <div id="closedTrades"><div class="emptyNote chev"><img src="emoji/not-bad-1.png" style="width:16px;height:16px;vertical-align:middle;margin-right:6px;opacity:0.6">No closed trades yet. Still hunting.</div></div>
+        <div id="closedTrades"><div class="emptyNote chev"><img src="emoji/not-bad-1.png" alt="">No closed trades yet. Still hunting.</div></div>
 
         <!-- PERFORMANCE DEEP DIVE -->
         <div class="tradeSectionHeader" id="hdrPerf" style="display:none">
-          <img class="accentIcon" src="emoji/not-bad-2.png" alt="" style="width:14px;height:14px;opacity:0.9">
+          <svg class="icon"><use href="#icon-bar-chart-2"/></svg>
           Performance
         </div>
         <div id="perfSection" style="display:none">
@@ -671,19 +854,19 @@
             <div class="regimeRow" id="regimeRowBull">
               <span class="regimeLabel bull">◆ Bull</span>
               <div class="regimeBar"><div class="regimeBarFill bull" id="regimeBarBull" style="width:0%"></div></div>
-              <span class="regimeWR" id="regimeWRBull" style="color:var(--green)">—</span>
+              <span class="regimeWR bull" id="regimeWRBull">—</span>
               <span class="regimeCnt" id="regimeCntBull">0T</span>
             </div>
             <div class="regimeRow" id="regimeRowBear">
               <span class="regimeLabel bear">◆ Bear</span>
               <div class="regimeBar"><div class="regimeBarFill bear" id="regimeBarBear" style="width:0%"></div></div>
-              <span class="regimeWR" id="regimeWRBear" style="color:var(--red)">—</span>
+              <span class="regimeWR bear" id="regimeWRBear">—</span>
               <span class="regimeCnt" id="regimeCntBear">0T</span>
             </div>
             <div class="regimeRow" id="regimeRowRange">
               <span class="regimeLabel range">◆ Range</span>
               <div class="regimeBar"><div class="regimeBarFill range" id="regimeBarRange" style="width:0%"></div></div>
-              <span class="regimeWR" id="regimeWRRange" style="color:var(--gold)">—</span>
+              <span class="regimeWR range" id="regimeWRRange">—</span>
               <span class="regimeCnt" id="regimeCntRange">0T</span>
             </div>
           </div>
@@ -692,13 +875,13 @@
 
         <!-- Jane section -->
         <div class="tradeSectionHeader">
-          <img class="accentIcon" src="emoji/hope.png" alt="" style="width:14px;height:14px;opacity:0.9">
-          Jane Open <span class="sectionBadge" id="janeOpenBadge" style="display:none"></span>
-          <span id="janeBalanceLabel" style="font-size:9px;color:var(--gold);font-family:monospace;opacity:0.8;margin-left:6px"></span>
+          <svg class="icon"><use href="#icon-activity"/></svg>
+          Jane Open <span class="sectionBadge hidden" id="janeOpenBadge"></span>
+          <span id="janeBalanceLabel"></span>
           <span class="freshStamp" id="freshTradeMonitor"></span>
         </div>
         <div id="janeTradesEl"><div class="emptyNote chev">Jane's quiet. No live positions.</div></div>
-        <div class="tradeSectionHeader"><img class="accentIcon" src="emoji/lifeline.png" alt="" style="width:14px;height:14px;opacity:0.9">Jane Closed</div>
+        <div class="tradeSectionHeader"><svg class="icon"><use href="#icon-check-circle-2"/></svg>Jane Closed</div>
         <div id="janeCornerEl"></div>
 
       </div>
@@ -706,29 +889,29 @@
       <!-- ENGINE pane -->
       <div class="intelPane" data-pane="engine" id="enginePane">
         <!-- Context bar: symbol + TF -->
-        <div style="display:flex;align-items:center;gap:8px;padding:8px 14px 7px;border-bottom:1px solid rgba(255,255,255,0.05);flex-shrink:0;background:var(--s0)">
-          <img src="emoji/tools.png" alt="" style="width:14px;height:14px;opacity:0.8">
-          <span style="font-family:'Inter',sans-serif;font-size:13px;color:var(--gold);font-weight:700;letter-spacing:0.04em" id="engineContextSym">—</span>
-          <span style="color:var(--border2)">·</span>
-          <span style="font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--txt2)" id="engineContextTf">—</span>
-          <span style="margin-left:auto;font-family:'Inter',sans-serif;font-size:8px;color:var(--txt3)" id="engineLastRun"></span>
+        <div class="engineContextBar">
+          <svg class="icon"><use href="#icon-wrench"/></svg>
+          <span id="engineContextSym">—</span>
+          <span class="engineContextSep">·</span>
+          <span id="engineContextTf">—</span>
+          <span id="engineLastRun"></span>
         </div>
         <div id="engineCacheNote"></div>
 
         <!-- Run button + auto toggle -->
-        <div style="display:flex;gap:8px;align-items:center;padding:10px 12px 4px;flex-shrink:0">
-          <button id="runDexterBtn" style="flex:1" title="Run full Dexter engine analysis on current chart">
-            <img class="accentIcon" src="emoji/tools.png" alt="" style="width:15px;height:15px;margin-right:6px;opacity:0.9;vertical-align:middle">Run Dexter
+        <div class="engineRunRow">
+          <button id="runDexterBtn" data-tip="Run Dexter">
+            <svg class="icon runDexterIcon"><use href="#icon-wrench"/></svg>Run Dexter
           </button>
           <label id="engAutoLabel"><input type="checkbox" id="engChkAuto"> Auto 5m</label>
         </div>
 
-        <div id="engineStatus" style="font-size:10px;font-family:'Inter',sans-serif;text-align:center;padding:3px 12px 6px;display:flex;align-items:center;justify-content:center;gap:6px;color:var(--txt3);flex-shrink:0">
-          <img src="emoji/lets-see.png" alt="" style="width:13px;height:13px;opacity:0.5">Load a chart and press <b style="color:var(--txt2)">R</b> to run Dexter.
+        <div id="engineStatus">
+          <img src="emoji/lets-see.png" alt="">Load a chart and press <b>R</b> to run Dexter.
         </div>
 
         <!-- Overlay toggles -->
-        <div id="engineOverlayToggles" style="padding:6px 12px">
+        <div id="engineOverlayToggles">
           <label class="engChk"><input type="checkbox" id="engChkSwings" checked> Swings</label>
           <label class="engChk"><input type="checkbox" id="engChkLegs" checked> Legs</label>
           <label class="engChk"><input type="checkbox" id="engChkGeometry"> Geometry</label>
@@ -741,11 +924,11 @@
         <div id="engineReadout"></div>
 
         <!-- Hypothesis History -->
-        <div id="hypHistorySection" style="display:none;flex-shrink:0;border-top:1px solid rgba(255,255,255,0.05);padding:0">
-          <div style="display:flex;align-items:center;gap:8px;padding:8px 14px 6px;font-size:9px;font-family:'Inter',sans-serif;font-weight:700;color:var(--txt3);text-transform:uppercase;letter-spacing:0.12em">
-            <img src="emoji/time.png" alt="" style="width:12px;height:12px;opacity:0.7">
+        <div id="hypHistorySection" style="display:none">
+          <div class="hypHistoryHeader">
+            <svg class="icon"><use href="#icon-history"/></svg>
             Hypothesis History
-            <button id="clearHypHistory" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:9px;color:var(--txt3);font-family:'Inter',sans-serif;padding:0" title="Clear history">clear</button>
+            <button id="clearHypHistory" data-tip="Clear history">clear</button>
           </div>
           <div id="hypTracker"></div>
         </div>
@@ -754,15 +937,15 @@
       <!-- RADAR pane -->
       <div class="intelPane" data-pane="radar" id="radarPane">
         <div class="radarHeader">
-          <div class="radarHeaderTitle">⚡ Chev's Radar</div>
+          <div class="radarHeaderTitle"><svg class="icon sm"><use href="#icon-zap"/></svg> Chev's Radar</div>
           <div class="radarHeaderSub">Run Dexter on every symbol you're watching</div>
         </div>
         <div class="radarScanRow">
           <button id="radarScanBtn">
-            <img src="emoji/tools.png" alt="" style="width:13px;height:13px;margin-right:5px;opacity:0.85;vertical-align:middle">Scan All
+            <svg class="icon"><use href="#icon-wrench"/></svg>Scan All
           </button>
           <span id="radarProgress"></span>
-          <select id="radarTf" class="radarTfSelect" title="Timeframe for scan">
+          <select id="radarTf" class="radarTfSelect" data-tip="Timeframe">
             <option value="15m">15m</option>
             <option value="1h" selected>1H</option>
             <option value="4h">4H</option>
@@ -778,7 +961,7 @@
       <div class="intelPane" data-pane="layers" id="layersPane">
         <div class="layersBrand">
           <img src="arsenal.png" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"
-               style="height:26px;width:auto;opacity:0.85" alt="Arsenal">
+               class="layersBrand-logo" alt="Arsenal">
           <svg style="display:none;height:26px;width:auto" viewBox="0 0 44 28" fill="none">
             <rect x="8" y="7" width="26" height="8" rx="4" fill="#EF0107"/>
             <rect x="30" y="9" width="10" height="4" rx="2" fill="#EF0107"/>
@@ -790,7 +973,7 @@
           </svg>
           <div>
             <div class="layersBrandTitle">CHEV'S ARSENAL</div>
-            <div class="layersBrandSub"><img class="accentIcon" src="emoji/tools.png" alt="" style="width:10px;height:10px;margin-right:2px;opacity:0.7">Call the tools. Then decide.</div>
+            <div class="layersBrandSub"><svg class="icon"><use href="#icon-wrench"/></svg>Call the tools. Then decide.</div>
           </div>
         </div>
 
@@ -801,55 +984,55 @@
              (same semantics the old list's checkboxes had, just per-row instead
              of in a separate list). Same button ids as before, same click behavior. -->
         <div class="layersToolGrid">
-          <div class="layerToolBtn" id="lyrSrCard" title="Multi-TF Support & Resistance">
-            <input type="checkbox" class="toolVis" id="lyrSrVis" disabled title="Show/hide (only available once drawn)">
-            <span class="toolDot" style="background:#f23645"></span>
+          <div class="layerToolBtn" id="lyrSrCard" data-tip="Auto S/R">
+            <input type="checkbox" class="toolVis" id="lyrSrVis" disabled data-tip="Show/hide">
+            <span class="toolDot"></span>
             <button class="ltbName" id="lyrSrBtn">S/R</button>
             <div class="ltbDesc">Multi-TF S&amp;R</div>
           </div>
-          <div class="layerToolBtn" id="lyrVpCard" title="Volume Profile">
-            <input type="checkbox" class="toolVis" id="lyrVpVis" disabled title="Show/hide (only available once drawn)">
-            <span class="toolDot" style="background:#2962ff"></span>
+          <div class="layerToolBtn" id="lyrVpCard" data-tip="Vol Profile">
+            <input type="checkbox" class="toolVis" id="lyrVpVis" disabled data-tip="Show/hide">
+            <span class="toolDot"></span>
             <button class="ltbName" id="lyrVpBtn">VP</button>
             <div class="ltbDesc" id="lyrVpDesc">POC · VAH · VAL</div>
-            <label id="lyrVpAutoLabel" title="Auto-refresh anchor + range every 5 min"><input type="checkbox" id="lyrVpAuto"> live</label>
+            <label id="lyrVpAutoLabel" data-tip="Auto-refresh"><input type="checkbox" id="lyrVpAuto"> live</label>
           </div>
-          <div class="layerToolBtn" id="lyrAtrCard" title="ATR volatility">
-            <input type="checkbox" class="toolVis" id="lyrAtrVis" title="Show/hide the ATR readout">
-            <span class="toolDot" style="background:#9598a1"></span>
+          <div class="layerToolBtn" id="lyrAtrCard" data-tip="ATR">
+            <input type="checkbox" class="toolVis" id="lyrAtrVis" data-tip="Show/hide">
+            <span class="toolDot"></span>
             <button class="ltbName" id="lyrAtrBtn">ATR</button>
             <div class="ltbDesc">Volatility · Stop</div>
           </div>
-          <div class="layerToolBtn" id="lyrFibCard" title="Multi-TF Golden Pocket" style="position:relative">
-            <input type="checkbox" class="toolVis" id="lyrFibVis" disabled title="Show/hide (only available once drawn)">
-            <span class="toolDot" style="background:#d4af37"></span>
-            <div class="ltbDrop" style="display:flex;align-items:center;gap:2px">
+          <div class="layerToolBtn hasDropdown" id="lyrFibCard" data-tip="Golden Pocket">
+            <input type="checkbox" class="toolVis" id="lyrFibVis" disabled data-tip="Show/hide">
+            <span class="toolDot"></span>
+            <div class="ltbDrop">
               <button class="ltbName" id="lyrFibBtn">Fib</button>
-              <span style="font-size:9px;color:#5d6068;cursor:pointer" id="lyrFibArrow" title="TF options">▾</span>
+              <span class="ltbArrow" id="lyrFibArrow" data-tip="TF options"><svg class="icon sm"><use href="#icon-chevron-down"/></svg></span>
             </div>
             <div class="ltbDesc">Golden Pocket</div>
           </div>
-          <div class="layerToolBtn" id="lyrRsiCard" title="RSI Divergence" style="position:relative">
-            <input type="checkbox" class="toolVis" id="lyrRsiVis" disabled title="Show/hide (only available once drawn)">
-            <span class="toolDot" style="background:#9b59b6"></span>
-            <div class="ltbDrop" style="display:flex;align-items:center;gap:2px">
+          <div class="layerToolBtn hasDropdown" id="lyrRsiCard" data-tip="RSI Divergence">
+            <input type="checkbox" class="toolVis" id="lyrRsiVis" disabled data-tip="Show/hide">
+            <span class="toolDot"></span>
+            <div class="ltbDrop">
               <button class="ltbName" id="lyrRsiBtn">RSI÷</button>
-              <span style="font-size:9px;color:#5d6068;cursor:pointer" id="lyrRsiArrow" title="TF options">▾</span>
+              <span class="ltbArrow" id="lyrRsiArrow" data-tip="TF options"><svg class="icon sm"><use href="#icon-chevron-down"/></svg></span>
             </div>
             <div class="ltbDesc">Divergence</div>
           </div>
-          <div class="layerToolBtn" id="lyrPatCard" title="Chart Patterns — triangles, wedges, H&amp;S, double/triple tops (patterns.py)">
-            <input type="checkbox" class="toolVis" id="lyrPatVis" disabled title="Show/hide (only available once drawn)">
-            <span class="toolDot" style="background:#26c6da"></span>
+          <div class="layerToolBtn" id="lyrPatCard" data-tip="Patterns">
+            <input type="checkbox" class="toolVis" id="lyrPatVis" disabled data-tip="Show/hide">
+            <span class="toolDot"></span>
             <button class="ltbName" id="lyrPatBtn">PAT</button>
             <div class="ltbDesc">Chart Patterns</div>
           </div>
-          <div class="layerToolBtn" id="lyrTlCard" title="Auto Trendlines — support &amp; resistance lines from swing pivots" style="position:relative">
-            <input type="checkbox" class="toolVis" id="lyrTlVis" disabled title="Show/hide (only available once drawn)">
-            <span class="toolDot" style="background:#ff9800"></span>
-            <div class="ltbDrop" style="display:flex;align-items:center;gap:2px">
+          <div class="layerToolBtn hasDropdown" id="lyrTlCard" data-tip="Trendlines">
+            <input type="checkbox" class="toolVis" id="lyrTlVis" disabled data-tip="Show/hide">
+            <span class="toolDot"></span>
+            <div class="ltbDrop">
               <button class="ltbName" id="lyrTlBtn">TL</button>
-              <span style="font-size:9px;color:#5d6068;cursor:pointer" id="lyrTlArrow" title="Trendline options">▾</span>
+              <span class="ltbArrow" id="lyrTlArrow" data-tip="TL options"><svg class="icon sm"><use href="#icon-chevron-down"/></svg></span>
             </div>
             <div class="ltbDesc">Trendlines</div>
           </div>
@@ -859,22 +1042,19 @@
       <!-- CHAT pane -->
       <div class="intelPane" data-pane="chat" id="chatPane">
         <div id="chatList">
-          <div id="newChatBtn" title="New chat">+</div>
+          <div id="newChatBtn" data-tip="New chat"><svg class="icon sm"><use href="#icon-plus"/></svg></div>
           <div id="chatListItems"></div>
         </div>
         <div id="chatMain">
           <div id="chatHeader">
-            <button id="chatHistoryToggle" class="pill iconBtn" title="Conversations">
-              <svg viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.6">
-                <line x1="1" y1="2.5" x2="19" y2="2.5"/><line x1="1" y1="7" x2="13" y2="7"/>
-                <line x1="1" y1="11.5" x2="16" y2="11.5"/>
-              </svg>
+            <button id="chatHistoryToggle" class="pill iconBtn" data-tip="Conversations">
+              <svg class="icon"><use href="#icon-history"/></svg>
             </button>
-            <div style="display:flex;flex-direction:column;gap:1px">
-              <span style="font-family:'Rajdhani',sans-serif;font-weight:700;font-size:13px;color:#d4af37;letter-spacing:0.08em">CHEV CHELIOS</span>
-              <span style="font-size:8px;color:#3a3d4d;font-family:'Share Tech Mono',monospace;letter-spacing:0.06em">TRADING AI · ALWAYS WATCHING</span>
+            <div class="chatHeaderTitleStack">
+              <span class="chatBrandTitle">CHEV CHELIOS</span>
+              <span class="chatBrandSub">TRADING AI · ALWAYS WATCHING</span>
             </div>
-            <span id="chatContextLine" style="margin-left:auto;font-size:9px;color:#2a2e3a;font-family:'Share Tech Mono',monospace"></span>
+            <span id="chatContextLine"></span>
           </div>
           <div id="chatMessages"></div>
           <div id="chatInputRow">
@@ -892,7 +1072,7 @@
     <span id="sbDexterLabel">Dexter offline</span>
     <span class="sbSep"></span>
     <span class="sbKbHint">1–4 tabs · / search · R run engine</span>
-    <span style="flex:1"></span>
+    <span class="flexSpacer"></span>
     <span id="sbBtcPrice"></span>
     <span class="sbSep"></span>
     <span id="sbTime">--:--:--</span>
@@ -901,17 +1081,17 @@
 <!-- EMA period dropdown (fixed, positioned by JS) -->
 <div id="emaDropdown">
   <div class="emaRow" data-slot="0">
-    <span class="emaDot" style="background:#00bcd4" title="Toggle EMA"></span>
+    <span class="emaDot" data-tip="Toggle EMA"></span>
     <span class="emaRowLabel">EMA</span>
     <input class="emaPeriodInput" type="number" value="13" min="1" max="999">
   </div>
   <div class="emaRow" data-slot="1">
-    <span class="emaDot" style="background:#ff9800" title="Toggle EMA"></span>
+    <span class="emaDot" data-tip="Toggle EMA"></span>
     <span class="emaRowLabel">EMA</span>
     <input class="emaPeriodInput" type="number" value="21" min="1" max="999">
   </div>
   <div class="emaRow" data-slot="2">
-    <span class="emaDot" style="background:#e040fb" title="Toggle EMA"></span>
+    <span class="emaDot" data-tip="Toggle EMA"></span>
     <span class="emaRowLabel">EMA</span>
     <input class="emaPeriodInput" type="number" value="55" min="1" max="999">
   </div>
@@ -927,14 +1107,14 @@
   <div class="ctxRow">
     <label>Color</label>
     <div id="ctxColors">
-      <div class="swatch" data-color="#f0b429" style="background:#f0b429"></div>
-      <div class="swatch" data-color="#2962ff" style="background:#2962ff"></div>
-      <div class="swatch" data-color="#089981" style="background:#089981"></div>
-      <div class="swatch" data-color="#f23645" style="background:#f23645"></div>
-      <div class="swatch" data-color="#9598a1" style="background:#9598a1"></div>
-      <div class="swatch" data-color="#a78bfa" style="background:#a78bfa"></div>
-      <div class="swatch" data-color="#d4af37" style="background:#d4af37"></div>
-      <div class="swatch" data-color="#ffffff" style="background:#ffffff"></div>
+      <div class="swatch" data-color="#f0b429"></div>
+      <div class="swatch" data-color="#2962ff"></div>
+      <div class="swatch" data-color="#089981"></div>
+      <div class="swatch" data-color="#f23645"></div>
+      <div class="swatch" data-color="#9598a1"></div>
+      <div class="swatch" data-color="#a78bfa"></div>
+      <div class="swatch" data-color="#d4af37"></div>
+      <div class="swatch" data-color="#ffffff"></div>
     </div>
   </div>
   <div class="ctxRow">
@@ -978,13 +1158,13 @@
       <button data-pos="bottom-right">BR</button>
     </div>
   </div>
-  <div class="ctxRow" style="flex-direction:column;align-items:stretch;gap:4px;">
-    <label style="margin-bottom:2px;">Templates</label>
-    <div style="display:flex;gap:4px;">
-      <input type="text" id="ctxTplName" placeholder="Template name..." style="flex:1;background:#0c0e15;border:1px solid #2a2e39;color:#d1d4dc;padding:3px 6px;border-radius:3px;font-size:10px;font-family:inherit;outline:none;">
-      <button id="ctxTplSave" style="background:#1e222d;border:1px solid #2a2e39;color:#787b86;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:10px;font-family:inherit;white-space:nowrap;">Save</button>
+  <div class="ctxRow ctxRowStack">
+    <label class="ctxTplLabel">Templates</label>
+    <div class="ctxTplRow">
+      <input type="text" id="ctxTplName" placeholder="Template name...">
+      <button id="ctxTplSave">Save</button>
     </div>
-    <div id="ctxTplList" style="display:flex;flex-wrap:wrap;gap:3px;min-height:12px;"></div>
+    <div id="ctxTplList"></div>
   </div>
   <button id="ctxDelete">Delete drawing</button>
   </div>
@@ -1002,23 +1182,28 @@
      Verified: concatenated files == original script byte-for-byte; no forward
      const/let references cross files (zero cross-file TDZ hazard).
      ============================================================ -->
-<script src="js/ui/panel-toggle.js?v=20260713-1"></script>
+<script src="js/ui/panel-toggle.js?v=20260717-1"></script>
 <script src="js/config/state.js?v=20260709-2"></script>
-<script src="js/charts/chart-core.js?v=20260709-2"></script>
-<script src="js/ui/watchlist.js?v=20260709-2"></script>
-<script src="js/ui/trading-logs.js?v=20260709-2"></script>
+<script src="js/charts/chart-core.js?v=20260720-1"></script>
+<script src="js/ui/watchlist.js?v=20260719-1"></script>
+<script src="js/ui/symbol-header.js?v=20260719-1"></script>
+<script src="js/ui/trading-logs.js?v=20260720-1"></script>
 <script src="js/ui/chev-corner.js?v=20260709-2"></script>
 <script src="js/ui/jane.js?v=20260709-2"></script>
 <script src="js/charts/indicators.js?v=20260709-2"></script>
 <script src="js/charts/rsi-canvas.js?v=20260709-2"></script>
-<script src="js/ui/chat.js?v=20260710-7"></script>
+<script src="js/ui/chat.js?v=20260717-1"></script>
 <script src="js/charts/timeframe-load.js?v=20260709-2"></script>
-<script src="js/charts/drawing.js?v=20260716-1"></script>
-<script src="js/charts/engine.js?v=20260710-6"></script>
+<script src="js/charts/drawing.js?v=20260720-1"></script>
+<script src="js/charts/engine.js?v=20260718-1"></script>
 <script src="js/ui/weight-lab.js?v=20260713-1"></script>
 <script src="js/ui/sparklines.js?v=20260709-2"></script>
 <script src="js/ui/radar.js?v=20260709-2"></script>
 <script src="js/ui/trade-dna.js?v=20260709-2"></script>
 <script src="js/ui/status-bar.js?v=20260709-2"></script>
+<script src="js/ui/density.js?v=20260719-1"></script>
+<script src="js/ui/shortcuts-panel.js?v=20260720-1"></script>
+<script src="js/ui/trade-pnl-card.js?v=20260720-1"></script>
+<script src="js/ui/tooltip.js?v=20260718-1"></script>
 </body>
 </html>

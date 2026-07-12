@@ -57,8 +57,9 @@
 
 /* Scorecard strip */
 .stratScoreRow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 18px; }
+.stratScoreRow.cols2 { grid-template-columns: repeat(2, 1fr); }
 .stratScoreCard {
-  background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius);
   padding: 12px 14px;
 }
 .stratScoreCard .k { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--txt2); font-family: 'Inter', sans-serif; }
@@ -72,6 +73,15 @@
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
 }
 .stratSectionLabel:first-child { margin-top: 0; }
+/* PHASE 1 FOUNDATION: the small trailing annotation after a section title (9 identical
+   inline occurrences -- Elliot's Suggestions/Equity Curve/Setup Volume/Shadow Tag+Combo/
+   Weekly Regret/Combo Leaderboard/Planned R:R/Self-Check Rate) and the extra top margin
+   the Confluence Tags glossary heading needed on its own (not first-child, so the
+   :first-child reset above doesn't apply to it). */
+.stratSectionSub {
+  font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--txt3); font-size: 10px;
+}
+.stratSectionSpaced { margin-top: 18px; }
 
 /* PHASE 21: Learn tab. The old Learning Mode toggle is gone -- (i) icons are always
    visible everywhere and deep-link into the Learn pane instead of popping a tooltip.
@@ -87,6 +97,7 @@
 }
 .stratLearnIcon:hover { background: rgba(155,89,182,0.3); }
 
+.learnModeToggleRow { display: flex; gap: 6px; margin-bottom: 16px; }
 #stratLearnSections { margin-bottom: 22px; }
 .learnEntry { padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04); scroll-margin-top: 12px; }
 .learnEntry:last-child { border-bottom: none; }
@@ -110,8 +121,8 @@
 #stratFeedFilters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .stratFeedCard {
   display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; margin-bottom: 6px;
-  background: var(--s1); border: 1px solid var(--border); border-left: 3px solid var(--border2);
-  border-radius: var(--r-sm); font-family: 'Inter', sans-serif; position: relative; overflow: hidden;
+  background: var(--card-bg); border: 1px solid var(--card-border); border-left: 3px solid var(--border2);
+  border-radius: var(--card-radius); font-family: 'Inter', sans-serif; position: relative; overflow: hidden;
 }
 .stratFeedCard.isSkip {
   border-left-color: var(--red);
@@ -187,7 +198,7 @@
 
 /* Grade / R-multiple mini bars */
 .stratGradeGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px,1fr)); gap: 10px; }
-.stratGradeCard { background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 12px; text-align: center; }
+.stratGradeCard { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius); padding: 10px 12px; text-align: center; }
 .stratGradeCard .g { font-size: 11px; color: var(--txt2); font-family: 'Inter', sans-serif; }
 .stratGradeCard .wr { font-size: 18px; font-weight: 700; font-family: 'Share Tech Mono', monospace; margin-top: 2px; }
 .stratGradeCard .n  { font-size: 9.5px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; }
@@ -197,6 +208,7 @@
 /* PHASE 13: system-over-time charts -- same LightweightCharts sizing convention as the
    equity curve above, stacked one per row (mobile-first, no side-by-side layout needed). */
 .tsChart { width: 100%; height: 160px; margin-bottom: 10px; }
+.stratSubCaption { font-size: 10px; opacity: 0.75; }
 .tsAnnotTip {
   position: absolute; z-index: 20; pointer-events: none; background: #10121f;
   border: 1px solid rgba(255,255,255,0.12); border-radius: var(--r-sm); padding: 5px 8px;
@@ -216,6 +228,7 @@
 
 /* PHASE 18: Indicator Scoreboard table. Horizontal scroll on the wrapper (not the whole
    panel) so 6 columns survive a 380px viewport without breaking anything else. */
+#stratScoreboardWrap { overflow-x: auto; }
 #stratScoreboardTable { width: 100%; min-width: 460px; border-collapse: collapse; font-family: 'Share Tech Mono', monospace; font-size: 11px; }
 #stratScoreboardTable th {
   text-align: left; padding: 7px 8px; color: var(--txt2); font-size: 9.5px; text-transform: uppercase;

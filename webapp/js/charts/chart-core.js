@@ -289,6 +289,8 @@
       candleSeries.setData(candles);
       volumeSeries.setData(candles.map(c => ({ time: c.time, value: c.volume, color: volColor(c) })));
       updatePriceLabel(candles);
+      if (window.updateSymbolHeader) window.updateSymbolHeader(candles, symbol);
+      if (window._updateTradePnlCard) window._updateTradePnlCard();
       chart.priceScale('right').applyOptions({ autoScale: true });
       chart.timeScale().fitContent();
       setTimeout(() => chart.priceScale('right').applyOptions({ autoScale: false }), 100);
@@ -321,6 +323,12 @@
         }
         updateIndicators();
       }
+      // PHASE 4 Task 2: after currentCandles above is refreshed with the latest
+      // tick, so the symbol header's candle-derived 24h fallback (used for forex,
+      // and briefly for crypto/stock before the first ticker tick) sees the
+      // freshest close and a real window of history, not just this poll's 2-candle slice.
+      if (window.updateSymbolHeader) window.updateSymbolHeader(currentCandles.length ? currentCandles : candles, currentSymbol);
+      if (window._updateTradePnlCard) window._updateTradePnlCard();
     } catch (err) {}
   }
 

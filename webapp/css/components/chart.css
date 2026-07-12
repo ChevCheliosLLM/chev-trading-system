@@ -38,6 +38,11 @@
 }
 .emaDot:hover { transform: scale(1.2); }
 .emaDot.on { opacity: 1; }
+/* PHASE 1 FOUNDATION: each EMA row's dot color, keyed to its own data-slot instead of a
+   repeated inline background (same three colors, 13/21/55). */
+.emaRow[data-slot="0"] .emaDot { background: #00bcd4; }
+.emaRow[data-slot="1"] .emaDot { background: #ff9800; }
+.emaRow[data-slot="2"] .emaDot { background: #e040fb; }
 .emaRowLabel {
   font-size: 10px; font-family: "Share Tech Mono", monospace;
   color: #787b86; text-transform: uppercase; letter-spacing: 0.05em; flex: 1;
@@ -67,6 +72,12 @@
   letter-spacing: 0.06em; padding: 5px 12px; border-radius: var(--r-pill);
   cursor: pointer; transition: all 0.15s; white-space: nowrap;
 }
+/* PHASE 2 bug fix: real "currently showing Layers" state, synced by
+   panel-toggle.js's _syncArsenalBtnState() — brighter version of its own resting
+   gold-dim look, matching how #magnetToggle.active/.pill.drawTool.active handle an
+   already-gold-accented control's pressed state. */
+#arsenalToggleBtn.active { background: rgba(212,175,55,0.28); border-color: var(--gold); box-shadow: var(--glow-gold); }
+.arsenalToggleIcon { height: 13px; width: auto; vertical-align: middle; margin-right: 4px; margin-bottom: 1px; }
 
 /* ---------- Object tree panel ---------- */
 #objectTree {

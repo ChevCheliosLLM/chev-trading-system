@@ -7377,5 +7377,767 @@ RESTART: YES. DEPLOY: YES (frontend files). RE-PASTE: Kev's call on the Clone
 prompt (see PHASE B above) — already handled by the time this shipped.
 
 ================================================================================
+=== 2026-07-12 — REDESIGN PHASE 1 COMPLETE — FOUNDATION: DESIGN TOKENS, ONE
+CARD STYLE, KILLED INLINE STYLES, EQUAL TOOLBAR BUTTONS — RESTART: NO,
+DEPLOY: YES, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: first phase of a multi-phase visual redesign pass (separate from, and
+downstream of, the earlier "Phase 1 CSS modularization" documented in
+webapp/README.md — that split the monolith into css/js files; this phase
+builds ON TOP of that structure). Frontend-only, no dexter.py/engines.py/Chev
+Prompt touched, no JS file touched (verified via `git status` — every changed
+file is a .css file plus index.html itself). Goal per spec: make the terminal
+look like it obeys one small set of rules (radius/border/bg/spacing/icon
+sizing) instead of a different one-off per feature, with zero new features
+and zero behavior change.
+
+WHAT CHANGED AND WHY:
+1. css/variables.css — added 8 new tokens to the existing :root block (did not
+   remove/rename anything already there): --card-radius (aliases --r-md, the
+   radius most cards already used), --card-border (aliases --border),
+   --card-bg (aliases --s1), --pad-s/--pad-m/--pad-l (6/10/16px, matching the
+   majority of existing card padding so adopting them is visually neutral
+   almost everywhere), --btn-h (26px, the existing .iconBtn footprint), and
+   --icon-s (15px, the existing toolbar icon size). WHY: gives every future
+   card/button one obvious place to anchor instead of picking a value by eye.
+2. One card style — converted every plain "card" container found across the
+   audited surfaces (.arsenal-card, .radarCard, .hypCard, .convictionMeter,
+   .engineBlock, .deepStatCard, .dirBlock, .stratScoreCard, .stratGradeCard,
+   .stratFeedCard) to reference --card-bg/--card-border/--card-radius instead
+   of hardcoded values or the raw --s1/--border/--r-md tokens directly. REAL
+   VISIBLE CHANGES (the two genuine inconsistencies this task exists to fix):
+   .arsenal-card was on its own hardcoded palette (#13152a/#252840/6px radius)
+   — now matches every other card's look exactly. .stratFeedCard and
+   .deepStatCard/.dirBlock were on --r-sm (8px) while every sibling card used
+   --r-md (12px) — now 12px like the rest. Did NOT touch .ideaCard (its base
+   --s0 background is a deliberate hover-contrast device, not an
+   inconsistency) or layout dimensions (widths/grid columns untouched).
+3. Killed ~100 inline style="..." attributes in index.html — every one was
+   either (a) moved into a new or existing named CSS class/ID rule in its
+   component's own file, or (b) left in place because a JS file genuinely
+   writes to that element's .style at runtime (verified per-element by
+   grepping js/ before touching anything — tradeOverlayBar, overlayAnalysisPanel,
+   the ovLabel* checkboxes, rsiObjSection, rsiPanelWrap, brainStateBarFill,
+   radarBadge, chevOpenBadge, hdrPerf/perfSection/perfDirBreakdown/
+   deepStatsGrid/regimeBreakdown/perfSipRow, longBar/shortBar/regimeBarFill
+   widths, hypHistorySection's display property specifically — its other
+   static props were still moved to CSS), or (c) the onerror image-fallback
+   pattern (left byte-for-byte untouched, exactly as instructed). New shared
+   classes worth knowing about: .stratSectionSub (the small trailing note
+   after 9 different section titles), .stratSubCaption (the 3 System Over
+   Time sub-captions), .tbBtnGroup/.label.flush (topbar spacing), .mlAuto/
+   .flexSpacer/.hidden (generic layout utilities, css/layout.css), .hasDropdown
+   (the 3 Layers-pane tool rows with a TF dropdown arrow), .ltbDrop/.ltbArrow
+   (was literally duplicated inline 3x each, now one rule), attribute-selector
+   color rules for the 8 drawing-tool color swatches and the 3 EMA dropdown
+   dots (`.swatch[data-color="..."]`/`.emaRow[data-slot="..."] .emaDot`,
+   keyed to attributes those elements already carried) instead of a duplicate
+   inline color. ONE PRE-EXISTING BEHAVIOR NOTE, not fixed (out of scope for a
+   CSS-only phase): #janeOpenBadge's `display:none` turned out to be static,
+   not JS-toggled like its sibling badges (radarBadge/chevOpenBadge) —
+   jane.js only ever sets its textContent, never its style. Converted
+   mechanically to a `.hidden` class (zero behavior change from today), but
+   flagging it here since it looks like a wiring gap in a different (JS)
+   layer, not something this phase's scope could fix.
+   ONE OTHER MINOR VISIBLE DELTA: #chatContextLine had both an inline style
+   (9px, #2a2e3a) AND an unused existing CSS rule (8px, var(--txt3)) fighting
+   over it — the inline one always won. Removing the inline style (per this
+   task's own instruction) lets the pre-existing CSS rule take over, which is
+   a ~1px font-size and slightly lighter color change on that one timestamp
+   label. Its margin-left:auto was confirmed redundant (#chatHeader already
+   uses justify-content:space-between) — no layout change there.
+4. Topbar row-1 icon buttons made pixel-identical (leftToggle/strategyBtn/
+   cmdPaletteBtn/rightToggle) — REAL BUG FOUND AND FIXED: css/components/
+   toasts.css had `#rightToggle img.accentIcon { width:31px; height:31px; }`,
+   an ID-specific override that made the Call-Chev icon visibly bigger than
+   its three siblings (26px button, 15px icon) — now reads var(--icon-s) like
+   every other .iconBtn glyph. .iconBtn's own width/height moved onto
+   var(--btn-h); a new combined rule `.iconBtn svg, .iconBtn img { width:
+   var(--icon-s); height: var(--icon-s); }` replaces the old svg-only rule so
+   <img> icons (strategyBtn/rightToggle) get the same treatment <svg> icons
+   (leftToggle/cmdPaletteBtn) already had. strategyBtn's redundant inline
+   15x15 style was deleted outright (the new base rule already produces the
+   identical size).
+5. Cache-bust: every changed CSS file's <link> in index.html bumped to
+   ?v=20260716-2 (command-palette.css and animations.css untouched this
+   phase, left without a version bump since their content didn't change).
+BENEFIT: the terminal's cards, buttons, and one real icon-sizing bug now
+share one small, named vocabulary instead of a different guess per feature —
+and the next phase (or any future edit) has one obvious place to change a
+radius/border/spacing/icon-size everywhere at once instead of hunting through
+a dozen near-duplicate declarations.
+VERIFICATION: `git status` confirms zero .py/.js files touched, only .css
+files + index.html. `<div>` tag balance unchanged (372/372, open/close still
+equal — no markup added or removed, only attributes). Brace-balance checked
+on every edited CSS file (all matched, no syntax breakage). Diffed every
+`id="..."` attribute touched in index.html — none were added, removed, or
+renamed (only class/style attributes changed), confirmed via a targeted grep
+over `git diff` rather than eyeballing it. Every new class name referenced in
+index.html cross-checked against its defining CSS file. No `node --check` run
+— zero JS files were touched this phase, so there was nothing to check.
+KEV VERIFICATION CHECKLIST (needs a live look, not yet done by Claude): hard-
+refresh the page (cache-bust should force a fresh CSS fetch) and confirm (a)
+the Arsenal cards, Radar cards, and Strategy Dashboard cards all now share the
+same corner radius/border/background look; (b) the four topbar icon buttons
+(sidebar/strategy/command palette/call-Chev) look pixel-identical in size;
+(c) nothing else moved — no layout shifted, no feature behaves differently,
+console is clean.
+RESTART: NO (frontend-only). DEPLOY: YES — push_dashboard.py, files changed:
+webapp/index.html, webapp/css/variables.css, webapp/css/layout.css,
+webapp/css/components/{topbar,panels,trading-logs,arsenal,chart,
+chart-popups,toasts,intel,hypothesis-tracker,strategy,weight-lab}.css.
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+=== 2026-07-17 — REDESIGN PHASE 2 COMPLETE — BUG FIXES: DEAD SEARCH BAR,
+ARSENAL TOGGLE, UNDO, COPY/PASTE — RESTART: NO, DEPLOY: YES,
+RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: frontend-only bug-fix phase. No .py/.jsonl/prompt file touched (verified
+via `git status`). Two of the four tasks' own "current state" premises turned out
+to be wrong once the actual code was read (per this project's own anchor-based-
+editing rule, findings are reported here rather than blindly following the brief) —
+in both cases real bugs still existed, just not the ones originally assumed.
+
+WHAT CHANGED AND WHY:
+1. TASK 1 — quick symbol search (js/ui/watchlist.js). CORRECTION TO THE BRIEF:
+   #quickSearchInput was NOT dead — it already had a keydown handler (Enter jumps
+   the chart, Escape clears+blurs), just no dropdown/autocomplete. Built on top of
+   it instead of replacing it: as you type, a dropdown under the input lists
+   matching symbols from `groups` (the SAME canonical watchlist data every other
+   panel already reads — searches all three groups, not just whichever tab is
+   selected in the sidebar), matched case-insensitively against symbol or label.
+   ArrowUp/Down move a highlight, Enter picks the highlighted (or first) match,
+   Escape closes+clears+blurs. A non-matching query shows "No matching symbol —
+   press Enter to jump anyway" rather than going silent — and pressing Enter with
+   no dropdown match still falls through to the ORIGINAL raw-typed-symbol jump
+   (preserved exactly, not removed). New shared `_selectSymbol(symbol, type)`
+   extracted from the watchlist row's own click handler — used by the row click,
+   the dropdown pick, AND the raw-entry fallback, so there's exactly one place
+   that knows how to switch symbols instead of two near-duplicate copies (the
+   second copy's redundant explicit `_updateChatContext()` call was dropped —
+   `loadChart()` already calls it internally, confirmed by reading chart-core.js).
+   New markup: `#quickSearchDropdown` div inside `#quickSearchWrap` (index.html).
+   New CSS (webapp/css/components/hypothesis-tracker.css, where the rest of the
+   quick-search styling already lived): `#quickSearchDropdown`/`.qsItem`/
+   `.qsEmpty`, built entirely from PHASE 1's card tokens (--card-bg/--card-border/
+   --card-radius/--pad-s/--pad-m/--shadow-md) — zero new colors invented.
+   NOT FIXED (found, out of scope): the Command Palette's own `buildSymbolActions()`
+   (drawing.js) calls a function named `loadSymbol(s)` that is never defined
+   anywhere in the codebase — every Symbol entry in Ctrl+K silently no-ops via
+   optional chaining. Deliberately did NOT reuse that name for the new
+   `_selectSymbol()` (which would have accidentally "fixed" this dead code path as
+   a side effect of an unrelated task) — flagging it here instead for a future
+   phase to decide on purpose.
+2. TASK 2 — Arsenal toggle. CORRECTION TO THE BRIEF: the click handler lives in
+   js/ui/chat.js (~line 934), not drawing.js/panel-toggle.js. `#chevArsenal` (the
+   old topbar drawer) really was deliberately retired 2026-07-05 with its cards
+   removed as dead UI — left alone, not touched or deleted, per the brief's own
+   instruction not to unilaterally remove retired UI. The button today doesn't
+   toggle that old drawer at all (its `classList.remove('open')` call was a
+   vestigial no-op — that class was never added anywhere and had no matching CSS
+   rule) — it always opens the right Intel panel to its modern "Layers" tab. THE
+   BUG: clicking it a second time just re-clicked the already-active Layers tab,
+   which visibly does nothing — reads as "won't close." FIX: real toggle — second
+   click while already open on Layers now closes the whole panel; clicking while
+   open on a DIFFERENT tab switches to Layers instead of closing (matches what
+   "open Arsenal" should mean). A genuine `.active` visual state was added
+   (`#arsenalToggleBtn.active`, webapp/css/components/chart.css — a brighter
+   version of its own resting gold-dim look, same convention as
+   `#magnetToggle.active`). State sync is centralized in ONE place —
+   `_syncArsenalBtnState()` (webapp/js/ui/panel-toggle.js), called from inside
+   `_toggleChevPanel()` (every open/close path: rightToggle, intelCloseBtn, this
+   button, Escape) AND from the tab-click handler (the "switch tabs while already
+   open" case `_toggleChevPanel` alone can't see) — so the button's state can
+   never drift out of sync no matter which of the several ways the panel gets
+   opened, closed, or switched. Escape now also closes it (webapp/js/charts/
+   drawing.js's existing global Escape handler), scoped to only when Layers is
+   the tab actually showing (checked via the button's own synced `.active` state)
+   — deliberately NOT a blanket "Escape always closes the whole right panel,"
+   which would have been a bigger behavior change than asked for every other tab.
+3. TASK 3 — undo. CORRECTION TO THE BRIEF: undo/redo/copy/paste were NOT missing
+   — `undoStack`/`pushUndo()`/`_copiedDrawing` already existed, Ctrl+Z/C/V/Delete
+   were already wired up, and most creation paths (draw-a-shape, paste, pencil,
+   click-delete-near-hover) already called `pushUndo()` correctly. Two real bugs
+   and two real gaps were found by actually tracing the logic, all in
+   webapp/js/charts/drawing.js:
+   a. Ctrl+Z had no `INPUT`/`TEXTAREA` focus guard, unlike its Ctrl+C/V/Delete
+      siblings which already had one — pressing Ctrl+Z while typing anywhere
+      (chat box, template name field, etc.) also fired a drawing undo. Fixed by
+      adding the same guard pattern already used elsewhere in this exact handler.
+   b. REAL BUG, not just a gap: dragging/moving a shape called `pushUndo()` in
+      `mouseup`, by which point `mousemove` had already mutated the shape in
+      place — so Ctrl+Z after a move just "restored" the identical already-moved
+      position (a silent no-op). Fixed by stashing a full snapshot at the START
+      of the drag (`mousedown`, new `_dragPreState`) and only pushing it onto
+      `undoStack` in `mouseup` if the shape actually changed (a plain click with
+      no real movement no longer burns one of the 10 undo slots on nothing).
+   c. Two delete paths had NO `pushUndo()` at all — the right-click context
+      menu's Delete button and the Object Tree panel's own delete button. Both
+      permanently deleted a shape with zero undo capability. Fixed: one-line
+      `pushUndo()` added to each.
+   d. The Command Palette's own "Undo" entry duplicated the keydown handler's
+      logic slightly differently and was missing `markDirty()` — a palette-
+      triggered undo didn't visibly repaint the canvas until something else
+      happened to trigger a redraw. Extracted one shared `_undoLastAction()`,
+      used by both the keydown handler and the palette entry.
+   BONUS — Redo (Ctrl+Y / Ctrl+Shift+Z): implemented, since it dropped out
+   naturally once undo was centralized into `_undoLastAction()`/`pushUndo()` —
+   new `redoStack` (same MAX_UNDO=10 cap), cleared on any new action (standard
+   convention — a fresh edit invalidates old redo history), symmetric
+   `_redoLastAction()`. Also added as a Command Palette entry.
+   NOT FIXED (found, explicitly out of scope for an undo-focused task): keyboard
+   Delete/Backspace removes the LAST drawing (`drawings.pop()`) regardless of
+   which shape is actually hovered — a pre-existing, separate bug about WHAT gets
+   deleted, not about undo. Also not fixed: the context menu's property-edit
+   controls (width/fill/opacity/font-size sliders, color swatch/align/label-
+   position buttons) still call `ctxApply()` with no `pushUndo()` at all — sliders
+   fire continuously on drag, so a correct fix needs a "snapshot once per edit
+   session," not one push per input tick, which felt like its own small design
+   problem rather than a one-line fix; flagging for a future phase rather than
+   guessing under time pressure.
+4. TASK 4 — copy/paste. Verified already fully implemented and correct: Ctrl+C
+   copies whatever shape is currently hovered (there is no separate "selection"
+   state in this codebase beyond hover — confirmed by grep), respects the same
+   INPUT/TEXTAREA guard as Delete, Ctrl+V pastes a time-offset duplicate that
+   becomes the new hovered/selected shape, calls `pushUndo()` correctly before
+   pasting. No code changes made — nothing to fix.
+BENEFIT: the quick-search bar now does what a "Go to…" box should without losing
+the raw-symbol-jump escape hatch; the Arsenal button behaves like an actual
+toggle from every entry point instead of only ever opening; a moved or deleted
+drawing can now genuinely be undone instead of silently no-op'ing; redo exists
+where it didn't before, at near-zero extra cost once undo was centralized.
+VERIFICATION: `git status` confirms only .css/.js files + index.html changed, zero
+.py files. `node --check` clean on all four changed JS files (drawing.js,
+watchlist.js, panel-toggle.js, chat.js). `<div>` balance 373/373 (up from 372/372
+— exactly the one new `#quickSearchDropdown` div). Diffed every `id="..."`
+touched in index.html — the only unpaired one is `quickSearchDropdown` itself (a
+brand-new id, not a rename/removal of an existing one); no existing ID was
+touched. Manually traced the full `/`-focus → type → ArrowDown/Up → Enter →
+`_selectSymbol` → `loadChart` chain against the actual code (not run live).
+KEV VERIFICATION CHECKLIST (needs a live look, not yet done by Claude):
+1. Press `/`, type a few letters of a watched symbol — a dropdown should appear
+   under the search box; arrow keys move the highlight; Enter jumps the chart.
+2. Type something that matches nothing (e.g. "ZZZZZ") — dropdown should say "No
+   matching symbol — press Enter to jump anyway"; pressing Enter should still
+   attempt the jump exactly like before this phase.
+3. Click "Chev's Arsenal" — right panel should open on the Layers tab. Click it
+   again — panel should close. Open it, manually switch to the Chat tab, click
+   Arsenal again — should switch back to Layers, not close. Press Escape while
+   on Layers — panel should close; press Escape on any other tab — panel should
+   stay open (only Cmd Palette/active tool/context menu should react).
+4. Draw a shape, move it, press Ctrl+Z — it should snap back to its pre-move
+   position (not stay where you dropped it). Delete a shape via right-click →
+   Delete, or via the Object Tree's ✕ button, then Ctrl+Z — it should reappear.
+   Try Ctrl+Y (or Ctrl+Shift+Z) after an undo — the change should reapply.
+5. Console clean; deploy via `push_dashboard.py`, re-check on phone.
+RESTART: NO (frontend-only). DEPLOY: YES — push_dashboard.py, files changed:
+webapp/index.html, webapp/js/charts/drawing.js, webapp/js/ui/watchlist.js,
+webapp/js/ui/panel-toggle.js, webapp/js/ui/chat.js,
+webapp/css/components/chart.css, webapp/css/components/hypothesis-tracker.css.
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+=== 2026-07-18 — REDESIGN PHASE 3 COMPLETE — ONE ICON SET (LUCIDE) + DELAYED
+PLAIN-WORD TOOLTIPS — RESTART: NO, DEPLOY: YES, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: frontend-only. Replaced the mixed emoji-PNG/unicode-glyph/hand-drawn-SVG
+icon soup in the main terminal's toolbars and panel headers with one vendored
+Lucide icon set, and replaced native title="" tooltips on those same controls
+with a custom 2-second-delay, plain-word tooltip. Deliberately scoped to the
+main terminal chrome (topbar, chart-area floating controls, left sidebar, right
+Intel panel's Trades/Engine/Radar/Layers/Chat panes) — the Strategy Dashboard
+overlay (16 "ⓘ" info icons, its own tab-pill emoji, "What is this?" titles) is a
+separate, already-self-consistent system built over many earlier phases with
+its own emoji-as-visual-language convention (Learn tab, Story Time voice,
+SECTION_TOOLTIPS) — left untouched on purpose, not missed. Flag this scoping
+call to Kev in case he wants a follow-up phase for that dashboard specifically.
+
+WHAT CHANGED AND WHY:
+1. TASK 1 — vendored icons. Fetched the real upstream SVG source for all 27
+   icons needed (menu, search, flame, message-circle, magnet, list, trash-2, x,
+   chevron-down, refresh-cw, zap, radar, activity, check-circle-2, bar-chart-2,
+   history, plus, wrench, rotate-ccw, ruler, pencil, triangle, square, minus,
+   arrow-up-right, trending-up, bar-chart-horizontal) from lucide-static — byte-
+   exact vendored markup, not hand-approximated. CORRECTION: the brief said "MIT
+   licensed" — lucide-static's own license header says ISC, a similarly
+   permissive license; noting the correction rather than silently calling it
+   MIT. Chose the inline-SVG-sprite option (webapp/index.html, right after
+   <body>) over a js/ui/icons.js module — a sprite renders immediately with no
+   JS dependency or load-order risk, and every icon is a named <symbol id="icon-
+   NAME">, so <svg class="icon"><use href="#icon-NAME"/></svg> anywhere on the
+   page just works. stroke="currentColor" throughout, so existing color
+   theming (button states, hover, .active) needed zero changes.
+2. TASK 2 — replaced icons. Swept every emoji <img>/unicode-glyph/hand-drawn-SVG
+   icon in the topbar (both rows), the chart's floating controls (object tree,
+   RSI panel, chart tool popup, overlay toggles), the left sidebar (watchlist
+   search/collapse arrow), and the right Intel panel (tab bar, Trades/Engine/
+   Radar/Layers/Chat pane headers and controls) — about 45 individual
+   replacements. Kept the hand-drawn Fibonacci and Parallel Channel drawing-tool
+   icons exactly as-is (no Lucide equivalent exists for either). Left the
+   "Chev's Arsenal" cannon/gun-shaped custom SVG untouched in all 4 places it
+   appears (topbar button, the retired #chevArsenal drawer's fallback, the
+   Layers pane's fallback, the Layers intelTab) — treated as a brand mark
+   paired with arsenal.png, not generic iconography, per the phase's own "when
+   in doubt, personality/brand stays" rule. Also left every Chev mood/
+   personality image untouched (the CHEV'S READ narrative's bull/bear/range
+   mood icon, the conviction meter's mood icon, hypothesis footer icons, the
+   "No setups on radar" and other .emptyNote messages) — all explicitly BRAND
+   per the phase's own hard boundary, not icons.
+   ONE NARROW, DELIBERATE EXCEPTION: js/charts/engine.js's runDexterEngine()
+   rewrites the "Run Dexter" button's entire innerHTML twice (once to show
+   "Running...", once back to "Run Dexter") using the OLD emoji markup — left
+   untouched, this button's icon would have silently reverted to emoji.png the
+   first time anyone clicked it, defeating this exact task for this one
+   button. Updated only those 2 lines to the same Lucide icon the button's
+   static markup now uses — not a blanket rewrite of this file (every other
+   emoji <img> in engine.js, e.g. the CHEV'S READ mood icons, is personality
+   voice and was left alone).
+   Found and fixed one real CSS specificity bug DURING the swap, not
+   separately: `.intelTab.active img` (PHASE 1) no longer matched anything
+   once every tab icon became an <svg> — the active tab's icon-glow effect
+   would have silently stopped working. Fixed to `.intelTab.active svg`.
+   Similarly, a pre-existing `.intelTab svg` rule (added in PHASE 1 for the
+   Layers tab's own wide custom Arsenal mark) had higher specificity than the
+   new `.intelTabIcon` class my 3 new square Lucide tab icons needed — fixed
+   with a more specific `.intelTab svg.intelTabIcon` rule rather than
+   !important, so the Layers tab's non-square icon and the 3 new square ones
+   can each keep their own correct sizing.
+3. TASK 3 — delayed plain-word tooltips. New webapp/js/ui/tooltip.js: one
+   delegated mouseover/mouseout listener pair on `document` (works for every
+   current data-tip element and any added later, no per-element wiring) shows
+   a small tooltip 2000ms after hover starts, positioned centered above the
+   element (flips below if there's no room above), gone instantly on
+   mouseleave/mousedown/window-blur. New CSS (webapp/css/layout.css) built
+   entirely from PHASE 1 tokens (--card-bg/--card-border/--card-radius/
+   --shadow-md) — same look as the quick-search dropdown, not a new visual
+   language. Converted ~50 title="..." attributes across the same in-scope
+   controls to data-tip, rewritten to 1-3 plain words with no parentheses per
+   the phase's own examples (Toggle all EMAs (13/21/55) -> EMAs; VWAP (resets
+   at midnight UTC) -> VWAP; Multi-timeframe Support & Resistance — Tier A
+   validated first -> Auto S/R; Parallel Channel -> Channel; and ~46 more in
+   the same spirit). Left the Strategy Dashboard's own title="What is this?"
+   (16 instances) and 3 titles inside the retired, invisible #chevArsenal
+   drawer untouched, matching Task 2's own scoping decision exactly.
+BENEFIT: the main terminal now speaks one consistent icon language instead of
+three (emoji PNG / raw unicode / mismatched hand-drawn SVG), and hovering any
+control gives a fast, honest one-line answer instead of a slow native tooltip
+that sometimes reads like a paragraph of documentation.
+VERIFICATION: `node --check` clean on every changed/new JS file (tooltip.js,
+engine.js, plus a full re-check of every other JS file touched earlier this
+session — drawing.js, chat.js, panel-toggle.js, watchlist.js — all still
+clean). `git status` confirms no .py file touched. index.html tag balance
+after the sweep: <div> 373/373, <svg> 54/54 (27 sprite <symbol>s + 27 real
+<svg class="icon"> usages), <button> 64/64, <span> 105/105, <label> 38/38 (a
+raw `<symbol` grep count of 28 vs 27 closes was chased down and confirmed to
+be my own explanatory HTML comment mentioning "<symbol>" in prose, not a real
+imbalance). Diffed every `id="..."` in the full session's changes — the only
+unpaired (never-removed) ids are the 27 new `icon-*` sprite ids plus PHASE 2's
+`quickSearchDropdown` — no existing element id was renamed or removed. Grep-
+confirmed every JS handler touching a swapped element (drawTool buttons,
+magnetToggle, objectTreeToggle, clearDrawings, intelTab clicks, hdrOnRadar/
+hdrLive/hdrClosed/hdrPerf, intelCloseBtn, rsiCloseBtn's _setRsiActive) only
+ever uses classList/style, never innerHTML — safe to swap their inner markup.
+Cache-bust bumped on every file actually changed this phase: index.html itself,
+webapp/js/ui/tooltip.js (new), webapp/js/charts/engine.js, and the CSS files
+that gained new rules (layout.css, panels.css, trading-logs.css, toasts.css,
+chart.css, hypothesis-tracker.css) — files untouched this phase (variables.css,
+topbar.css, arsenal.css, chart-popups.css, intel.css, strategy.css,
+weight-lab.css) were left at their existing version stamps.
+KEV VERIFICATION CHECKLIST (needs a live look, not yet done by Claude):
+1. Every toolbar/panel-header icon should look like one consistent set (same
+   stroke weight, same visual style) instead of a mix of PNG emoji and
+   differently-styled line icons — spot-check the topbar, the Trades/Engine/
+   Radar/Layers/Chat tabs, and the drawing toolbar.
+2. Hover any icon button for ~2 seconds — a small dark tooltip with 1-3 plain
+   words should appear above it (or below, near the top of the screen); it
+   should vanish the instant you move the mouse away or click.
+3. Click "Run Dexter" — the button's icon should NOT flip to an old emoji
+   wrench/clock while running or after it finishes.
+4. Switch Intel panel tabs (Trades/Engine/Layers/Chat/Radar) — the active
+   tab's icon should still show the gold glow it always has.
+5. Confirm the Strategy Dashboard (🔥 icon) looks completely unchanged — its
+   own emoji and "ⓘ ​What is this?" icons were deliberately left alone this
+   phase.
+6. Console clean; deploy via `push_dashboard.py`, re-check on phone.
+RESTART: NO (frontend-only). DEPLOY: YES — push_dashboard.py, files changed:
+webapp/index.html, webapp/js/ui/tooltip.js (new), webapp/js/charts/engine.js,
+webapp/css/layout.css, webapp/css/components/panels.css,
+webapp/css/components/trading-logs.css, webapp/css/components/toasts.css,
+webapp/css/components/chart.css, webapp/css/components/hypothesis-tracker.css.
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+=== 2026-07-19 — REDESIGN PHASE 4 COMPLETE — LAYOUT: LEFT TOOL RAIL, SYMBOL
+HEADER, UI DENSITY SETTING — RESTART: NO, DEPLOY: YES, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: frontend-only. Three structural upgrades to the main terminal layout:
+moved the drawing tools out of the topbar into a new vertical rail alongside
+the chart; added a symbol header strip (name/price/24h change/24h stats)
+across the top of the chart; added a Compact/Comfortable/Large UI density
+setting. Kev made one explicit architectural call mid-task (Task 1): rather
+than faking the tool rail's reflow with JS while leaving the watchlist
+sidebar as an absolute overlay, he chose to convert #leftPanel into a real
+flex sibling of #body — his reasoning: "the tool bar goes with the drawer"
+literally, and a future split-view phase should get a clean flex layout to
+build on rather than more JS-pixel-pushing patchwork to fight with later.
+
+WHAT CHANGED AND WHY:
+1. TASK 1 — left tool rail + sidebar architecture change.
+   RECON (done before touching anything, per Kev's instruction): grepped
+   every CSS/JS file for anything assuming #leftPanel was an absolute overlay.
+   Found exactly two things: webapp/css/layout.css's own #leftPanel rule
+   (position:absolute + z-index, floating on top of the chart, never actually
+   reflowing anything) and webapp/js/ui/watchlist.js's leftToggle click
+   handler (manually re-positioning #priceInfo/#status's `left` style by hand
+   to fake a reflow that wasn't really happening). Nothing else in the
+   codebase depended on the old overlay behavior.
+   CHANGE: webapp/css/layout.css — #leftPanel converted from
+   position:absolute (floating overlay, z-indexed above the chart) to
+   position:relative + flex-shrink:0 (a genuine flex sibling inside #body's
+   existing flex row). flex-shrink:0 is required so #chartColumn's flex:1
+   doesn't squeeze this panel's width under pressure. z-index dropped (no
+   longer stacking above anything). webapp/css/components/panels.css's
+   `#leftPanel.open { width: 280px; }` needed no change — works identically
+   for a flex sibling as it did for an overlay.
+   New webapp/css/components/tool-rail.css: #toolRail, a 44px-wide vertical
+   flex column inserted between #leftPanel and #chartColumn inside #body (a
+   real flex sibling, not position:fixed) — reflows naturally with the
+   sidebar, never covers the chart. Redefines --icon-s/--btn-h locally (CSS
+   custom properties cascade to descendants) so its icons come out larger
+   (18px+ per the brief) than the topbar's, without touching those tokens'
+   global values elsewhere. webapp/index.html: moved the 9 drawTool buttons
+   + magnetToggle + objectTreeToggle + clearDrawings into the new #toolRail,
+   keeping every id/class/data-tool/data-tip attribute byte-identical — zero
+   JS changes needed, confirmed webapp/js/charts/drawing.js's click handlers
+   all select by id/class/dataset.tool, never DOM position. Active-tool gold
+   highlight (`.pill.drawTool.active`, webapp/css/components/chart.css) and
+   Phase 3's data-tip tooltips both keep working unmodified. .tb-row2 shrunk
+   to Indicators + EMA/RSI/BB/VWAP + Arsenal — still a full row's worth of
+   content on its own, so it was kept as its own row rather than merged into
+   row 1 (the brief's "merge if nearly empty" case didn't apply here).
+   webapp/js/ui/watchlist.js's leftToggle handler: removed the now-wrong
+   priceInfo/statusEl manual left-offset hack (double-offset bug waiting to
+   happen now that #chartWrap genuinely reflows on its own) and added the
+   same fitContent()/syncRsiCanvasSize()/_syncRsiAxisWidth() resize-sync
+   triad webapp/js/ui/panel-toggle.js already uses for the right Intel
+   panel, on the same 220ms-after-transition timing (matches #leftPanel's
+   own 0.2s CSS width transition) — same open/close animation feel as
+   before, chart genuinely re-fits now instead of silently keeping stale
+   proportions. Two now-orphaned `transition: left 0.18s ease;` declarations
+   (webapp/css/components/toasts.css, #priceInfo/#status) were removed as a
+   direct consequence of this exact change — not a general cleanup pass.
+2. TASK 2 — symbol header strip. New #symbolHeader (webapp/index.html, first
+   child of #chartColumn, above the position-strip banner) + new
+   webapp/css/components/symbol-header.css: symbol name and live price
+   large/bold, 24h change in % and absolute (green/red via existing
+   --green/--red tokens), then small muted 24h high/low/volume stats.
+   New webapp/js/ui/symbol-header.js, wired at the SAME existing call sites
+   Phase 12's "call-site wrapping" convention establishes — no new fetches,
+   no backend/Python touched:
+     - window.updateSymbolHeader(candles, symbol), called right after both
+       existing updatePriceLabel(candles) calls in
+       webapp/js/charts/chart-core.js (loadChart() and pollLatestCandle()) —
+       covers symbol switches, timeframe switches (timeframe-load.js's tf
+       button handler already calls loadChart(), so it needed zero changes
+       of its own), and every live poll tick.
+     - window.updateSymbolHeaderStats(stats), called from the tail of
+       webapp/js/ui/watchlist.js's applyWatchPrice() (the single existing
+       choke point for every watchlist price tick), but only when the tick
+       is for the symbol currently on the chart. Extended applyWatchPrice()
+       with an optional 4th `stats` param and extended its two ticker fetch
+       call sites to pass through fields they already fetch and previously
+       discarded: Binance's ticker/24hr gives real highPrice/lowPrice/volume/
+       priceChange for crypto; Finnhub's /quote gives real day h/l/d
+       (change) for stocks but NO volume field at all.
+   LIMITATION (stated explicitly, not papered over): forex has no 24h ticker
+   anywhere in this codebase (see the pre-existing "session open" comment in
+   refreshForexPrices), and Finnhub gives stocks no volume. Wherever a real
+   stat is missing, symbol-header.js estimates it from the chart's own
+   candles already in currentCandles (last 24h of real candle timestamps, or
+   the whole loaded range if there isn't 24h of history) and marks that ONE
+   stat with a small "~" flag plus a data-tip tooltip ("Estimated from chart
+   (no 24h feed for this symbol)") — visible in the UI itself, not just
+   documented here. Ticker stats arriving between chart polls (they refresh
+   every 1-3s vs. the chart's 5-15s poll) trigger an immediate re-render
+   rather than waiting for the next chart tick.
+3. TASK 3 — UI density (Compact/Comfortable/Large). webapp/css/variables.css:
+   three new `:root[data-density="..."]` blocks redefining --btn-h/--icon-s/
+   --pad-s/--pad-m/--pad-l plus the root font-size (16px/18px/20px) that
+   every rem-based rule below scales from. The bare :root block (today's
+   values) is left untouched as the Compact set and as the safety-net
+   fallback if the density script never runs. Converted the 4 named
+   hardcoded-px areas to rem (relative to that root font-size, computed as
+   today's-px/16 so Compact renders pixel-identical to before this phase):
+   topbar text (#topbar .label, .pill, .freshStamp — webapp/css/components/
+   topbar.css), tab labels (.groupTab in panels.css, .intelTab in
+   panels.css), watchlist rows (.watchRow .sym/.px/.chg — webapp/css/
+   components/trading-logs.css). The tool rail needed no separate
+   conversion — Task 1's local --icon-s/--btn-h override on #toolRail
+   already makes it participate in density automatically.
+   Control: new #densityBtn (Lucide "settings" icon, fetched from
+   lucide-static and added to the sprite as icon-settings, same vendoring as
+   Phase 3) at the far right of topbar row 1, opening #densityPopover (new
+   webapp/css/components/density.css + webapp/js/ui/density.js) — a 3-option
+   dropdown positioned the same way the existing #emaDropdown popup is
+   (position:fixed, left/top set from the button's own getBoundingClientRect
+   in JS), not a new positioning pattern. Choosing an option sets
+   data-density on <html> + saves it to localStorage, then re-runs the same
+   fitContent()/syncRsiCanvasSize()/_syncRsiAxisWidth() resize-sync triad
+   Task 1 uses (via requestAnimationFrame instead of a timed delay, since a
+   density change has no CSS transition to wait out — it's instant).
+   SUBSTITUTION FROM THE BRIEF (noted, not silent): the brief asked for the
+   data-density attribute "on <body>" — it's actually set on <html>
+   (documentElement) instead, via a small inline <script> in <head>, because
+   <body> doesn't exist yet while <head> is still parsing and the whole
+   point of this snippet is to apply the saved density BEFORE first paint
+   (anti-flash-of-wrong-size). Every :root[data-density=...] CSS rule
+   targets <html> for the same reason — this is the correct implementation
+   of the brief's intent, not a shortcut. Default is "comfortable" per the
+   brief (today's sizing becomes roughly Compact; Comfortable is noticeably
+   larger).
+BENEFIT: the drawing tools now live next to the chart they draw on instead of
+competing for space in an already-crowded topbar row, and the sidebar/rail/
+chart genuinely reflow together instead of one panel floating over the
+others. The chart area now shows at a glance what's live-priced without
+opening the watchlist tab. Kev can now pick a UI density that matches his
+own eyes/screen instead of being stuck with one fixed (and, per the brief,
+rather cramped) sizing.
+VERIFICATION: `node --check` clean on every JS file in the project (not just
+the ones touched this phase — chart-core.js, watchlist.js, plus new
+symbol-header.js and density.js, and every other .js file loaded by
+index.html). `git status`/`git diff --stat` confirm no .py file touched.
+index.html tag balance after all three tasks: <div> 377/377, <button>
+68/68, <svg> 55/55, <symbol id=...> 28/28 closed (a raw `<symbol` grep count
+of 29 vs 28 closes was chased down and confirmed to be this phase's own
+explanatory HTML comment mentioning "<symbol>" in prose, not a real
+imbalance, same false-positive pattern as Phase 3's tooltip.js entry). Zero
+duplicate `id="..."` anywhere in the file — every relocated drawing-tool
+button kept its original id/class/data-tool exactly once. Confirmed in code
+(not yet confirmed live by Kev): watchlist.js's leftToggle handler and
+density.js's option-click handler both call the fitContent/
+syncRsiCanvasSize/_syncRsiAxisWidth triad; drawing.js's tool/magnet/
+object-tree/clear-drawings click handlers all select by id/class/dataset,
+confirmed zero DOM-position dependence before relocating them. Cache-bust
+bumped on every file actually changed this phase: index.html itself,
+variables.css, layout.css, topbar.css, panels.css, trading-logs.css,
+toasts.css, tool-rail.css (new), symbol-header.css (new), density.css (new),
+chart-core.js, watchlist.js, symbol-header.js (new), density.js (new) — all
+other CSS/JS files were left at their existing version stamps.
+KEV VERIFICATION CHECKLIST (needs a live look, not yet done by Claude):
+1. Open the terminal — the drawing tools (H-Line/Ray/Trendline/.../Pencil,
+   then Magnet/Objects/Clear) should now be a vertical strip between the
+   watchlist sidebar and the chart, not in the topbar's second row.
+2. Toggle the watchlist sidebar open/closed (top-left button) — the tool
+   rail and the chart should visibly slide over together, and the chart
+   should re-fit its visible range each time (not stay squeezed/stale).
+3. Above the chart: confirm the symbol name, live price, 24h change (% and
+   absolute, colored green/red), and small 24h H/L/Vol stats appear and tick
+   live. Switch symbols and switch timeframes — all of it should update.
+   Switch to a forex pair — the H/L/Vol stats should show a small "~" and,
+   on hover (after Phase 3's 2s delay), a tooltip explaining they're
+   estimated from the chart, not a true 24h feed.
+4. Click the new settings-gear icon at the far right of the topbar's top
+   row — a small Compact/Comfortable/Large menu should appear. Picking
+   Comfortable or Large should make text/buttons/icons across the topbar,
+   tabs, watchlist rows, and tool rail visibly bigger, and the chart should
+   still fill its space correctly (no gaps, no overlap). Reload the page —
+   your last pick should still be applied with no flash of the old size.
+5. Console clean; deploy via `push_dashboard.py`, re-check on phone.
+RESTART: NO (frontend-only). DEPLOY: YES — push_dashboard.py, files changed:
+webapp/index.html, webapp/css/variables.css, webapp/css/layout.css,
+webapp/css/components/topbar.css, webapp/css/components/panels.css,
+webapp/css/components/trading-logs.css, webapp/css/components/toasts.css,
+webapp/css/components/tool-rail.css (new),
+webapp/css/components/symbol-header.css (new),
+webapp/css/components/density.css (new), webapp/js/charts/chart-core.js,
+webapp/js/ui/watchlist.js, webapp/js/ui/symbol-header.js (new),
+webapp/js/ui/density.js (new).
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+=== 2026-07-20 — REDESIGN PHASE 6 COMPLETE — POLISH: HOVER FEEDBACK, SHORTCUTS
+PANEL, TRADE P&L ON CHART — RESTART: NO, DEPLOY: YES, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: frontend-only. The closing phase of this six-phase redesign arc (Phase 1
+foundation tokens -> Phase 2 quick-search/undo-redo fixes -> Phase 3 one icon set +
+delayed tooltips -> Phase 4 tool rail/symbol header/density -> Phase 5 recon-only,
+never built, no code landed -> this phase). Three tasks: universal hover/press/
+focus feedback everywhere interactive, a real keyboard-shortcuts panel, and a
+click-to-reveal P&L card on a live trade's entry line.
+
+WHAT CHANGED AND WHY:
+1. TASK 1 — hover/press/focus. Audited every CSS file in webapp/css (all ~2,330
+   lines, every component file read in full, not grepped) before writing anything.
+   Finding: hover was ALREADY present on nearly everything (most components
+   already had their own `:hover` rule with their own color), but :active (press)
+   and :focus-visible (keyboard) existed NOWHERE in the entire app except native
+   text-input focus rings. Rather than hand-writing a bespoke press rule per
+   component (the brief's own "not per-component one-offs" instruction), added
+   ONE shared block to webapp/css/layout.css: a `:where(...)` selector listing
+   every interactive class/id found during the audit gets `filter:brightness(0.88)`
+   on `:active`, and a separate `:where(button, input, select, textarea, a,
+   [tabindex]):focus-visible` gets a gold outline. `:where()` deliberately keeps
+   this at ZERO specificity so it can never out-rank any existing color rule —
+   .active's own selected-state background is untouched, only a transient darken
+   layers on top of whatever's already showing. Used filter (not transform:scale)
+   for the press effect specifically because several components already animate
+   `transform` on :hover (.ideaCard's lift, .emaDot's pop) — filter and transform
+   are different properties, so both can be true at once (hovering AND pressing)
+   with no fight over which one wins, which a transform-based press would have
+   risked colliding with.
+   SCOPE NOTE, not silently narrowed: the focus-visible ring only applies to
+   elements already in the native Tab order today (real <button>/<input> — every
+   .pill/.iconBtn/.densityOpt/etc. is one, confirmed by reading index.html).
+   Several other clickable-LOOKING rows (.watchRow, .intelTab, .groupTab,
+   .arsenal-card, .radarCard, .ideaCard, .layerToolBtn, .stratTab, .cmdItem,
+   .qsItem) are plain <div>s with no tabindex — hover/press still work on them
+   (those don't need focusability), but they're not keyboard-reachable at all
+   today, so a focus ring on them would never be visible. Making them genuinely
+   keyboard-operable (tabindex + Enter/Space activation) is a bigger, separate
+   change than "add a focus style" asked for — flagged here as a real follow-up,
+   not silently skipped.
+   TWO TRUE GAPS found and fixed (not invented busywork — these had zero hover
+   feedback of any kind before this phase): #resetBalance (webapp/css/components/
+   panels.css) and .ovBtn, the Entry/Analysis buttons on the trade overlay bar
+   (webapp/css/components/toasts.css).
+2. TASK 2 — keyboard shortcuts panel. New #shortcutsOverlay/#shortcutsPanel
+   (webapp/index.html) + webapp/css/components/shortcuts-panel.css (reuses
+   command-palette.css's existing .cmdKbd key-badge style rather than inventing a
+   second one) + new webapp/js/ui/shortcuts-panel.js. Opened via a new topbar
+   #shortcutsBtn (Lucide "keyboard" icon, fetched from lucide-static and added to
+   the sprite the same way every icon since Phase 3 has been) or the `?` key —
+   added inside drawing.js's EXISTING guarded keydown block (same
+   `!ctrlKey/!metaKey/!altKey/not-an-input` guard `/` and `R` already use, per the
+   brief's own instruction to reuse it) so it can never fire while typing. `/`
+   alone still only focuses search — `e.key` reports '?' only when Shift is
+   actually held on that key, so the two checks never collide on the same
+   keypress despite sharing a physical key. Closes via its own X button, clicking
+   outside, or Esc (added to drawing.js's one shared Escape block, alongside
+   every other Esc-closeable overlay — same pattern as Phase 2's Arsenal-panel
+   Escape addition).
+   Every shortcut listed was checked against the REAL keydown handler in
+   drawing.js before being written down, per the brief's explicit instruction —
+   one real discrepancy was found and deliberately NOT copied into the panel: the
+   Command Palette's own ACTIONS array labels Radar with kbd hint "5", but the
+   actual keydown handler's tabKeys map only ever had '1'-'4' (trades/engine/
+   layers/chat) — pressing 5 does nothing. Flagging this pre-existing Command
+   Palette inaccuracy here for a future phase rather than fixing it (out of this
+   phase's scope) or documenting a shortcut that doesn't work.
+   ALSO PER THE BRIEF'S OWN INSTRUCTION ("while there, verify Del/Backspace..."):
+   found and fixed a REAL bug in drawing.js — Delete/Backspace was `drawings.pop()`,
+   unconditionally removing the LAST drawing in the array regardless of what was
+   actually hovered or under the cursor. Fixed to use `hoverIndex`, the exact same
+   hover-based "selection" model this codebase already uses for Ctrl+C (there is
+   no separate click-to-select state anywhere in this app, confirmed by grep —
+   hover IS the selection), so Delete now removes whatever you're actually
+   pointing at, matching Ctrl+C/Ctrl+V's existing behavior instead of contradicting
+   it. Also added the missing `markDirty()` call (the old code relied on an
+   incidental mousemove to trigger the next repaint; Delete has no guaranteed
+   mouse movement after it).
+3. TASK 3 — P&L on live trade lines (click-to-show). RECON FIRST (per the brief):
+   traced how entry/SL/TP lines actually reach the chart across drawing.js,
+   engine.js, and trading-logs.js/chev-corner.js. Found TWO existing rendering
+   paths, not one: real LightweightCharts price lines (candleSeries.
+   createPriceLine, chev-corner.js's _refreshTradeOverlayLines()) for the actual
+   Entry/SL/TP/SIP lines, and a SEPARATE canvas-drawn layer (drawing.js's
+   redrawAll() + engine.js's _drawLivePosition(), the latter already wrapping
+   redrawAll a second time) that draws colored entry/SL/TP zones, small price-axis
+   badges, AND an already-existing, ALWAYS-ON floating P&L percentage badge (with
+   leverage) at the CURRENT price line. This phase's card is genuinely additive
+   to that existing badge, not a duplicate or a replacement — it lives at the
+   ENTRY line (not the current-price line), is click-toggled (not always-on), and
+   shows more detail (R-multiple, dollar P&L, both stop and target distance) than
+   the tiny always-on badge has room for.
+   Live P&L in dollars ALREADY reaches the frontend — `t.live_pnl` is fetched and
+   rendered today in the trade feed row (trading-logs.js's `.logPnl` span) — reused
+   directly, no new backend endpoint, no Python touched. FOUND AND FIXED A REAL
+   STALENESS BUG along the way: the code that keeps `_activeTrade` in sync with
+   the live feed (trading-logs.js, ~line 182) only ever checked sl/tp/entry/is_sip
+   for changes — `live_pnl` was copied onto `_activeTrade` exactly once, at the
+   moment a trade was first clicked, and then silently never touched again. Fixed
+   by copying it every refresh cycle unconditionally (kept OUT of the existing
+   change-check that triggers a full price-line redraw, since P&L ticks far more
+   often than price levels do and doesn't need one).
+   BUILD: new #tradePnlCard (webapp/index.html, inside #chartWrap) + webapp/css/
+   components/trade-pnl-card.css (position:fixed, JS-positioned at the click
+   point — same convention as #emaDropdown/#densityPopover, not a new
+   positioning pattern) + new webapp/js/ui/trade-pnl-card.js. Clicking anywhere
+   along the entry line's Y (a full-width hit zone, matching how a horizontal
+   price line actually looks — not just its price-axis label) toggles the card;
+   clicking again, the X button, Esc, or clicking anywhere else all close it.
+   Shows: direction + symbol, entry price, P&L as BOTH an R-multiple (computed
+   fresh from the live chart price against entry/stop — always in sync with the
+   live tick regardless of backend refresh timing) AND real dollars (the
+   now-un-stale `live_pnl`), plus stop/target distance in % from the live price.
+   Refreshed via the exact same call-site-wrapping hooks Phase 4 established for
+   the symbol header (`window.updateSymbolHeader`'s two call sites in
+   chart-core.js's loadChart()/pollLatestCandle(), PLUS trading-logs.js's own
+   live-trailing block where live_pnl actually updates) — no new polling loop.
+   READ-ONLY BY DESIGN, per the brief's own explicit safety requirement: the card
+   has no button, control, or click target that touches the live trade in any
+   way — it only ever displays numbers.
+BENEFIT — SIX-PHASE ARC SUMMARY: the main terminal went from a single cramped
+toolbar row and a mix of emoji/PNG/hand-drawn icons to a cohesive, tokenized
+design system: Phase 1 established the shared spacing/radius/color tokens every
+later phase built on; Phase 2 fixed real quick-search/undo/redo/Arsenal-toggle
+bugs found by actually tracing the code rather than assuming the brief's premise;
+Phase 3 unified every icon to one vendored Lucide set and replaced slow native
+tooltips with fast plain-word ones; Phase 4 gave the terminal a real application
+layout — a docked tool rail, a symbol/price header, and a genuine UI density
+setting — converting the watchlist sidebar from a fake floating overlay into an
+honest flex layout along the way; Phase 5 was recon-and-plan only for multi-chart
+split view (never built — no code from that phase exists anywhere in this
+codebase, a decision Kev can revisit any time by re-pasting that phase); and this
+phase closed the loop with the small, cheap-feeling details — every control now
+visibly reacts to touch, every shortcut is discoverable in one place instead of
+living only in Kev's memory, and a live trade's real numbers are one click away
+instead of buried in a tiny always-on badge. Two real, pre-existing bugs (Delete
+key deleting the wrong shape; live P&L silently freezing after the first look)
+were found and fixed as a direct result of this phase's own recon, not invented
+extra scope.
+VERIFICATION: `node --check` clean on every JS file in the project (not just this
+phase's five changed/new files — drawing.js, chart-core.js, trading-logs.js, plus
+new shortcuts-panel.js and trade-pnl-card.js). `git status`/`git diff --stat`
+confirm no .py file touched. index.html tag balance: <div> 405/405, <button>
+71/71, <svg> 58/58, <symbol id=...> 29/29. Zero duplicate `id="..."` anywhere.
+Confirmed in code (not yet confirmed live by Kev): the `?` handler sits inside
+drawing.js's existing input-focused guard (same block as `/` and `R`), so it
+cannot fire while typing in any input/textarea. Cache-bust bumped on every file
+actually changed this phase: index.html itself, layout.css, panels.css,
+toasts.css, shortcuts-panel.css (new), trade-pnl-card.css (new), drawing.js,
+chart-core.js, trading-logs.js, shortcuts-panel.js (new), trade-pnl-card.js
+(new) — every other CSS/JS file was left at its existing version stamp.
+KEV VERIFICATION CHECKLIST (needs a live look, not yet done by Claude):
+1. Hover over pills/icon buttons/tabs/watchlist rows/arsenal cards — each should
+   still show its own existing hover color. Click and HOLD on any of them — you
+   should see a brief, subtle darkening while the mouse is down, gone the instant
+   you release. Tab through controls with the keyboard (no mouse) — a gold
+   outline should appear on whichever button/input currently has focus.
+2. Press `?` anywhere outside a text box (or click the new keyboard icon at the
+   far right of the topbar's top row) — a panel listing every real shortcut,
+   grouped by Navigation/Chart/Drawing, should appear. Press Esc or click outside
+   it to close. Confirm every shortcut listed actually does what it says.
+3. Draw a shape, hover a DIFFERENT shape than the one you just drew, press
+   Delete — the HOVERED shape should disappear, not the one you drew (this was
+   backwards before this phase).
+4. Click a live open trade in the Trades pane so its entry/SL/TP lines and the
+   position strip appear on the chart. Click directly on the gold entry line
+   (anywhere along its width) — a small card should appear showing direction,
+   symbol, entry price, P&L in R and in dollars, and stop/target distance in %.
+   Click the line again (or the card's X, or Esc, or click elsewhere) to close
+   it. Watch it for a few price ticks — the numbers should update live, not
+   freeze at the moment you opened it.
+5. Console clean; deploy via `push_dashboard.py`, re-check on phone.
+RESTART: NO (frontend-only). DEPLOY: YES — push_dashboard.py, files changed:
+webapp/index.html, webapp/css/layout.css, webapp/css/components/panels.css,
+webapp/css/components/toasts.css,
+webapp/css/components/shortcuts-panel.css (new),
+webapp/css/components/trade-pnl-card.css (new), webapp/js/charts/drawing.js,
+webapp/js/charts/chart-core.js, webapp/js/ui/trading-logs.js,
+webapp/js/ui/shortcuts-panel.js (new), webapp/js/ui/trade-pnl-card.js (new).
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
 END OF HANDOFF
 ================================================================================

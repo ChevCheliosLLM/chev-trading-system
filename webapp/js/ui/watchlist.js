@@ -13,9 +13,17 @@
 
   leftToggle.addEventListener('click', () => {
     leftPanel.classList.toggle('open');
-    const open = leftPanel.classList.contains('open');
-    priceInfo.style.left = open ? '296px' : '16px';
-    statusEl.style.left = open ? '296px' : '16px';
+    // PHASE 4 Task 1: #leftPanel is now a real flex sibling (was an absolute
+    // overlay), so #chartWrap genuinely reflows on its own -- the manual
+    // priceInfo/statusEl left-offset hack this used to need is gone, and
+    // charts need the same fitContent/resize-sync nudge panel-toggle.js
+    // already uses for the right Intel panel, run after the same 220ms
+    // width transition so it fires once the new layout has settled.
+    setTimeout(() => {
+      if (window._chevChart) window._chevChart.timeScale().fitContent();
+      if (window.syncRsiCanvasSize) window.syncRsiCanvasSize();
+      if (window._syncRsiAxisWidth) window._syncRsiAxisWidth();
+    }, 220);
   });
 
   groupTabsEls.forEach(tab => {
@@ -82,17 +90,7 @@
     watchlistInner.querySelectorAll('.watchRow').forEach(row => {
       row.addEventListener('click', (e) => {
         if (e.target.classList.contains('removeBtn') || e.target.classList.contains('starBtn')) return;
-        currentSymbol = row.dataset.symbol;
-        currentType = row.dataset.type;
-        drawings = loadDrawings(currentSymbol);
-        rsiDrawings = loadRsiDrawings(currentSymbol);
-        updateObjTree();
-        _syncDrawings(currentSymbol);
-        _subscribeDrawings(currentSymbol);
-        watchlistInner.querySelectorAll('.watchRow').forEach(r => r.classList.remove('active'));
-        row.classList.add('active');
-        clearChevTools();
-        loadChart(currentSymbol, currentTf, currentType).then(startPolling);
+        _selectSymbol(row.dataset.symbol, row.dataset.type);
       });
     });
     watchlistInner.querySelectorAll('.removeBtn').forEach(btn => {
@@ -132,24 +130,129 @@
 
   document.getElementById('watchlistSearch')?.addEventListener('input', _filterWatchlist);
 
-  // Quick topbar symbol jump
-  document.getElementById('quickSearchInput')?.addEventListener('keydown', async function(e) {
-    if (e.key === 'Escape') { this.value = ''; this.blur(); return; }
+  // PHASE 2 bug fix / Task 1: shared symbol-switch path — the exact steps the
+  // watchlist row click handler above already did, now used by it AND by the quick
+  // topbar search below (both the dropdown-match and raw-typed-symbol paths), so
+  // there is exactly one place that knows how to switch symbols, not several
+  // slightly-different copies. loadChart() itself already calls _updateChatContext()
+  // at the end, so callers don't need their own extra call.
+  function _selectSymbol(symbol, type) {
+    currentSymbol = symbol;
+    currentType = type;
+    drawings = loadDrawings(currentSymbol);
+    rsiDrawings = loadRsiDrawings(currentSymbol);
+    updateObjTree();
+    _syncDrawings(currentSymbol);
+    _subscribeDrawings(currentSymbol);
+    watchlistInner.querySelectorAll('.watchRow').forEach(r => r.classList.toggle('active', r.dataset.symbol === symbol));
+    clearChevTools();
+    return loadChart(currentSymbol, currentTf, currentType).then(startPolling);
+  }
+
+  // Quick topbar symbol jump — autocomplete dropdown of matching watchlist symbols
+  // (Task 1). The dropdown is a new addition; the underlying "type an arbitrary
+  // symbol and press Enter to jump anyway" behavior already existed and is kept as
+  // the fallback for anything typed that matches nothing in any watchlist group.
+  const qsInput    = document.getElementById('quickSearchInput');
+  const qsDropdown = document.getElementById('quickSearchDropdown');
+  let _qsMatches      = [];
+  let _qsSelectedIdx  = -1;
+
+  function _qsAllSymbols() {
+    // Reuses the SAME canonical watchlist data every other panel reads — never a
+    // second symbol list. Searches all three groups (crypto/forex/stocks), not just
+    // whichever tab is currently selected in the left sidebar.
+    return Object.values(groups).flat();
+  }
+
+  function _qsFilter(q) {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return [];
+    return _qsAllSymbols()
+      .filter(item => item.symbol.toLowerCase().includes(needle) || (item.label || '').toLowerCase().includes(needle))
+      .slice(0, 8);
+  }
+
+  function _qsRender() {
+    if (!qsDropdown) return;
+    if (!_qsMatches.length) {
+      qsDropdown.innerHTML = '<div class="qsEmpty">No matching symbol — press Enter to jump anyway</div>';
+    } else {
+      qsDropdown.innerHTML = _qsMatches.map((item, i) => `
+        <div class="qsItem${i === _qsSelectedIdx ? ' active' : ''}" data-idx="${i}">
+          <span class="qsItemSym">${item.label}</span>
+          <span class="qsItemType">${item.type}</span>
+        </div>
+      `).join('');
+      qsDropdown.querySelectorAll('.qsItem').forEach(el => {
+        // mousedown (not click) fires before the input's blur, so the dropdown is
+        // still in the DOM with its data intact when this handler reads it.
+        el.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          const item = _qsMatches[+el.dataset.idx];
+          _qsPick(item.symbol, item.type);
+        });
+      });
+    }
+    qsDropdown.classList.add('open');
+  }
+
+  function _qsClose() {
+    if (!qsDropdown) return;
+    qsDropdown.classList.remove('open');
+    qsDropdown.innerHTML = '';
+    _qsMatches = [];
+    _qsSelectedIdx = -1;
+  }
+
+  function _qsPick(symbol, type) {
+    qsInput.value = '';
+    _qsClose();
+    qsInput.blur();
+    _selectSymbol(symbol, type);
+  }
+
+  qsInput?.addEventListener('input', function() {
+    _qsMatches = _qsFilter(this.value);
+    _qsSelectedIdx = _qsMatches.length ? 0 : -1;
+    if (this.value.trim()) _qsRender(); else _qsClose();
+  });
+
+  qsInput?.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') { this.value = ''; _qsClose(); this.blur(); return; }
+    if (e.key === 'ArrowDown') {
+      if (!_qsMatches.length) return;
+      e.preventDefault();
+      _qsSelectedIdx = Math.min(_qsSelectedIdx + 1, _qsMatches.length - 1);
+      _qsRender();
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      if (!_qsMatches.length) return;
+      e.preventDefault();
+      _qsSelectedIdx = Math.max(_qsSelectedIdx - 1, 0);
+      _qsRender();
+      return;
+    }
     if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (_qsMatches.length) {
+      const item = _qsMatches[_qsSelectedIdx >= 0 ? _qsSelectedIdx : 0];
+      _qsPick(item.symbol, item.type);
+      return;
+    }
+    // Fallback: nothing in the dropdown matched — jump to the raw typed symbol
+    // anyway (existing behavior, preserved exactly).
     const raw = this.value.trim().toUpperCase();
     if (!raw) return;
     const sym = raw.includes('/') ? raw : raw.replace(/[^A-Z0-9]/g,'');
-    this.value = ''; this.blur();
-    currentSymbol = sym;
-    currentType = sym.endsWith('USDT') || sym.endsWith('BTC') ? 'crypto' : sym.includes('/') ? 'forex' : 'stock';
-    clearChevTools();
-    drawings = loadDrawings(currentSymbol); rsiDrawings = loadRsiDrawings(currentSymbol);
-    _syncDrawings(currentSymbol); _subscribeDrawings(currentSymbol);
-    updateObjTree();
-    watchlistInner.querySelectorAll('.watchRow').forEach(r => r.classList.remove('active'));
-    await loadChart(currentSymbol, currentTf, currentType);
-    startPolling();
-    _updateChatContext();
+    const type = sym.endsWith('USDT') || sym.endsWith('BTC') ? 'crypto' : sym.includes('/') ? 'forex' : 'stock';
+    this.value = ''; _qsClose(); this.blur();
+    _selectSymbol(sym, type);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (qsDropdown && qsDropdown.classList.contains('open') && !e.target.closest('#quickSearchWrap')) _qsClose();
   });
 
   async function refreshWatchlistPrices() {
@@ -163,7 +266,9 @@
         const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${symbolsParam}`);
         if (res.ok) {
           const data = await res.json();
-          data.forEach(t => applyWatchPrice(t.symbol, parseFloat(t.lastPrice), parseFloat(t.priceChangePercent)));
+          data.forEach(t => applyWatchPrice(t.symbol, parseFloat(t.lastPrice), parseFloat(t.priceChangePercent), {
+            high: parseFloat(t.highPrice), low: parseFloat(t.lowPrice), volume: parseFloat(t.volume), changeAbs: parseFloat(t.priceChange),
+          }));
         }
       } catch (e) {}
     }
@@ -176,7 +281,9 @@
         const data = await res.json();
         if (data.c) {
           const changePct = data.pc ? ((data.c - data.pc) / data.pc) * 100 : 0;
-          applyWatchPrice(item.symbol, data.c, changePct);
+          // PHASE 4 Task 2: Finnhub's /quote gives today's h/l but no volume --
+          // symbol-header.js falls back to a candle-derived volume estimate.
+          applyWatchPrice(item.symbol, data.c, changePct, { high: data.h, low: data.l, changeAbs: data.d });
         }
       } catch (e) {}
     }
@@ -235,7 +342,7 @@
   }
 
   const _lastPriceMap = {};
-  function applyWatchPrice(symbol, price, changePct) {
+  function applyWatchPrice(symbol, price, changePct, stats) {
     const pxEl = document.getElementById(`px-${cssId(symbol)}`);
     const chgEl = document.getElementById(`chg-${cssId(symbol)}`);
     if (!pxEl || !chgEl) return;
@@ -260,6 +367,13 @@
     _pushSpark(symbol, price);
     // Proximity alert
     _checkProximityAlert(symbol, price);
+    // PHASE 4 Task 2: forward 24h stats to the symbol header, but only for the
+    // symbol currently charted -- this fires for every row in the active
+    // watchlist tab, not just the one on screen. Forex has no `stats` (no 24h
+    // ticker source exists for it); symbol-header.js falls back to candles.
+    if (symbol === currentSymbol && window.updateSymbolHeaderStats) {
+      window.updateSymbolHeaderStats(Object.assign({ changePct }, stats));
+    }
   }
 
   addPairBtn.addEventListener('click', () => {

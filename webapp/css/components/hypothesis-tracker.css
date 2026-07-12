@@ -29,6 +29,7 @@
   font-size: 8px; background: var(--gold-dim); border: 1px solid rgba(212,175,55,0.25);
   color: var(--gold); border-radius: var(--r-pill); padding: 1px 7px; font-family: 'Inter', sans-serif;
 }
+.tradeSectionHeader .tsHeaderNote { margin-left: auto; font-size: 8px; color: var(--txt3); font-family: 'Inter', sans-serif; }
 
 /* Watchlist search */
 #watchlistSearch {
@@ -214,6 +215,7 @@
 /* Quick topbar symbol search */
 #quickSearchWrap { position: relative; display: inline-flex; align-items: center; flex-shrink: 0; }
 #quickSearchIcon { position: absolute; left: 8px; color: var(--txt3); font-size: 10px; pointer-events: none; user-select: none; }
+#quickSearchIcon .icon { width: 11px; height: 11px; }
 #quickSearchInput {
   background: var(--s1); border: 1px solid var(--border); color: var(--txt1);
   border-radius: var(--r-md); padding: 5px 10px 5px 24px; font-size: 10px;
@@ -222,6 +224,23 @@
 }
 #quickSearchInput:focus { border-color: rgba(41,98,255,0.4); width: 120px; box-shadow: 0 0 0 3px rgba(41,98,255,0.08); color: #fff; }
 #quickSearchInput::placeholder { color: var(--txt3); }
+/* PHASE 2, Task 1: quick-search autocomplete dropdown -- Phase 1 card tokens. */
+#quickSearchDropdown {
+  display: none; position: absolute; top: 100%; left: 0; margin-top: 4px;
+  min-width: 190px; max-height: 260px; overflow-y: auto;
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius);
+  box-shadow: var(--shadow-md); z-index: 200; padding: var(--pad-s) 0;
+}
+#quickSearchDropdown.open { display: block; }
+.qsItem {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--pad-m);
+  padding: var(--pad-s) var(--pad-m); font-size: 11px; font-family: 'Inter', sans-serif;
+  color: var(--txt1); cursor: pointer;
+}
+.qsItem:hover, .qsItem.active { background: rgba(41,98,255,0.14); }
+.qsItemSym { font-weight: 600; }
+.qsItemType { font-size: 9px; color: var(--txt3); text-transform: uppercase; letter-spacing: 0.05em; }
+.qsEmpty { padding: var(--pad-s) var(--pad-m); font-size: 10.5px; color: var(--txt3); font-style: italic; }
 
 /* ===== COMMAND PALETTE (Ctrl+K) ===== */
 #cmdPaletteOverlay {

@@ -93,6 +93,22 @@
 .ctxBody { padding:10px 12px; }
 .ctxRow { display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:10px; color:#787b86; }
 .ctxRow label { min-width:40px; color:#5d6068; }
+/* PHASE 1 FOUNDATION: the Templates row is the one .ctxRow that stacks its label above
+   a name+save input row instead of sitting inline -- was two inline styles, now a
+   modifier + a small local row class. */
+.ctxRow.ctxRowStack { flex-direction: column; align-items: stretch; gap: 4px; }
+.ctxTplLabel { margin-bottom: 2px; }
+.ctxTplRow { display: flex; gap: 4px; }
+#ctxTplName {
+  flex: 1; background: #0c0e15; border: 1px solid #2a2e39; color: #d1d4dc;
+  padding: 3px 6px; border-radius: 3px; font-size: 10px; font-family: inherit; outline: none;
+}
+#ctxTplSave {
+  background: #1e222d; border: 1px solid #2a2e39; color: #787b86;
+  padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 10px;
+  font-family: inherit; white-space: nowrap;
+}
+#ctxTplList { display: flex; flex-wrap: wrap; gap: 3px; min-height: 12px; }
 #ctxColors { display:flex; gap:4px; flex-wrap:wrap; }
 #analysisToast {
   display:none; position:absolute; bottom:44px; left:12px;

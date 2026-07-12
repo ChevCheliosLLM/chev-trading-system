@@ -10,6 +10,15 @@
     _rp.style.overflow = 'hidden';
     _rp.style.transition = 'width 0.18s ease';
     var _rpOpen = false;
+    // PHASE 2 bug fix: #arsenalToggleBtn's "active" state must reflect "panel open AND
+    // showing Layers" from every path that can change either half of that (open/close,
+    // or switching tabs while already open) — centralized here as the single sync point
+    // instead of duplicated in each caller, so it can't drift out of sync.
+    function _syncArsenalBtnState() {
+      var _layersTab = document.querySelector('#intelTabBar [data-tab="layers"]');
+      var _arsenalBtn = document.getElementById('arsenalToggleBtn');
+      if (_arsenalBtn) _arsenalBtn.classList.toggle('active', _rpOpen && !!(_layersTab && _layersTab.classList.contains('active')));
+    }
     window._toggleChevPanel = function() {
       _rpOpen = !_rpOpen;
       _rp.style.width = _rpOpen ? '420px' : '0px';
@@ -27,6 +36,7 @@
         if (window.syncRsiCanvasSize) window.syncRsiCanvasSize();
         if (window._syncRsiAxisWidth) window._syncRsiAxisWidth();
       }, 220);
+      _syncArsenalBtnState();
     };
     _rt.addEventListener('click', window._toggleChevPanel);
     var _intelClose = document.getElementById('intelCloseBtn');
@@ -71,6 +81,7 @@
           /* Weight Lab moved to the Strategy panel's own tab (2026-07-13) —
              see drawing.js's stratTab click wiring, not triggered from here. */
         }
+        _syncArsenalBtnState();
       });
     });
   }

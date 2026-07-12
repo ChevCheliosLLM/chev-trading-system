@@ -1,0 +1,26 @@
+/* ============================================================
+   PHASE 4 Task 1: #toolRail — vertical drawing-tool rail docked between
+   #leftPanel and #chartColumn, inside the #body flex row (a real flex
+   sibling, not position:fixed) so it reflows naturally and is never
+   covered when the watchlist sidebar opens/closes.
+   Buttons reuse the existing .pill/.iconBtn/.drawTool classes verbatim —
+   only this wrapper and the vertical-specific bits below are new. --icon-s
+   and --btn-h are redefined locally (CSS custom properties cascade to
+   descendants) so rail icons/buttons come out larger (brief: 18px+) than
+   the topbar's, without touching those tokens' global values elsewhere.
+   ============================================================ */
+#toolRail {
+  --icon-s: 18px;
+  --btn-h: 34px;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px; width: 44px; flex-shrink: 0; padding: 8px 0;
+  background: var(--s0); border-right: 1px solid rgba(255,255,255,0.04);
+  overflow-y: auto; overflow-x: hidden;
+}
+#toolRail .pill {
+  width: var(--btn-h); height: var(--btn-h);
+  display: flex; align-items: center; justify-content: center; padding: 0;
+}
+/* Horizontal .drawSep rotated for a vertical rail — same visual language
+   (thin divider between tool groups), different axis. */
+.toolRailSep { width: 20px; height: 1px; background: rgba(255,255,255,0.06); margin: 4px 0; flex-shrink: 0; }

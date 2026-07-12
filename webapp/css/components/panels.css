@@ -11,13 +11,18 @@
   font-family: 'Inter', sans-serif; font-weight: 700;
 }
 .sectionHeader:first-child { border-top: none; }
+.sidebarToggle { cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
+#watchlistArrow { font-size: 9px; opacity: 0.5; }
 
 #groupTabs {
   display: flex; padding: 6px 8px 0; gap: 0;
   border-bottom: 1px solid rgba(255,255,255,0.05);
 }
 .groupTab {
-  flex: 1; text-align: center; padding: 5px 0 6px; font-size: 9px; color: var(--txt3);
+  /* PHASE 4 Task 3: rem, not px -- tab labels participate in the UI density
+     setting (data-density on <html> scales the root font-size these are
+     relative to; see variables.css). 9px was today's Compact value: 9/16rem. */
+  flex: 1; text-align: center; padding: 5px 0 6px; font-size: 0.5625rem; color: var(--txt3);
   cursor: pointer; border-bottom: 2px solid transparent;
   font-family: 'Share Tech Mono', monospace; font-weight: 400;
   letter-spacing: 0.08em; text-transform: uppercase;
@@ -42,6 +47,9 @@
 .chatListDel:hover { color: #f23645; background: rgba(242,54,69,0.12); }
 
 #chatHeader { display: flex; align-items: center; justify-content: space-between; padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 10px; color: var(--txt2); font-family: 'Inter', sans-serif; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0; }
+.chatHeaderTitleStack { display: flex; flex-direction: column; gap: 1px; }
+.chatBrandTitle { font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 13px; color: #d4af37; letter-spacing: 0.08em; }
+.chatBrandSub { font-size: 8px; color: #3a3d4d; font-family: 'Share Tech Mono', monospace; letter-spacing: 0.06em; }
 #chatMain { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 #chatMessages { flex: 1; overflow-y: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 12px; }
 .msg { display: flex; flex-direction: column; }
@@ -87,21 +95,33 @@
 
 /* ===== RIGHT PANEL — 4-tab INTEL ===== */
 #rightPanel.open { width: 420px; }
+#intelHeader { display: flex; flex-direction: column; flex-shrink: 0; }
 #intelTabBar {
   display: flex; align-items: center; gap: 2px; flex-shrink: 0;
   background: var(--s0); padding: 6px 8px;
   border-bottom: 1px solid rgba(255,255,255,0.04);
 }
 .intelTab {
+  /* PHASE 4 Task 3: rem so this tab label scales with the density setting
+     (10px was today's Compact value: 10/16rem). */
   flex: 1; display: flex; align-items: center; justify-content: center; gap: 3px;
-  font-size: 10px; color: var(--txt2); cursor: pointer;
+  font-size: 0.625rem; color: var(--txt2); cursor: pointer;
   padding: 5px 4px; border-radius: var(--r-sm); border-bottom: none;
   transition: all 0.15s; font-weight: 500; font-family: 'Inter', sans-serif;
   letter-spacing: 0.01em;
 }
 .intelTab:hover { background: var(--s2); color: var(--txt1); }
 .intelTab.active { background: rgba(212,175,55,0.1); color: var(--gold); }
-.intelTab.active img { opacity: 1 !important; filter: drop-shadow(0 0 4px rgba(212,175,55,0.5)); }
+/* PHASE 3: was `.intelTab.active img` — every tab icon is now an <svg> (the Lucide
+   sprite), so this needs to match svg too, or the active tab's icon glow silently
+   stops working. */
+.intelTab.active svg { opacity: 1 !important; filter: drop-shadow(0 0 4px rgba(212,175,55,0.5)); }
+/* `.intelTab svg` (below) sizes the Layers tab's own wide, non-square custom
+   Arsenal mark by aspect ratio. The three Lucide icons (Trades/Engine/Chat) carry
+   `.intelTabIcon` too, which needs to win over that generic rule — bumped via an
+   extra `svg` type selector rather than !important. */
+.intelTab svg.intelTabIcon { width: 12px; height: 12px; margin-right: 3px; opacity: 0.7; }
+.intelTab svg { height: 10px; width: auto; margin-right: 3px; vertical-align: middle; opacity: 0.8; }
 #intelCloseBtn {
   padding: 0 8px; background: none; border: none; cursor: pointer;
   color: var(--txt2); font-size: 13px; flex-shrink: 0; display: flex; align-items: center;
@@ -122,14 +142,48 @@
   background: var(--gold-dim); border: 1px solid rgba(212,175,55,0.25);
   color: var(--gold); font-family: 'Inter', sans-serif; font-weight: 700; font-size: 12px;
   letter-spacing: 0.05em; padding: 9px 16px; border-radius: var(--r-md);
-  cursor: pointer; transition: all 0.15s;
+  cursor: pointer; transition: all 0.15s; flex: 1;
 }
 #runDexterBtn:hover { border-color: var(--gold); background: rgba(212,175,55,0.18); box-shadow: var(--glow-gold); }
 #runDexterBtn:disabled { opacity: 0.4; cursor: not-allowed; }
 #engineOverlayToggles {
-  display: none; flex-wrap: wrap; gap: 6px;
+  display: none; flex-wrap: wrap; gap: 6px; padding: 6px 12px;
   border-top: 1px solid rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.05);
 }
+/* PHASE 1 FOUNDATION: engine context bar (symbol/TF/last-run) — was a bare inline-styled
+   div; now a named class so it can be reasoned about the same way every other component is. */
+.engineContextBar {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px 7px;
+  border-bottom: 1px solid rgba(255,255,255,0.05); flex-shrink: 0; background: var(--s0);
+}
+#engineContextSym { font-family: 'Inter', sans-serif; font-size: 13px; color: var(--gold); font-weight: 700; letter-spacing: 0.04em; }
+.engineContextSep { color: var(--border2); }
+#engineContextTf { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--txt2); }
+#engineLastRun { margin-left: auto; font-family: 'Inter', sans-serif; font-size: 8px; color: var(--txt3); }
+.engineContextBar .icon { width: 14px; height: 14px; opacity: 0.8; }
+.engineRunRow { display: flex; gap: 8px; align-items: center; padding: 10px 12px 4px; flex-shrink: 0; }
+.runDexterIcon { width: 15px; height: 15px; margin-right: 6px; opacity: 0.9; vertical-align: middle; }
+#engineStatus img { width: 13px; height: 13px; opacity: 0.5; }
+#engineStatus b { color: var(--txt2); }
+#engineStatus {
+  font-size: 10px; font-family: 'Inter', sans-serif; text-align: center; padding: 3px 12px 6px;
+  display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--txt3); flex-shrink: 0;
+}
+/* #hypHistorySection's own `display:none`/'' toggle is written at runtime by engine.js
+   (loadHypothesisHistory) — that one property stays inline on purpose; everything else
+   about its box is static and belongs here. */
+#hypHistorySection { flex-shrink: 0; border-top: 1px solid rgba(255,255,255,0.05); padding: 0; }
+.hypHistoryHeader {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px 6px; font-size: 9px;
+  font-family: 'Inter', sans-serif; font-weight: 700; color: var(--txt3);
+  text-transform: uppercase; letter-spacing: 0.12em;
+}
+.hypHistoryHeader .icon { width: 12px; height: 12px; opacity: 0.7; }
+#clearHypHistory {
+  margin-left: auto; background: none; border: none; cursor: pointer;
+  font-size: 9px; color: var(--txt3); font-family: 'Inter', sans-serif; padding: 0;
+}
+#radarScanBtn .icon { width: 13px; height: 13px; margin-right: 5px; opacity: 0.85; }
 .engChk {
   display: flex; align-items: center; gap: 4px; font-size: 9px;
   color: #787b86; font-family: 'Share Tech Mono', monospace;
@@ -138,7 +192,7 @@
 .engChk input { accent-color: #d4af37; cursor: pointer; width: 10px; height: 10px; }
 #engineReadout { display: none; flex-direction: column; gap: 8px; padding: 10px; flex-shrink: 0; }
 .engineBlock {
-  background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius);
   padding: 10px 12px; flex-shrink: 0;
 }
 .engineBlockTitle {
@@ -179,6 +233,8 @@
   color: var(--gold); letter-spacing: 0.08em;
 }
 .layersBrandSub { font-family: 'Share Tech Mono', monospace; font-size: 8px; color: rgba(212,175,55,0.3); margin-top: 2px; }
+.layersBrandSub .icon { width: 10px; height: 10px; margin-right: 2px; opacity: 0.7; }
+.layersBrand-logo { height: 26px; width: auto; opacity: 0.85; }
 #layersList { flex: 1; overflow-y: auto; padding: 6px 0; }
 .layerRow {
   display: flex; align-items: center; padding: 7px 14px; border-bottom: 1px solid rgba(255,255,255,0.04);
@@ -211,7 +267,22 @@
 /* Was background:#1a1c38 — nearly identical to the default, so "on" was barely
    distinguishable from "off" (2026-07-05 fix: a real gold tint + glow). */
 .layerToolBtn.active { background: rgba(212,175,55,0.14); box-shadow: inset 0 0 0 1px rgba(212,175,55,0.3); }
+/* PHASE 1 FOUNDATION: the three dropdown-arrow tool rows (Fib/RSI/Trendline) need
+   position:relative to anchor their arrow's popup — was repeated as an inline style
+   on each; now one modifier class. */
+.layerToolBtn.hasDropdown { position: relative; }
+.ltbDrop { display: flex; align-items: center; gap: 2px; }
+.ltbArrow { font-size: 9px; color: #5d6068; cursor: pointer; }
 .toolDot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+/* Per-tool accent color, keyed off each tool's own card id (was inline background
+   on the dot itself — same seven colors, now named to their tool instead of repeated). */
+#lyrSrCard .toolDot  { background: #f23645; }
+#lyrVpCard .toolDot  { background: #2962ff; }
+#lyrAtrCard .toolDot { background: #9598a1; }
+#lyrFibCard .toolDot { background: #d4af37; }
+#lyrRsiCard .toolDot { background: #9b59b6; }
+#lyrPatCard .toolDot { background: #26c6da; }
+#lyrTlCard .toolDot  { background: #ff9800; }
 /* Hide/show checkbox per tool row (added 2026-07-05) — brought over from the old
    #layersList's per-layer checkbox now that that list is gone. Disabled (and
    visually dimmed via :disabled) until that tool actually has something to hide,
@@ -253,6 +324,16 @@
 #tsbNetPnl.neg { color: var(--red); }
 #tsbNetPnl.flat { color: var(--txt2); }
 .tsbSep { width: 1px; height: 24px; background: rgba(255,255,255,0.06); flex-shrink: 0; margin: 0 2px; }
+#resetBalance {
+  background: rgba(242,54,69,0.06); border: 1px solid rgba(242,54,69,0.2); color: var(--red);
+  padding: 3px 8px; border-radius: var(--r-pill); cursor: pointer; font-size: 9px;
+  font-family: 'Inter', sans-serif; display: inline-flex; align-items: center; gap: 3px;
+  transition: all 0.15s;
+}
+/* PHASE 6 Task 1: was the one button on this page with no hover feedback at all. */
+#resetBalance:hover { background: rgba(242,54,69,0.14); border-color: rgba(242,54,69,0.4); }
+#resetBalance .icon { width: 12px; height: 12px; opacity: 0.8; }
+#janeBalanceLabel { font-size: 9px; color: var(--gold); font-family: monospace; opacity: 0.8; margin-left: 6px; }
 
 /* ===== BRAIN STATE BANNER ===== */
 #brainStateBanner {
@@ -273,7 +354,7 @@
   display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px;
 }
 .radarCard {
-  background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius);
   padding: 9px 10px; transition: all 0.12s; cursor: pointer;
 }
 .radarCard:hover { background: var(--s2); border-color: rgba(212,175,55,0.3); }

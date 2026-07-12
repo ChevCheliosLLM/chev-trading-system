@@ -1,0 +1,26 @@
+/* ============================================================
+   PHASE 4 Task 2: #symbolHeader — symbol name, live price, 24h change,
+   small muted 24h high/low/volume stats, across the top of the chart area.
+   ============================================================ */
+#symbolHeader {
+  display: flex; align-items: baseline; gap: 14px; flex-shrink: 0;
+  padding: 8px 14px; border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-family: 'Inter', sans-serif;
+}
+#symHeaderName { font-size: 15px; font-weight: 700; color: var(--txt1); letter-spacing: 0.02em; }
+#symHeaderPrice { font-size: 15px; font-weight: 700; color: var(--txt1); font-family: 'Share Tech Mono', monospace; }
+#symHeaderChangePct, #symHeaderChangeAbs {
+  font-size: 11.5px; font-weight: 600; font-family: 'Share Tech Mono', monospace;
+}
+#symHeaderChangePct.up, #symHeaderChangeAbs.up { color: var(--green); }
+#symHeaderChangePct.down, #symHeaderChangeAbs.down { color: var(--red); }
+.symHeaderStats { display: flex; gap: 12px; margin-left: auto; }
+.symHeaderStat {
+  font-size: 10px; color: var(--txt3); font-family: 'Share Tech Mono', monospace;
+  white-space: nowrap;
+}
+.symHeaderStat b { color: var(--txt2); font-weight: 600; }
+/* Shown next to a stat when it's derived from visible chart candles rather than
+   a true 24h ticker feed (forex has no 24h ticker; also used briefly before the
+   first crypto/stock ticker tick arrives) — see js/ui/symbol-header.js. */
+.symHeaderEstFlag { cursor: help; opacity: 0.6; margin-left: 2px; }

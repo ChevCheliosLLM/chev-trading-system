@@ -21,6 +21,7 @@
 .arsenal-brand {
   display: flex; align-items: center; gap: 10px;
 }
+.arsenal-brand-logo { height: 20px; width: auto; opacity: 0.75; flex-shrink: 0; }
 .arsenal-brand-title {
   font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 13px;
   color: #d4af37; letter-spacing: 0.14em; line-height: 1;
@@ -29,13 +30,14 @@
   font-family: 'Share Tech Mono', monospace; font-size: 8.5px;
   color: rgba(212,175,55,0.35); letter-spacing: 0.04em; line-height: 1;
 }
+.arsenal-brand-sep { width: 1px; height: 12px; background: rgba(212,175,55,0.2); margin: 0 2px; flex-shrink: 0; }
 .arsenal-tools {
   display: flex; gap: 7px; align-items: flex-start; flex-wrap: nowrap;
 }
 .arsenal-card {
   display: flex; flex-direction: column; align-items: center;
-  background: #13152a; border: 1px solid #252840;
-  border-radius: 6px; padding: 6px 10px 5px;
+  background: var(--card-bg); border: 1px solid var(--card-border);
+  border-radius: var(--card-radius); padding: var(--pad-s) var(--pad-m) 5px;
   min-width: 70px; cursor: pointer; position: relative;
   transition: border-color 0.15s, background 0.15s;
 }

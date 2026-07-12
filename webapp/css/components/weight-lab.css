@@ -15,4 +15,8 @@
 #weightLabBody .wlApproveBtn:hover { filter: brightness(1.15); }
 #weightLabBody .wlApproveBtn:disabled,
 #weightLabBody .wlUndoBtn:disabled { opacity: 0.5; cursor: default; }
+#weightLabRefreshBtn {
+  margin-left: auto; background: none; border: none; cursor: pointer;
+  font-size: 11px; color: var(--txt3); padding: 0 4px;
+}
 #weightLabRefreshBtn:hover { color: var(--gold); }

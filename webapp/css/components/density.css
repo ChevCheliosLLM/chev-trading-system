@@ -1,0 +1,21 @@
+/* ============================================================
+   PHASE 4 Task 3: UI density control -- #densityBtn (topbar row 1, far
+   right) + #densityPopover, a tiny dropdown of the three density options.
+   ============================================================ */
+#densityPopover {
+  /* position:fixed + JS-set left/top (from the button's own bounding rect,
+     via js/ui/density.js) -- same convention as #emaDropdown in chart.css. */
+  display: none; position: fixed; z-index: 9999;
+  background: var(--card-bg); border: 1px solid var(--card-border);
+  border-radius: var(--card-radius); box-shadow: var(--shadow-md);
+  padding: var(--pad-s); flex-direction: column; gap: 2px; min-width: 120px;
+}
+#densityPopover.open { display: flex; }
+.densityOpt {
+  background: transparent; border: none; color: var(--txt2);
+  font-family: 'Inter', sans-serif; font-size: 0.6875rem; text-align: left;
+  padding: var(--pad-s) var(--pad-m); border-radius: var(--r-xs); cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.densityOpt:hover { background: rgba(255,255,255,0.06); color: var(--txt1); }
+.densityOpt.active { background: rgba(212,175,55,0.12); color: var(--gold); }

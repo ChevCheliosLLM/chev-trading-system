@@ -1,0 +1,38 @@
+/* ============================================================
+   PHASE 6 Task 3: #tradePnlCard — click a live trade's entry line on the
+   chart to toggle this. Same JS-positioned position:fixed popup convention
+   as #emaDropdown/#densityPopover (left/top set from the click point, not
+   a fixed corner). Read-only: no controls that change the live trade ever
+   belong here, on purpose.
+   ============================================================ */
+#tradePnlCard {
+  display: none; position: fixed; z-index: 9999;
+  min-width: 180px;
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius);
+  box-shadow: var(--shadow-md); font-family: 'Inter', sans-serif;
+}
+#tradePnlCard.open { display: block; }
+#tpcHeader {
+  display: flex; align-items: center; gap: 6px; padding: var(--pad-s) var(--pad-m);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+#tpcDirection {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.04em; padding: 1px 7px;
+  border-radius: var(--r-pill);
+}
+#tpcDirection.long  { color: var(--green); background: rgba(8,153,129,0.12); }
+#tpcDirection.short { color: var(--red); background: rgba(242,54,69,0.12); }
+#tpcSymbol { font-size: 12px; font-weight: 700; color: var(--txt1); flex: 1; }
+#tpcCloseBtn {
+  background: none; border: none; color: var(--txt3); cursor: pointer;
+  padding: 1px; display: flex; align-items: center; border-radius: var(--r-xs); flex-shrink: 0;
+}
+#tpcCloseBtn:hover { color: var(--red); }
+.tpcRow {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 5px var(--pad-m); font-size: 11px; color: var(--txt2);
+  font-family: 'Share Tech Mono', monospace;
+}
+.tpcRow span:last-child { color: var(--txt1); font-weight: 600; }
+.tpcRow span:last-child.up   { color: var(--green); }
+.tpcRow span:last-child.down { color: var(--red); }

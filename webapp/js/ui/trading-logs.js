@@ -184,11 +184,20 @@
       if (match) {
         const newSl = parseFloat(match.sl) || null, newTp = parseFloat(match.tp) || null, newEntry = parseFloat(match.entry) || null;
         const newIsSip = match.is_sip || false;
+        // PHASE 6 Task 3 bug fix: live_pnl was never refreshed here at all (only
+        // sl/tp/entry/is_sip were checked) -- it would stay frozen at whatever it
+        // was the moment this trade was first clicked. Updated every cycle,
+        // unconditionally, since it changes far more often than the price levels
+        // do; kept OUT of the change-check below so it doesn't trigger a full
+        // price-line redraw on every P&L tick (that redraw is only for genuine
+        // sl/tp/entry/is_sip changes).
+        _activeTrade.live_pnl = match.live_pnl;
         if (newSl !== _activeTrade.sl || newTp !== _activeTrade.tp || newEntry !== _activeTrade.entry || newIsSip !== _activeTrade.is_sip) {
           _activeTrade.sl = newSl; _activeTrade.tp = newTp; _activeTrade.entry = newEntry;
           _activeTrade.is_sip = newIsSip;
           _refreshTradeOverlayLines();
         }
+        if (window._updateTradePnlCard) window._updateTradePnlCard();
       }
     }
 

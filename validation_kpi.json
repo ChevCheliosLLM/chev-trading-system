@@ -1,0 +1,88 @@
+{
+  "generated_at": "2026-07-12 12:46:34",
+  "note": "Self-graded by Chev's own post-mortem QUALITY verdict \u2014 not an independent price-action check.",
+  "min_n": 5,
+  "assets": {
+    "crypto": {
+      "versions": {
+        "pre-stamp": {
+          "validated": 11,
+          "total": 48,
+          "rate": 0.229,
+          "window_start": "2026-06-30 21:27:27",
+          "window_end": "2026-07-12 12:46:34"
+        }
+      },
+      "trailing_50": {
+        "validated": 11,
+        "total": 48,
+        "rate": 0.229
+      },
+      "latest_version": {
+        "version": "pre-stamp",
+        "validated": 11,
+        "total": 48,
+        "rate": 0.229,
+        "window_start": "2026-06-30 21:27:27",
+        "window_end": "2026-07-12 12:46:34"
+      },
+      "previous_version": null,
+      "delta_pct_points": null,
+      "summary_text": "Crypto: Chev's reasoning checked out 23% of the time on this playbook \u2014 no prior playbook version has enough closed trades yet to compare against."
+    },
+    "forex": {
+      "versions": {
+        "pre-stamp": {
+          "validated": 3,
+          "total": 23,
+          "rate": 0.13,
+          "window_start": "2026-07-01 12:53:13",
+          "window_end": "2026-07-11 04:14:43"
+        }
+      },
+      "trailing_50": {
+        "validated": 3,
+        "total": 23,
+        "rate": 0.13
+      },
+      "latest_version": {
+        "version": "pre-stamp",
+        "validated": 3,
+        "total": 23,
+        "rate": 0.13,
+        "window_start": "2026-07-01 12:53:13",
+        "window_end": "2026-07-11 04:14:43"
+      },
+      "previous_version": null,
+      "delta_pct_points": null,
+      "summary_text": "Forex: Chev's reasoning checked out 13% of the time on this playbook \u2014 no prior playbook version has enough closed trades yet to compare against."
+    },
+    "stock": {
+      "versions": {
+        "pre-stamp": {
+          "validated": 2,
+          "total": 5,
+          "rate": 0.4,
+          "window_start": "2026-07-01 14:33:07",
+          "window_end": "2026-07-06 15:06:44"
+        }
+      },
+      "trailing_50": {
+        "validated": 2,
+        "total": 5,
+        "rate": 0.4
+      },
+      "latest_version": {
+        "version": "pre-stamp",
+        "validated": 2,
+        "total": 5,
+        "rate": 0.4,
+        "window_start": "2026-07-01 14:33:07",
+        "window_end": "2026-07-06 15:06:44"
+      },
+      "previous_version": null,
+      "delta_pct_points": null,
+      "summary_text": "Stocks: Chev's reasoning checked out 40% of the time on this playbook \u2014 no prior playbook version has enough closed trades yet to compare against."
+    }
+  }
+}

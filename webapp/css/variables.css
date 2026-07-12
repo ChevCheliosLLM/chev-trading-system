@@ -31,6 +31,46 @@
   --shadow-lg:  0 8px 32px rgba(0,0,0,0.6);
   --glow-gold:  0 0 20px rgba(212,175,55,0.15);
   --glow-blue:  0 0 20px rgba(41,98,255,0.2);
+  /* ===== PHASE 1 FOUNDATION: shared card + spacing + control tokens =====
+     These name the values every card/pill/toolbar icon already mostly agreed
+     on (see handoff.txt audit) so future components have one obvious place
+     to anchor instead of re-picking a radius/border/bg by eye. */
+  --card-radius: var(--r-md);
+  --card-border: var(--border);
+  --card-bg:     var(--s1);
+  --pad-s: 6px;
+  --pad-m: 10px;
+  --pad-l: 16px;
+  --btn-h:  26px;
+  --icon-s: 15px;
+}
+
+/* ============================================================
+   PHASE 4 Task 3: UI density. Three explicit value sets for the same
+   tokens above plus the root font-size that every rem-based component
+   font-size (topbar text, tab labels, watchlist rows, tool rail -- see
+   their own CSS files) scales from. The bare :root block above is left
+   untouched as the Compact set and the ultimate fallback if the density
+   script below never runs; js/ui/density.js sets data-density on <html>
+   from localStorage (default "comfortable" -- see the brief: today's
+   sizing becomes roughly Compact, Comfortable is the new, noticeably
+   larger default) before first paint via an inline <head> snippet, so
+   there's no flash of the wrong size.
+   ============================================================ */
+:root[data-density="compact"] {
+  font-size: 16px;
+  --btn-h: 26px; --icon-s: 15px;
+  --pad-s: 6px; --pad-m: 10px; --pad-l: 16px;
+}
+:root[data-density="comfortable"] {
+  font-size: 18px;
+  --btn-h: 30px; --icon-s: 17px;
+  --pad-s: 7px; --pad-m: 12px; --pad-l: 18px;
+}
+:root[data-density="large"] {
+  font-size: 20px;
+  --btn-h: 34px; --icon-s: 19px;
+  --pad-s: 8px; --pad-m: 14px; --pad-l: 20px;
 }
 
 * { box-sizing: border-box; }
