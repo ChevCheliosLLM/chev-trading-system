@@ -2,10 +2,18 @@
    WEIGHT LAB — Ridge-regression confluence tag weight proposals (Engine pane).
    Fetches /api/weight_proposal + /api/weight_overrides on Engine-pane first
    open (see panel-toggle.js's engine-tab branch), manual refresh via the
-   header's refresh icon, no polling. Approve/revert reuse the existing
+   header's refresh icon, no polling. Approve/revert/batch reuse the existing
    _apiFetch()/X-Chev-Key mechanism (webapp/js/config/state.js) — no separate
    auth flow. Tag display names reuse friendlyTag()/_loadTagRegistry()
    (webapp/js/ui/watchlist.js), same as every other tag-leaderboard render site.
+
+   HOT-RELOAD (2026-07-13): weight_overrides.json changes now go live within
+   one Dexter scan cycle (~5min), no restart — see dexter.py's
+   _reload_weight_overrides(). Every apply path (single approve, batch
+   approve, manual — weight-lab.js's Phase 3) goes through an in-panel
+   CONFIRM/CANCEL step first, backed by a server-side dry-run
+   (/api/weight_preview) so the numbers Kev confirms are the true post-clamp
+   values, never a client-side guess that could disagree with the server.
    ============================================================ */
 (function() {
   let _wlLoaded = false;
@@ -16,6 +24,7 @@
     ));
   }
   function fmtR(n) { return (n >= 0 ? '+' : '') + n.toFixed(2); }
+  function fmtNum(n) { return (n >= 0 ? '+' : '') + (Math.round(n * 100) / 100); }
 
   function _wlBody() { return document.getElementById('weightLabBody'); }
 
@@ -51,16 +60,134 @@
       margin-bottom:10px;line-height:1.5">${html}</div>`;
   }
 
+  // ── Server-side preview + in-panel confirm (shared by approve / approve-all
+  //    / manual). items: [{tag, delta}] or [{tag, new_value}]. Returns a
+  //    Promise<boolean> resolving true iff CONFIRM ran onConfirm without
+  //    throwing, false on cancel/backdrop-click/preview failure/onConfirm
+  //    error (error is already toasted in that case). ──
+  function _wlCloseConfirm() {
+    const el = document.getElementById('wlConfirmOverlay');
+    if (el) el.remove();
+  }
+
+  async function _wlPreview(items) {
+    const r = await _apiFetch('/api/weight_preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+    const d = await _wlSafeJson(r);
+    if (!d.ok) throw new Error(d.error || 'preview failed');
+    return d;
+  }
+
+  function _wlShowConfirm(items, onConfirm) {
+    return new Promise(async (resolve) => {
+      let preview;
+      try {
+        preview = await _wlPreview(items);
+      } catch (e) {
+        _showToast(`<span class="tBear">Weight Lab — ${esc(e.message)}</span>`, 6000);
+        resolve(false);
+        return;
+      }
+      _wlCloseConfirm();
+
+      const rows = preview.items.map(p => {
+        const clampNote = p.clamped
+          ? ` <span style="color:#f0b429" title="Server clamp engaged — the requested value was outside [0, 2×baseline+2]">(clamped from ${fmtNum(p.requested)})</span>`
+          : '';
+        return `<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;
+          font-family:'Share Tech Mono',monospace;font-size:11.5px;color:var(--txt1);
+          border-bottom:1px solid rgba(255,255,255,0.06)">
+          <span>${esc(typeof friendlyTag === 'function' ? friendlyTag(p.tag) : p.tag)}</span>
+          <span>${fmtNum(p.current_effective)}pt → <strong>${fmtNum(p.new_effective)}pt</strong>${clampNote}</span>
+        </div>`;
+      }).join('');
+
+      const overlay = document.createElement('div');
+      overlay.id = 'wlConfirmOverlay';
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+      overlay.innerHTML = `
+        <div style="background:var(--s2,#1c2030);border:1px solid rgba(212,175,55,0.4);border-radius:8px;
+             padding:18px;max-width:440px;width:100%;font-family:'Inter',sans-serif;color:var(--txt1);
+             box-shadow:0 8px 32px rgba(0,0,0,0.5)">
+          <div style="font-size:13px;font-weight:700;margin-bottom:10px">
+            Confirm ${preview.items.length > 1 ? preview.items.length + ' weight changes' : 'weight change'}</div>
+          <div>${rows}</div>
+          <div style="font-size:10.5px;color:#f0b429;margin-top:12px;line-height:1.5">
+            Freeze window resets — proposals pause until ~${preview.freeze_min_records} fresh records accumulate.
+          </div>
+          <div style="display:flex;gap:8px;margin-top:16px">
+            <button id="wlConfirmCancel" style="flex:1;padding:8px;border-radius:5px;cursor:pointer;
+              background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);color:var(--txt1);
+              font-family:'Share Tech Mono',monospace;font-size:11px;font-weight:700">CANCEL</button>
+            <button id="wlConfirmOk" style="flex:1;padding:8px;border-radius:5px;cursor:pointer;
+              background:rgba(212,175,55,0.15);border:1px solid var(--gold,#d4af37);color:var(--gold,#d4af37);
+              font-family:'Share Tech Mono',monospace;font-size:11px;font-weight:700">CONFIRM</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+
+      const finish = (result) => { _wlCloseConfirm(); resolve(result); };
+      document.getElementById('wlConfirmCancel').addEventListener('click', () => finish(false));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+      document.getElementById('wlConfirmOk').addEventListener('click', async () => {
+        const okBtn = document.getElementById('wlConfirmOk');
+        okBtn.disabled = true;
+        okBtn.textContent = '…';
+        try {
+          await onConfirm();
+          finish(true);
+        } catch (e) {
+          _showToast(`<span class="tBear">Weight Lab — ${esc(e.message)}</span>`, 6000);
+          finish(false);
+        }
+      });
+    });
+  }
+
   async function _wlApprove(tag, delta, evidence, btn) {
     btn.disabled = true;
-    try {
+    const confirmed = await _wlShowConfirm([{ tag, delta }], async () => {
       const r = await _apiFetch('/api/weight_proposal/approve', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tag, delta, evidence }),
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || 'approve failed');
-      _showToast(`<span>Weight Lab — ${esc(friendlyTag(tag))} queued (${delta > 0 ? '+' : ''}${delta}pt). Restart Dexter to arm it.</span>`, 6000);
+      _showToast(`<span>Weight Lab — ${esc(friendlyTag(tag))} queued (${delta > 0 ? '+' : ''}${delta}pt) — live within one scan cycle, no restart needed.</span>`, 6000);
+      loadWeightLab(true);
+    });
+    if (!confirmed) btn.disabled = false;
+  }
+
+  async function _wlApproveAll(rows, btn) {
+    btn.disabled = true;
+    const items = rows.map(p => ({ tag: p.tag, delta: p.proposed_delta }));
+    const confirmed = await _wlShowConfirm(items, async () => {
+      const r = await _apiFetch('/api/weight_proposal/approve_batch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: rows.map(p => ({ tag: p.tag, delta: p.proposed_delta, evidence: { n: p.n, coef: p.coef, ci: p.ci } })),
+        }),
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || 'batch approve failed');
+      let msg = `Weight Lab — ${d.approved.length} tag(s) queued, live within one scan cycle.`;
+      if (d.rejected.length) msg += ` ${d.rejected.length} skipped: ${d.rejected.map(x => x.tag).join(', ')}.`;
+      _showToast(`<span>${esc(msg)}</span>`, 7000);
+      loadWeightLab(true);
+    });
+    if (!confirmed) btn.disabled = false;
+  }
+
+  async function _wlMarkReviewed(btn) {
+    btn.disabled = true;
+    try {
+      const r = await _apiFetch('/api/weight_proposal/mark_reviewed', { method: 'POST' });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || 'failed');
+      _showToast(`<span>Weight Lab — marked reviewed.</span>`, 3000);
       loadWeightLab(true);
     } catch (e) {
       _showToast(`<span class="tBear">Weight Lab — ${esc(e.message)}</span>`, 6000);
@@ -77,7 +204,7 @@
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || 'revert failed');
-      _showToast(`<span>Weight Lab — change reverted.</span>`, 4000);
+      _showToast(`<span>Weight Lab — change reverted, reverts to baseline within one scan cycle.</span>`, 4000);
       loadWeightLab(true);
     } catch (e) {
       _showToast(`<span class="tBear">Weight Lab — ${esc(e.message)}</span>`, 6000);
@@ -93,13 +220,43 @@
       const e = entries[i];
       return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;
         font-family:'Share Tech Mono',monospace;font-size:11px">
-        <span style="flex:1">${esc(friendlyTag(e.tag))} ${e.delta > 0 ? '+' : ''}${e.delta}pt</span>
+        <span style="flex:1">${esc(friendlyTag(e.tag))} ${e.delta > 0 ? '+' : ''}${e.delta}pt
+          ${e.source === 'manual' ? '<span style="opacity:0.6">(manual)</span>' : ''}</span>
         <button class="wlUndoBtn" data-index="${i}" style="background:none;
           border:1px solid rgba(240,180,41,0.4);color:#f0b429;border-radius:4px;
           font-size:10px;padding:2px 8px;cursor:pointer">undo</button>
       </div>`;
     }).join('');
-    return _wlBanner('warn', `⚠ ${pendingIdx.length} approved change(s) NOT yet live — restart Dexter to arm them.<div style="margin-top:6px">${rows}</div>`);
+    return _wlBanner('warn', `⚠ ${pendingIdx.length} approved change(s) not yet live — takes effect within one scan cycle (~5 min), no restart needed.<div style="margin-top:6px">${rows}</div>`);
+  }
+
+  function _wlDigestHeader(verifiedRows, lastReviewedAt) {
+    if (verifiedRows.length < 2) return '';
+    const reviewedLine = lastReviewedAt
+      ? `since your last review (${esc(lastReviewedAt)} UTC)`
+      : `— no review recorded yet`;
+    const tableRows = verifiedRows.map(p => `
+      <div style="display:flex;justify-content:space-between;gap:8px;font-family:'Share Tech Mono',monospace;
+        font-size:10.5px;padding:2px 0;color:var(--txt2)">
+        <span>${esc(friendlyTag(p.tag))}</span>
+        <span>n=${p.n} · ${fmtR(p.coef)}R · ${p.current_weight}→${p.effective_weight_preview}pt</span>
+      </div>`).join('');
+    return `
+      <div style="border:1px solid var(--gold,#d4af37);border-radius:6px;padding:12px;margin-bottom:12px;
+           background:rgba(212,175,55,0.06)">
+        <div style="font-family:'Inter',sans-serif;font-size:12.5px;font-weight:700;color:var(--gold,#d4af37)">
+          📋 Weekly digest — ${verifiedRows.length} verified proposals ${reviewedLine}</div>
+        <div style="margin-top:8px">${tableRows}</div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button id="wlApproveAllBtn" style="flex:1;padding:6px;border-radius:5px;cursor:pointer;
+            background:rgba(212,175,55,0.15);border:1px solid var(--gold,#d4af37);color:var(--gold,#d4af37);
+            font-family:'Share Tech Mono',monospace;font-size:11px;font-weight:700">
+            APPROVE ALL ${verifiedRows.length}</button>
+          <button id="wlMarkReviewedBtn" style="padding:6px 10px;border-radius:5px;cursor:pointer;
+            background:none;border:1px solid rgba(255,255,255,0.15);color:var(--txt3);
+            font-family:'Inter',sans-serif;font-size:10.5px">mark reviewed</button>
+        </div>
+      </div>`;
   }
 
   function _wlProposalCard(p) {
@@ -162,7 +319,7 @@
         </div>
         ${unmappedNote}
         <div style="font-size:9px;color:var(--txt3);margin-top:6px;font-family:'Inter',sans-serif">
-          Proposal only. Nothing changes until you approve AND restart Dexter.</div>
+          Proposal only. Nothing changes until you approve — live within one scan cycle after that.</div>
       </div>`;
   }
 
@@ -182,7 +339,166 @@
       </details>`;
   }
 
-  function _wireCardButtons(root) {
+  // ── PHASE 3: Manual override editor — deliberately quiet, bottom of panel,
+  //    collapsed by default. Not competing with the evidence cards: no
+  //    evidence, no advice, no agreement flags here — this mode is Kev's
+  //    judgment by definition. Rides on the same _wlShowConfirm/preview
+  //    infrastructure the proposal paths use. ──
+  let _wlLastProposalPayload = null;  // most-recently successfully-served /api/weight_proposal
+                                       // `proposals` array — the manual editor's FYI line reads
+                                       // ONLY from this cache, never a fresh fetch (Pin 2).
+  let _wlManualTagsCache = null;       // /api/weight_manual/tags response, fetched lazily on first open
+  let _wlManualSelected = null;        // currently selected tag object
+
+  function _wlManualSectionHtml() {
+    return `
+      <details id="wlManualDetails" style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:10px">
+        <summary style="font-family:'Inter',sans-serif;font-size:11px;color:var(--txt3);cursor:pointer;user-select:none">
+          ✎ Manual adjustment</summary>
+        <div style="margin-top:10px">
+          <input id="wlManualSearch" type="text" placeholder="search tag (name or code)..."
+            style="width:100%;box-sizing:border-box;padding:6px 8px;border-radius:5px;
+              background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.12);
+              color:var(--txt1);font-family:'Inter',sans-serif;font-size:11px" />
+          <div id="wlManualList" style="max-height:150px;overflow-y:auto;margin-top:6px"></div>
+          <div id="wlManualEditor" style="display:none;margin-top:10px;padding-top:10px;
+            border-top:1px solid rgba(255,255,255,0.08)">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span id="wlManualEditorName" style="font-family:'Inter',sans-serif;font-size:12px;
+                font-weight:600;color:var(--txt1)"></span>
+              <span id="wlManualEditorRange" style="font-family:'Share Tech Mono',monospace;
+                font-size:10px;color:var(--txt3)"></span>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+              <input id="wlManualValue" type="number" step="0.5" style="width:80px;padding:5px 8px;
+                border-radius:5px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.15);
+                color:var(--txt1);font-family:'Share Tech Mono',monospace;font-size:12px" />
+              <button id="wlManualSetBtn" style="padding:6px 14px;border-radius:5px;cursor:pointer;
+                background:rgba(212,175,55,0.12);border:1px solid var(--gold,#d4af37);color:var(--gold,#d4af37);
+                font-family:'Share Tech Mono',monospace;font-size:11px;font-weight:700">SET</button>
+            </div>
+            <div id="wlManualFyi" style="font-family:'Inter',sans-serif;font-size:10px;color:var(--txt3);margin-top:6px"></div>
+          </div>
+        </div>
+      </details>`;
+  }
+
+  function _wlManualRenderList(filterText) {
+    const listEl = document.getElementById('wlManualList');
+    if (!listEl || !_wlManualTagsCache) return;
+    const q = (filterText || '').trim().toLowerCase();
+    const rows = _wlManualTagsCache.filter(t =>
+      !q || t.tag.toLowerCase().includes(q) || (t.name || '').toLowerCase().includes(q));
+    listEl.innerHTML = rows.slice(0, 40).map(t => `
+      <div class="wlManualTagRow" data-tag="${esc(t.tag)}" style="display:flex;justify-content:space-between;
+        gap:8px;padding:4px 6px;cursor:pointer;border-radius:4px;font-family:'Share Tech Mono',monospace;
+        font-size:10.5px;color:var(--txt2)">
+        <span>${esc(t.name)} <span style="opacity:0.5">(${esc(t.tag)})</span></span>
+        <span>${fmtNum(t.current_effective)}pt</span>
+      </div>`).join('') || `<div style="font-size:10.5px;color:var(--txt3);padding:4px">no match</div>`;
+    listEl.querySelectorAll('.wlManualTagRow').forEach(row => {
+      row.addEventListener('click', () => _wlManualSelectTag(row.dataset.tag));
+      row.addEventListener('mouseenter', () => { row.style.background = 'rgba(255,255,255,0.05)'; });
+      row.addEventListener('mouseleave', () => { row.style.background = ''; });
+    });
+  }
+
+  // Pin 2: FYI text is derived ONLY from _wlLastProposalPayload (already
+  // fetched by the normal digest/card load) — never triggers a fresh
+  // /api/weight_proposal call (and its regression run) just to decorate this
+  // input. If nothing's cached yet, this renders nothing — stale-but-labeled
+  // beats fresh-but-expensive, and "no note" is itself a valid, honest label.
+  function _wlManualFyiText(tag, currentEffective, newValue) {
+    if (!_wlLastProposalPayload) return '';
+    const row = _wlLastProposalPayload.find(p => p.tag === tag && p.significant && p.proposed_delta != null);
+    if (!row) return '';
+    const editDir = Math.sign(newValue - currentEffective);
+    const proposalDir = Math.sign(row.proposed_delta);
+    if (editDir === 0 || proposalDir === editDir) return '';  // same direction or no change — nothing to flag
+    return `FYI: current data proposes ${row.proposed_delta > 0 ? '+1' : '-1'} here (n=${row.n}, ${fmtR(row.coef)}R) — informational only, your call stands.`;
+  }
+
+  function _wlManualUpdateFyi() {
+    if (!_wlManualSelected) return;
+    const valueInput = document.getElementById('wlManualValue');
+    const fyiEl = document.getElementById('wlManualFyi');
+    if (!valueInput || !fyiEl) return;
+    const newValue = parseFloat(valueInput.value);
+    fyiEl.textContent = isNaN(newValue) ? '' : _wlManualFyiText(_wlManualSelected.tag, _wlManualSelected.current_effective, newValue);
+  }
+
+  function _wlManualSelectTag(tag) {
+    const t = (_wlManualTagsCache || []).find(x => x.tag === tag);
+    if (!t) return;
+    _wlManualSelected = t;
+    const editor = document.getElementById('wlManualEditor');
+    if (!editor) return;
+    editor.style.display = '';
+    document.getElementById('wlManualEditorName').textContent = `${t.name} (${t.tag})`;
+    document.getElementById('wlManualEditorRange').textContent = `allowed: ${fmtNum(t.min)}–${fmtNum(t.max)}`;
+    const valueInput = document.getElementById('wlManualValue');
+    valueInput.min = t.min; valueInput.max = t.max;
+    valueInput.value = t.current_effective;
+    _wlManualUpdateFyi();
+  }
+
+  async function _wlManualSet(btn) {
+    if (!_wlManualSelected) return;
+    const valueInput = document.getElementById('wlManualValue');
+    const newValue = parseFloat(valueInput.value);
+    if (isNaN(newValue)) {
+      _showToast(`<span class="tBear">Weight Lab — enter a number.</span>`, 4000);
+      return;
+    }
+    if (newValue < _wlManualSelected.min || newValue > _wlManualSelected.max) {
+      _showToast(`<span class="tBear">Weight Lab — allowed range for ${esc(_wlManualSelected.name)} is ${fmtNum(_wlManualSelected.min)}–${fmtNum(_wlManualSelected.max)}.</span>`, 5000);
+      return;
+    }
+    btn.disabled = true;
+    const tag = _wlManualSelected.tag, name = _wlManualSelected.name;
+    const confirmed = await _wlShowConfirm([{ tag, new_value: newValue }], async () => {
+      const r = await _apiFetch('/api/weight_manual', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag, new_value: newValue }),
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || 'manual set failed');
+      const msg = d.removed
+        ? `Weight Lab — ${esc(name)} reverted to baseline — live within one scan cycle.`
+        : `Weight Lab — ${esc(name)} set to ${fmtNum(newValue)}pt — live within one scan cycle.`;
+      _showToast(`<span>${msg}</span>`, 6000);
+      loadWeightLab(true);
+    });
+    if (!confirmed) btn.disabled = false;
+  }
+
+  async function _wlManualEnsureTagsLoaded() {
+    if (_wlManualTagsCache) return;
+    try {
+      const r = await _apiFetch('/api/weight_manual/tags');
+      const d = await _wlSafeJson(r);
+      if (!d.ok) throw new Error(d.error || 'failed to load tags');
+      _wlManualTagsCache = d.tags;
+      _wlManualRenderList('');
+    } catch (e) {
+      const listEl = document.getElementById('wlManualList');
+      if (listEl) listEl.innerHTML = `<div style="font-size:10.5px;color:#ff8a95">${esc(e.message)}</div>`;
+    }
+  }
+
+  function _wireManualSection() {
+    const details = document.getElementById('wlManualDetails');
+    if (!details) return;
+    details.addEventListener('toggle', () => { if (details.open) _wlManualEnsureTagsLoaded(); });
+    const search = document.getElementById('wlManualSearch');
+    if (search) search.addEventListener('input', () => _wlManualRenderList(search.value));
+    const valueInput = document.getElementById('wlManualValue');
+    if (valueInput) valueInput.addEventListener('input', _wlManualUpdateFyi);
+    const setBtn = document.getElementById('wlManualSetBtn');
+    if (setBtn) setBtn.addEventListener('click', () => _wlManualSet(setBtn));
+  }
+
+  function _wireCardButtons(root, verifiedSignificant) {
     root.querySelectorAll('.wlApproveBtn').forEach(btn => {
       btn.addEventListener('click', () => {
         const tag = btn.dataset.tag, delta = parseInt(btn.dataset.delta, 10);
@@ -194,6 +510,10 @@
     root.querySelectorAll('.wlUndoBtn').forEach(btn => {
       btn.addEventListener('click', () => _wlUndo(parseInt(btn.dataset.index, 10), btn));
     });
+    const approveAllBtn = document.getElementById('wlApproveAllBtn');
+    if (approveAllBtn) approveAllBtn.addEventListener('click', () => _wlApproveAll(verifiedSignificant, approveAllBtn));
+    const markReviewedBtn = document.getElementById('wlMarkReviewedBtn');
+    if (markReviewedBtn) markReviewedBtn.addEventListener('click', () => _wlMarkReviewed(markReviewedBtn));
   }
 
   async function loadWeightLab(forceRefresh) {
@@ -211,22 +531,40 @@
       const ov = await _wlSafeJson(ovRes);
       _wlLoaded = true;
 
+      // Pin 2: cache proposals for the manual editor's FYI line whenever the
+      // engine actually returned something usable — on a self-test failure,
+      // deliberately leave the previous cache (stale-but-labeled) rather than
+      // wiping it to nothing.
+      if (prop.ok) _wlLastProposalPayload = prop.proposals || [];
+
       let html = _wlPendingBanner(ov.entries || []);
 
+      // Manual mode must work even if the regression engine is broken or
+      // frozen (server-side rationale in /api/weight_manual/tags' docstring)
+      // — so the manual section is appended and wired on EVERY reachable
+      // path below, not just the happy path.
       if (!prop.ok) {
         html += _wlBanner('error', 'Proposal engine failed its own math check — no suggestions will be shown. See Dexter logs.');
+        html += _wlManualSectionHtml();
         body.innerHTML = html;
+        _wireManualSection();
         return;
       }
       if (prop.frozen) {
         html += _wlBanner('warn', `Collecting fresh data since your last change — ${prop.records_since_last_change} of ${prop.needed} new records. Proposals resume when the window fills.`);
+        html += _wlManualSectionHtml();
         body.innerHTML = html;
+        _wireManualSection();
         return;
       }
 
       const proposals = prop.proposals || [];
       const significant = proposals.filter(p => p.significant);
       const nonSignificant = proposals.filter(p => !p.significant);
+      const verifiedSignificant = significant.filter(p =>
+        (p.mapping || 'unmapped') === 'verified' && p.proposed_delta != null && p.current_weight != null);
+
+      html += _wlDigestHeader(verifiedSignificant, prop.last_reviewed_at);
 
       if (!significant.length) {
         html += `<div style="font-family:'Inter',sans-serif;font-size:11.5px;color:var(--txt2);padding:6px 0">No tag currently clears the evidence bar. That's the system working, not broken.</div>`;
@@ -234,10 +572,15 @@
         html += significant.map(_wlProposalCard).join('');
       }
       html += _wlNonSignificant(nonSignificant);
+      html += _wlManualSectionHtml();
       body.innerHTML = html;
-      _wireCardButtons(body);
+      _wireCardButtons(body, verifiedSignificant);
+      _wireManualSection();
     } catch (e) {
       body.innerHTML = _wlBanner('error', esc(e.message));
+      // No manual section here — a hard fetch/network failure means we can't
+      // even confirm the backend is reachable; refresh is the right next
+      // action, not a half-working editor with no data behind it.
     }
   }
   window.loadWeightLab = loadWeightLab;

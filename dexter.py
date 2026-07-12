@@ -769,8 +769,9 @@ def api_strategy_counterfactual():
 # Exposes weight_proposal.py's Ridge-regression tag analysis through a read-only
 # GET route, plus two @require_key mutating routes that let Kev approve/revert a
 # proposed delta into weight_overrides.json. Nothing here ever touches
-# CONFLUENCE_SCORES directly — _apply_weight_overrides() (above) is the ONLY
-# code path that ever mutates it, and only once, at startup.
+# CONFLUENCE_SCORES directly — _reload_weight_overrides() (above) is the ONLY
+# code path that ever mutates it, once per scan cycle (hot-reload, no restart
+# needed since 2026-07-13 — see that function's own docstring/comment block).
 # =============================================================================
 WEIGHT_PROPOSAL_CACHE_SECS = 300
 FREEZE_MIN_RECORDS = 200
@@ -787,18 +788,20 @@ def _atomic_write_json(path, data):
 
 
 def _read_weight_overrides_file():
-    """Returns {"version": 1, "entries": [...]}; empty/default structure if the
-    file is missing or malformed. Never raises."""
+    """Returns {"version": 1, "entries": [...], "last_reviewed_at": ...}; default
+    structure (last_reviewed_at=None) if the file is missing or malformed. Never
+    raises."""
     if not os.path.exists(WEIGHT_OVERRIDES_FILE):
-        return {"version": 1, "entries": []}
+        return {"version": 1, "entries": [], "last_reviewed_at": None}
     try:
         with open(WEIGHT_OVERRIDES_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
+        data.setdefault("last_reviewed_at", None)
         if not isinstance(data.get("entries"), list):
             raise ValueError("'entries' is not a list")
         return data
     except Exception:
-        return {"version": 1, "entries": []}
+        return {"version": 1, "entries": [], "last_reviewed_at": None}
 
 
 def _run_weight_proposal_selftest():
@@ -851,13 +854,19 @@ def _build_weight_proposal_payload():
     frozen_since = None
     if entries:
         for e in entries:
+            # applied_at (when the reload actually first took effect) is the
+            # correct freeze anchor; approved_at is the fallback for entries
+            # written before applied_at existed (pre-2026-07-13) or for one
+            # that's approved but hasn't gone live yet (no applied_at means it
+            # can't have started collecting fresh post-change data anyway).
+            ts_str = e.get("applied_at") or e.get("approved_at")
             try:
-                ts = datetime.strptime(e["approved_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+                ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
             except Exception:
                 continue
             if freeze_epoch is None or ts > freeze_epoch:
                 freeze_epoch = ts
-                frozen_since = e["approved_at"]
+                frozen_since = ts_str
 
     eligible = [r for r in kept if (r.get("ts_epoch") or 0) > freeze_epoch] if freeze_epoch is not None else kept
 
@@ -866,8 +875,10 @@ def _build_weight_proposal_payload():
             "ok": True, "frozen": True,
             "records_since_last_change": len(eligible),
             "needed": FREEZE_MIN_RECORDS,
+            "freeze_min_records": FREEZE_MIN_RECORDS,
             "frozen_since": frozen_since,
-            "note": "window keys off approval time; records between approval and restart are conservatively excluded.",
+            "last_reviewed_at": overrides.get("last_reviewed_at"),
+            "note": "window keys off applied_at (or approved_at as a fallback); records between approval and the next hot-reload cycle are conservatively excluded.",
             "proposals": [],
         }
 
@@ -925,9 +936,12 @@ def _build_weight_proposal_payload():
             "freeze_active": freeze_epoch is not None,
         },
         "proposals": proposals,
-        "pending_overrides": entries,   # every entry in the file is, by definition, not yet
-                                         # applied to THIS running process — only startup applies them
+        "pending_overrides": entries,   # every entry currently in the file -- "active" per
+                                         # /api/weight_overrides reflects live-applied state,
+                                         # not process-start state (hot-reload, 2026-07-13)
         "significant_tags": sorted(significant_tags),
+        "freeze_min_records": FREEZE_MIN_RECORDS,
+        "last_reviewed_at": overrides.get("last_reviewed_at"),
     }
 
 
@@ -956,6 +970,40 @@ def api_weight_proposal():
     return jsonify(payload)
 
 
+def _validate_weight_approval(tag, delta, entries):
+    """Shared per-tag validation for a proposal approval -- used by BOTH the
+    single-approve route and the batch route (Phase 2), so batch approval is a
+    loop over this exact same check, never a separate trust path. Returns
+    (ok: bool, error: str|None, clean_delta: int|None). Does not write
+    anything; `entries` is the current entries list so a batch can also catch
+    a duplicate tag queued earlier in the SAME batch, not just what's on disk."""
+    if not isinstance(tag, str) or not tag:
+        return False, "missing tag", None
+    try:
+        delta = int(delta)
+    except (TypeError, ValueError):
+        return False, "delta must be an integer", None
+    if abs(delta) != 1:
+        return False, "delta must be exactly +1 or -1", None
+    if tag not in CONFLUENCE_SCORES:
+        return False, f"'{tag}' is not a known CONFLUENCE_SCORES tag (unmapped)", None
+    if tag not in WEIGHT_LAB_VERIFIED_TAGS:
+        return False, f"'{tag}' shares a name with a CONFLUENCE_SCORES key but its mechanic has not been verified (unverified) — see handoff PHASE 16 no-aliasing rule", None
+    if tag not in _weight_proposal_significant_tags:
+        return False, f"'{tag}' was not in the most recently served significant proposal set", None
+    if any(e.get("tag") == tag for e in entries):
+        return False, f"a pending override for '{tag}' already exists — revert it first", None
+    return True, None, delta
+
+
+def _mark_weight_lab_reviewed(data):
+    """Stamps last_reviewed_at -- confirming an approval (single or batch) IS
+    reviewing the digest, so this fires as a side effect of both, in addition
+    to the standalone /mark_reviewed route for a week where Kev reviews and
+    approves nothing."""
+    data["last_reviewed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
 @flask_app.route("/api/weight_proposal/approve", methods=["POST"])
 @require_key
 def api_weight_proposal_approve():
@@ -964,32 +1012,241 @@ def api_weight_proposal_approve():
     delta = body.get("delta")
     evidence = body.get("evidence") or {}
 
-    if not isinstance(tag, str) or not tag:
-        return jsonify({"ok": False, "error": "missing tag"}), 400
-    try:
-        delta = int(delta)
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "delta must be an integer"}), 400
-    if abs(delta) != 1:
-        return jsonify({"ok": False, "error": "delta must be exactly +1 or -1"}), 400
-    if tag not in CONFLUENCE_SCORES:
-        return jsonify({"ok": False, "error": f"'{tag}' is not a known CONFLUENCE_SCORES tag (unmapped)"}), 400
-    if tag not in WEIGHT_LAB_VERIFIED_TAGS:
-        return jsonify({"ok": False, "error": f"'{tag}' shares a name with a CONFLUENCE_SCORES key but its mechanic has not been verified (unverified) — see handoff PHASE 16 no-aliasing rule"}), 400
-    if tag not in _weight_proposal_significant_tags:
-        return jsonify({"ok": False, "error": f"'{tag}' was not in the most recently served significant proposal set"}), 400
-
     data = _read_weight_overrides_file()
     entries = data.get("entries", [])
-    if any(e.get("tag") == tag for e in entries):
-        return jsonify({"ok": False, "error": f"a pending override for '{tag}' already exists — revert it first"}), 400
+    ok, err, clean_delta = _validate_weight_approval(tag, delta, entries)
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
 
     entry = {
-        "tag": tag, "delta": delta,
+        "tag": tag, "delta": clean_delta,
         "approved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "evidence": evidence, "source": "weight_lab",
     }
     entries.append(entry)
+    data["entries"] = entries
+    _mark_weight_lab_reviewed(data)
+    _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+    return jsonify({"ok": True, "pending_overrides": entries})
+
+
+@flask_app.route("/api/weight_proposal/approve_batch", methods=["POST"])
+@require_key
+def api_weight_proposal_approve_batch():
+    """Batch approve for the digest's [APPROVE ALL n]. Loops
+    _validate_weight_approval per tag -- the EXACT SAME gate the single-approve
+    route uses, not a new trust path. Not all-or-nothing: each tag is
+    independent, so one tag failing (e.g. no longer significant since the
+    digest was rendered) doesn't block the rest -- reports approved vs
+    rejected by tag so the UI can show exactly what happened. One read, one
+    combined atomic write."""
+    body = flask_request.get_json(silent=True) or {}
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        return jsonify({"ok": False, "error": "items must be a non-empty list"}), 400
+
+    data = _read_weight_overrides_file()
+    entries = data.get("entries", [])
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    approved, rejected = [], []
+    for item in items:
+        if not isinstance(item, dict):
+            rejected.append({"tag": None, "error": "malformed item"})
+            continue
+        tag = item.get("tag")
+        delta = item.get("delta")
+        evidence = item.get("evidence") or {}
+        ok, err, clean_delta = _validate_weight_approval(tag, delta, entries)
+        if not ok:
+            rejected.append({"tag": tag, "error": err})
+            continue
+        entries.append({
+            "tag": tag, "delta": clean_delta, "approved_at": now_str,
+            "evidence": evidence, "source": "weight_lab",
+        })
+        approved.append(tag)
+
+    if approved:
+        data["entries"] = entries
+    _mark_weight_lab_reviewed(data)  # a batch attempt, even a partial one, counts as reviewed
+    _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+    return jsonify({"ok": True, "approved": approved, "rejected": rejected, "pending_overrides": entries})
+
+
+def _preview_weight_change(tag, delta=None, new_value=None):
+    """Pure, no I/O: given either a delta (proposal-style) or an absolute
+    new_value (manual-style, Phase 3), returns exactly the clamped effective
+    value _reload_weight_overrides would compute once this goes live -- same
+    baseline-relative clamp, nothing written. Returns None if tag isn't a real
+    CONFLUENCE_SCORES key."""
+    if tag not in _CONFLUENCE_BASELINE:
+        return None
+    baseline = _CONFLUENCE_BASELINE[tag]
+    requested = float(new_value) if new_value is not None else baseline + float(delta or 0)
+    clamped = max(0, min(2 * baseline + 2, requested))
+    return {
+        "tag": tag,
+        "current_effective": CONFLUENCE_SCORES.get(tag),
+        "baseline": baseline,
+        "requested": requested,
+        "new_effective": clamped,
+        "clamped": clamped != requested,
+    }
+
+
+@flask_app.route("/api/weight_preview", methods=["POST"])
+def api_weight_preview():
+    """Read-only dry-run for the confirmation panel (Phase 2): given a list of
+    proposed changes, returns exactly what WOULD apply if confirmed -- the
+    SAME clamp math _reload_weight_overrides uses, nothing written. The panel
+    calls this so Kev confirms the true post-clamp number rather than a
+    client-computed guess that could disagree with the server. No @require_key
+    -- read-only, same posture as /api/weight_proposal. The real apply route
+    (approve / approve_batch / weight_manual) re-validates fully regardless;
+    this preview is a courtesy, never a trust grant."""
+    body = flask_request.get_json(silent=True) or {}
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        return jsonify({"ok": False, "error": "items must be a non-empty list"}), 400
+
+    results = []
+    for item in items:
+        if not isinstance(item, dict):
+            return jsonify({"ok": False, "error": "each item must be an object"}), 400
+        tag = item.get("tag")
+        if not isinstance(tag, str) or not tag:
+            return jsonify({"ok": False, "error": "each item needs a tag"}), 400
+        delta = item.get("delta")
+        new_value = item.get("new_value")
+        if delta is None and new_value is None:
+            return jsonify({"ok": False, "error": f"'{tag}': need delta or new_value"}), 400
+        preview = _preview_weight_change(tag, delta=delta, new_value=new_value)
+        if preview is None:
+            return jsonify({"ok": False, "error": f"'{tag}' is not a known CONFLUENCE_SCORES tag"}), 400
+        results.append(preview)
+
+    return jsonify({"ok": True, "items": results, "freeze_min_records": FREEZE_MIN_RECORDS})
+
+
+@flask_app.route("/api/weight_proposal/mark_reviewed", methods=["POST"])
+@require_key
+def api_weight_proposal_mark_reviewed():
+    """Explicit 'I looked at the digest and chose not to approve anything this
+    week' — the approve/approve_batch routes already stamp this as a side
+    effect, this route covers the no-action week."""
+    data = _read_weight_overrides_file()
+    _mark_weight_lab_reviewed(data)
+    _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+    return jsonify({"ok": True, "last_reviewed_at": data["last_reviewed_at"]})
+
+
+@flask_app.route("/api/weight_manual/tags")
+def api_weight_manual_tags():
+    """Read-only, lightweight: every CONFLUENCE_SCORES tag with its current live
+    effective value and baseline, for the manual editor's searchable dropdown.
+    Deliberately NOT tied to /api/weight_proposal's cache or self-test gate —
+    manual mode is Kev's own judgment by definition, it must work even if the
+    regression engine is broken or the labels file is missing."""
+    tags = [
+        {
+            "tag": t,
+            "name": TAG_REGISTRY.get(t, {}).get("name", t),
+            "current_effective": CONFLUENCE_SCORES[t],
+            "baseline": _CONFLUENCE_BASELINE[t],
+            "min": 0,
+            "max": 2 * _CONFLUENCE_BASELINE[t] + 2,
+        }
+        for t in sorted(CONFLUENCE_SCORES.keys())
+    ]
+    return jsonify({"ok": True, "tags": tags})
+
+
+@flask_app.route("/api/weight_manual", methods=["POST"])
+@require_key
+def api_weight_manual():
+    """Manual override (Phase 3): Kev sets a CONFLUENCE_SCORES tag's absolute
+    value directly — no proposal, no evidence, no WEIGHT_LAB_VERIFIED_TAGS gate.
+    That gate exists only because the PROPOSAL pipeline runs through the
+    labeller's separate, alias-prone vocabulary; manual mode edits
+    CONFLUENCE_SCORES directly, Dexter's own vocabulary, so every real tag is
+    eligible here, not just the 3 verified ones (confirmed by Kev).
+
+    Stored as a delta-from-baseline (source: "manual", plus set_to: <value> for
+    the audit trail) so the existing sum+clamp reload math handles it exactly
+    like a proposal delta — no special-casing needed in _reload_weight_overrides.
+
+    LEDGER HONESTY (Kev's explicit rule, extended to both directions): a manual
+    write for a tag that currently has ANY weight_lab-source (statistics-
+    driven) entry is REFUSED outright — both setting back to baseline (which
+    would otherwise delete the proposal entry and erase that a statistics-
+    driven change ever happened) AND setting to some other value (which would
+    either silently replace the proposal entry with no trace, or sum against
+    it and produce a number matching neither the proposal's own record nor the
+    absolute value Kev just typed). Redirect Kev to revert the proposal in the
+    pending list first — the two sources of truth are untangled by an explicit
+    separate action, never guessed at.
+
+    Same-source replace: a second manual entry for the same tag REPLACES the
+    existing one, never appends (summing two manual deltas would also stop
+    matching the single absolute number typed).
+
+    Setting a tag back to its exact _CONFLUENCE_BASELINE value (not its current
+    live effective value, which may itself be mid-clamp or stale) with no
+    weight_lab entry present REMOVES the manual entry entirely, rather than
+    storing a zero-delta placeholder that would sit in the file forever.
+    """
+    body = flask_request.get_json(silent=True) or {}
+    tag = body.get("tag")
+    new_value = body.get("new_value")
+
+    if not isinstance(tag, str) or not tag:
+        return jsonify({"ok": False, "error": "missing tag"}), 400
+    if tag not in CONFLUENCE_SCORES:
+        return jsonify({"ok": False, "error": f"'{tag}' is not a known CONFLUENCE_SCORES tag"}), 400
+    try:
+        new_value = float(new_value)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "new_value must be a number"}), 400
+
+    baseline = _CONFLUENCE_BASELINE[tag]
+    lo, hi = 0, 2 * baseline + 2
+    if not (lo <= new_value <= hi):
+        return jsonify({"ok": False, "error": f"new_value must be within [{lo:g}, {hi:g}] for '{tag}' (baseline {baseline:g})"}), 400
+
+    data = _read_weight_overrides_file()
+    entries = data.get("entries", [])
+
+    other_source_idx = next(
+        (i for i, e in enumerate(entries) if e.get("tag") == tag and e.get("source") != "manual"), None
+    )
+    if other_source_idx is not None:
+        return jsonify({
+            "ok": False,
+            "error": f"'{tag}' has an approved proposal pending — undo it in the pending list first; manual mode won't touch a statistics-driven entry",
+        }), 400
+
+    manual_idx = next(
+        (i for i, e in enumerate(entries) if e.get("tag") == tag and e.get("source") == "manual"), None
+    )
+
+    if new_value == baseline:
+        removed = manual_idx is not None
+        if removed:
+            entries.pop(manual_idx)
+        data["entries"] = entries
+        _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+        return jsonify({"ok": True, "removed": removed, "pending_overrides": entries})
+
+    entry = {
+        "tag": tag, "delta": new_value - baseline,
+        "approved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "source": "manual", "set_to": new_value,
+    }
+    if manual_idx is not None:
+        entries[manual_idx] = entry  # replace, not append
+    else:
+        entries.append(entry)
     data["entries"] = entries
     _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
     return jsonify({"ok": True, "pending_overrides": entries})
@@ -1017,11 +1274,12 @@ def api_weight_proposal_revert():
 @flask_app.route("/api/weight_overrides")
 def api_weight_overrides():
     """Read-only. Current weight_overrides.json contents, each entry annotated
-    with whether it was already applied this run (compared against the snapshot
-    _apply_weight_overrides() took at startup)."""
+    with whether its tag is currently live-applied (per the most recent
+    _reload_weight_overrides() hot-reload cycle) — true live state, not just
+    "present when the process started."""
     data = _read_weight_overrides_file()
     entries = data.get("entries", [])
-    annotated = [{**e, "active": e in _WEIGHT_OVERRIDES_STARTUP_SNAPSHOT} for e in entries]
+    annotated = [{**e, "active": e.get("tag") in _WEIGHT_OVERRIDES_LIVE_APPLIED_TAGS} for e in entries]
     return jsonify({"ok": True, "version": data.get("version", 1), "entries": annotated})
 
 
@@ -2407,54 +2665,92 @@ CONFLUENCE_SCORES = {
 # three, so these are the same computation quoted twice, not a name collision.)
 WEIGHT_LAB_VERIFIED_TAGS = {"gp", "rsi_ob", "rsi_os"}
 
+# Pristine snapshot of CONFLUENCE_SCORES taken BEFORE any override has ever
+# applied. Hot-reload (below) recomputes every tag's effective weight as
+# baseline + summed deltas EVERY cycle -- never by summing against whatever
+# CONFLUENCE_SCORES currently holds, which would compound (a +1 override would
+# silently become +2, +3, ... every reload) since CONFLUENCE_SCORES itself gets
+# mutated in place. This dict must stay untouched forever after this line runs.
+_CONFLUENCE_BASELINE = dict(CONFLUENCE_SCORES)
+
 # =============================================================================
-# WEIGHT LAB — startup-only override loader
+# WEIGHT LAB — override loader
 #
-# Applies human-approved confluence tag weight deltas from weight_overrides.json
-# to CONFLUENCE_SCORES, ONCE at startup only. Deliberately NOT a per-cycle hot-
-# reload like tunables.json (PHASE 14, below) — a weight change is a bigger
-# behavioral commitment than a tunable, so it requires an explicit Dexter
-# restart to arm, never a silent mid-session change. The Weight Lab UI enforces
-# this too (a loud "restart to arm" banner), but this loader does not trust the
-# UI alone — see the hard safety clamp below.
+# HISTORY: originally (2026-07-11) applied human-approved confluence tag weight
+# deltas from weight_overrides.json to CONFLUENCE_SCORES ONCE at startup only,
+# deliberately NOT hot-reloaded like tunables.json (PHASE 14) -- a weight change
+# was judged a bigger behavioral commitment than a tunable, requiring an
+# explicit Dexter restart to arm, never a silent mid-session change.
+# CHANGED 2026-07-13 (Kev's explicit call, after weeks of verified operation):
+# promoted to a per-scan-cycle hot-reload, same pattern as load_tunables() --
+# approvals and manual edits now go live within one scan cycle, no restart.
+# This is safe specifically BECAUSE every reload recomputes from the pristine
+# _CONFLUENCE_BASELINE above rather than compounding on the live dict -- see
+# that snapshot's own comment for why that distinction is load-bearing.
 #
 # File format:
 #   {"version": 1, "entries": [
 #       {"tag": "oi_divergence", "delta": 1, "approved_at": "2026-07-11 14:03:00",
+#        "applied_at": "2026-07-13 09:05:00",
 #        "evidence": {"n": 41, "coef": 0.31, "ci": [0.12, 0.49]}, "source": "weight_lab"}
 #   ]}
+# "applied_at" is stamped the first time a live reload actually applies an
+# entry (atomic write) -- entries approved before 2026-07-13 predate this field
+# and have none; freeze-window logic (see _build_weight_proposal_payload) falls
+# back to approved_at for those, never crashes or skips an entry for lacking it.
+# "source" is "weight_lab" (a statistics-driven proposal) or "manual" (Kev's own
+# direct edit, Phase 3) -- purely an audit-trail label, treated identically by
+# this loader and by the freeze window either way.
 #
 # Deltas for the same tag across multiple entries are summed. A hard safety
-# clamp (independent of the UI's own +/-1-per-approval cap — defense in depth)
-# holds each tag's final value inside [0, 2 * its original value + 2]. A tag not
-# present in CONFLUENCE_SCORES is ignored with a logged warning — never added
-# as a new key. A missing file is the normal steady state (nothing logged); a
-# malformed file logs a warning and applies nothing, startup continues normally.
+# clamp (independent of the UI's own caps — defense in depth) holds each tag's
+# final value inside [0, 2 * its BASELINE value + 2] -- clamped against
+# baseline, not against whatever the tag currently holds, for the same
+# never-compound reason as above. A tag not present in CONFLUENCE_SCORES is
+# ignored with a logged warning — never added as a new key. A missing file
+# reverts every tag to baseline (the normal steady state once nothing is
+# approved); a malformed file changes nothing this cycle and warns once (not
+# every cycle) until it's readable again.
 # =============================================================================
 WEIGHT_OVERRIDES_FILE = os.path.join(CHEV_TOOLS_ROOT, "weight_overrides.json")
 
-# Snapshot of entries present in the file AT STARTUP (i.e. already baked into
-# CONFLUENCE_SCORES this run). /api/weight_overrides compares the file's CURRENT
-# contents against this to flag each entry "active" (applied this run) or not
-# (approved during this session, awaiting the next restart to take effect).
-_WEIGHT_OVERRIDES_STARTUP_SNAPSHOT = []
+# The set of tags actually carrying a live-applied override as of the most
+# recent reload. /api/weight_overrides uses this (not "present at process
+# start") to flag each entry "active" -- true live-applied state, since
+# overrides no longer require a restart to take effect.
+_WEIGHT_OVERRIDES_LIVE_APPLIED_TAGS = set()
+
+_weight_overrides_warned_once = False
 
 
-def _apply_weight_overrides():
-    global _WEIGHT_OVERRIDES_STARTUP_SNAPSHOT
-    if not os.path.exists(WEIGHT_OVERRIDES_FILE):
-        return
-    try:
-        with open(WEIGHT_OVERRIDES_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        entries = data.get("entries", [])
-        if not isinstance(entries, list):
-            raise ValueError("'entries' is not a list")
-    except Exception as e:
-        print(f"[WEIGHT OVERRIDES] malformed {WEIGHT_OVERRIDES_FILE}, applying nothing: {e}")
-        return
+def _reload_weight_overrides():
+    """Hot-reload: re-reads weight_overrides.json and recomputes every tag's
+    effective weight from _CONFLUENCE_BASELINE + the file's CURRENT entries,
+    fresh, every call. Idempotent by construction -- calling this 100 times in
+    a row with an unchanged file produces the exact same CONFLUENCE_SCORES
+    every time; removing an entry from the file cleanly reverts that tag to
+    baseline on the next call, it does not require "undoing" anything. Mutates
+    CONFLUENCE_SCORES IN PLACE (updates values on the existing dict object) --
+    never rebinds it to a new dict, since other modules/routes hold references
+    to this exact object.
+    """
+    global _weight_overrides_warned_once, _WEIGHT_OVERRIDES_LIVE_APPLIED_TAGS
 
-    _WEIGHT_OVERRIDES_STARTUP_SNAPSHOT = list(entries)
+    data = None
+    entries = []
+    if os.path.exists(WEIGHT_OVERRIDES_FILE):
+        try:
+            with open(WEIGHT_OVERRIDES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entries = data.get("entries", [])
+            if not isinstance(entries, list):
+                raise ValueError("'entries' is not a list")
+        except Exception as e:
+            if not _weight_overrides_warned_once:
+                print(f"[WEIGHT OVERRIDES] malformed {WEIGHT_OVERRIDES_FILE}, applying nothing this cycle: {e}")
+                _weight_overrides_warned_once = True
+            return  # leave CONFLUENCE_SCORES exactly as it was -- never guess on a bad file
+        _weight_overrides_warned_once = False
 
     deltas = {}
     for entry in entries:
@@ -2465,24 +2761,51 @@ def _apply_weight_overrides():
             continue
         deltas[tag] = deltas.get(tag, 0.0) + delta
 
-    applied = []
+    changed = []
+    applied_tags = set()
     for tag, total_delta in deltas.items():
-        if tag not in CONFLUENCE_SCORES:
+        if tag not in _CONFLUENCE_BASELINE:
             print(f"[WEIGHT OVERRIDES] tag '{tag}' not in CONFLUENCE_SCORES -- ignored (never added as a new key)")
             continue
-        original = CONFLUENCE_SCORES[tag]
-        proposed = original + total_delta
-        clamped = max(0, min(2 * original + 2, proposed))
-        if clamped != original:
+        applied_tags.add(tag)
+        baseline = _CONFLUENCE_BASELINE[tag]
+        clamped = max(0, min(2 * baseline + 2, baseline + total_delta))
+        if CONFLUENCE_SCORES.get(tag) != clamped:
+            changed.append((tag, CONFLUENCE_SCORES.get(tag), clamped))
             CONFLUENCE_SCORES[tag] = clamped
-            applied.append((tag, original, clamped))
 
-    if applied:
-        summary = ", ".join(f"{t} {o:g}→{c:g}" for t, o, c in applied)
-        print(f"WEIGHT OVERRIDES: {len(applied)} tags adjusted ({summary})")
+    # Every baseline tag NOT covered by a valid entry this cycle must be
+    # restored to baseline -- this is what makes "remove the entry" (or delete
+    # the whole file) a clean revert rather than a stuck value.
+    for tag, baseline in _CONFLUENCE_BASELINE.items():
+        if tag in applied_tags:
+            continue
+        if CONFLUENCE_SCORES.get(tag) != baseline:
+            changed.append((tag, CONFLUENCE_SCORES.get(tag), baseline))
+            CONFLUENCE_SCORES[tag] = baseline
+
+    if changed:
+        summary = ", ".join(f"{t} {o:g}->{c:g}" for t, o, c in changed)
+        print(f"[WEIGHT OVERRIDES] {len(changed)} tag(s) adjusted this cycle ({summary})")
+
+    # Stamp applied_at on any entry this cycle actually used but that doesn't
+    # have one yet (first live reload after approval, or migrating an entry
+    # written before this field existed).
+    if data is not None:
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        need_stamp = False
+        for entry in entries:
+            if entry.get("tag") in applied_tags and not entry.get("applied_at"):
+                entry["applied_at"] = now_str
+                need_stamp = True
+        if need_stamp:
+            data["entries"] = entries
+            _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+
+    _WEIGHT_OVERRIDES_LIVE_APPLIED_TAGS = applied_tags
 
 
-_apply_weight_overrides()
+_reload_weight_overrides()
 
 # =============================================================================
 # PHASE 16: TAG REGISTRY — one entry per confluence code the system can emit, across
@@ -11995,6 +12318,11 @@ while True:
     # PHASE 14: re-read tunables.json once per scan cycle -- hot-reload, no restart needed
     # for anything on the whitelist. Safe no-op every cycle nothing has changed.
     load_tunables()
+
+    # WEIGHT LAB (2026-07-13): re-read weight_overrides.json once per scan cycle,
+    # same hot-reload pattern as tunables above -- safe no-op every cycle nothing
+    # has changed, logs only on an actual applied/reverted tag.
+    _reload_weight_overrides()
 
     # Keep Firebase snapshot data fresh (runs every scan cycle ~5min)
     _cached_balance = get_balance(dashboard_ws)
