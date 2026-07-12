@@ -6538,5 +6538,108 @@ webapp/css/components/weight-lab.css — push_dashboard.py as usual).
 RE-PASTE CHEV PROMPT: NO.
 
 ================================================================================
+*** LEARNING-SESSION MODEL ROUTING — DECIDED AGAINST A THIRD MODEL — 2026-07-12 —
+RESTART: N/A (no code change beyond a revert), DEPLOY: N/A,
+RE-PASTE CHEV PROMPT: NO — BUT SEE "STANDING REQUIREMENT" BELOW ***
+CONTEXT: an audit of Chev/Dexter/Clone communication (2026-07-11) found the
+learning-session prompt (playbook rewrite + loss-pattern analysis + win/loss
+comparison, all three calls inside _run_learning_session) was running on
+chat-Chev (MODEL_ID = "chev-chelios"), whose system prompt alone already
+overflows its own context window: "Chev Prompt" measures ~13.9k tokens (chars/4
+heuristic) against a confirmed 12,288 num_ctx. Adding the learning prompt's own
+worst-case size (~5.8-6.6k tokens, measured via a standalone synthetic
+reproduction of _fmt_entry's 20-entry/400-char-cap worst case, no dexter import)
+pushes the combined total to roughly 19.7k-20.5k tokens against 12,288 ctx —
+guaranteed silent truncation on every learning-session call.
+DECIDED AGAINST: a dedicated third Open WebUI model ("chev-learn", chev-32b-learn
+base, minimal system prompt) was specced and briefly implemented
+(LEARNING_MODEL_ID constant + model_id overrides at all three call sites) as the
+fix. Kev rejected it on a two-LLM ceiling / project-partner constraint — the
+system runs on exactly two Open WebUI models (chat-Chev and the Clone) by design,
+and a third was not something Kev wanted to take on. The revert is clean: all
+three calls are back to their prior no-model_id-argument form, the constant is
+deleted, py_compile confirmed no reference to it remains anywhere in dexter.py.
+DECISION ON RECORD: learning sessions stay on chat-Chev, permanently, by design
+— not a temporary state waiting for a model that will get created later.
+STANDING REQUIREMENT (this is the part that must survive): the chev-chelios
+system prompt pasted into Open WebUI must stay at or under roughly 5k tokens.
+This is not a style preference — it is the only thing standing between the
+learning session and silent truncation, given the ~6.6k worst-case learning
+prompt still has to share a 12,288-token window with whatever system prompt is
+live. If "Chev Prompt" ever regrows past that budget (a new section added, an
+old one un-trimmed), the learning session silently degrades again with no error,
+the same way it already did once. The main-prompt trim (chev_prompt_proposed.txt,
+built the same day as this audit, target ~250 lines / ~4k tokens) exists
+specifically to create and hold this headroom — it is a load-bearing dependency
+of the learning session's correctness now, not a cosmetic cleanup.
+CODE STATE: dexter.py's checkpoint reroutes (all three checkpoint types now on
+ESCALATION_MODEL_ID, "chev-chelios-clone") and the stock/stocks asset_type
+normalization (_norm_asset_type, fixing _load_playbook's PLAYBOOK_PATHS lookup,
+_run_learning_session's asset_journal filter, and the ADR gate) are UNCHANGED by
+this revert — those were separate, correct fixes and stay in place.
+RE-PASTE CHEV PROMPT: NO for this entry specifically — but the pending
+chev_prompt_proposed.txt paste (once Phase 3 lands) is now upgraded from "planned
+cleanup" to "the fix that keeps this decision safe."
+
+================================================================================
+*** MAIN CHEV PROMPT TRIM (chev_prompt_proposed.txt) — 2026-07-12 —
+RESTART: NO (no code change), DEPLOY: NO (no webapp change),
+RE-PASTE CHEV PROMPT: YES — chev_prompt_proposed.txt into chev-chelios, this is
+the fix itself ***
+CONTEXT: closing move of the Chev/Dexter/Clone communication audit. "Chev Prompt"
+(711 lines, ~13.9k tokens chars/4 / ~15.9k chars/3.5) was already overflowing
+chev-chelios' own 12,288 ctx before a single conversation turn, and the learning
+session's worst-case prompt (~5.8-6.6k tokens, still riding this same model per
+the prior entry's decision) had nowhere safe to fit alongside it. This trim is
+the standing requirement that entry named as load-bearing, not cosmetic.
+WHAT CHANGED: new file chev_prompt_proposed.txt (308 lines, ~5.0k tokens chars/4
+/ ~5.7k chars/3.5) plus chev_prompt_trim_diff.txt (full section-by-section KEPT/
+REMOVED/CONDENSED/FLAGGED justification). Identity/voice (persona, Beijing
+Cocktail, Who You Are, Trading Philosophy, How You Talk) kept byte-for-byte
+verbatim, per explicit instruction. Removed as escalation-only and now
+provably dead weight on this model: WHEN DEXTER ESCALATES A SIGNAL (75 lines),
+WHEN DEXTER SENDS A MANAGEMENT CHECKPOINT (36 lines), EXPLORATION PHASE, the
+stale Telegram escalation clause, the dangling escalation cross-reference,
+and the vp_start TRADE:-line tagging tail. Everything else that's genuinely
+chat-relevant (thinking process, playbooks, principles, tool-honesty rules,
+BB/VP reading, performance review) was condensed, not deleted — every named
+threshold, skip condition, and rule survives, only prose/worked-examples/
+restatement was cut. PERFORMANCE REVIEW got its three promised amendments:
+per-tag star/warning markers now ignored under n=10 for that individual tag
+(previously only gated on Kev's overall trade count), tool error/empty now
+must be stated plainly rather than estimated, and the data source (the Google
+Sheet, via get_trade_performance) must be named when reporting stats.
+DEPENDENCY — DO NOT PASTE THIS TRIM IN ISOLATION: removing the checkpoint
+section from Chev Prompt is safe ONLY because dexter.py's three checkpoint
+call sites (ask_chev_manage_trade, _ask_chev_partial_tp, _ask_chev_time_stop)
+already route to ESCALATION_MODEL_ID (the Clone) — confirmed still true after
+the chev-learn revert above, which only touched the three learning calls.
+FLAGGED, NOT SILENTLY DROPPED: VOLUME PROFILE READING was kept in this prompt
+(genuinely chat-relevant, Kev asks about VP directly in normal chat) rather
+than removed — but chev_escalation_prompt_proposed.txt (the Clone's pending
+paste) still has no VP explanation of its own despite accepting a vp_start
+tag. Not fixed here — that file was already finalized in an earlier phase and
+reopening it wasn't part of this task. Kev's call whenever convenient.
+THE NUMBER THAT MATTERS: combined system (~5.0-5.7k) + learning worst-case
+(~5.8-6.6k) against 12,288 ctx comes out to ~10.8k (chars/4, ~1,500 tokens of
+real headroom) or ~12.3k (chars/3.5, ~44 tokens OVER). The two heuristics
+disagree on whether this trim alone is a hard guarantee or just very good
+odds on the single most extreme learning-session case. Real improvement over
+the guaranteed overflow that existed before this trim — not a certainty. If a
+hard guarantee is ever wanted instead of good odds, the lever already on
+record and already declined once is a dedicated learning-only Open WebUI
+model (Phase 2(d) of this audit) — not re-litigated here, just on the record.
+NEXT (Kev, manual): paste chev_prompt_proposed.txt into chev-chelios' system
+prompt (full replace of the current ~700-line text), no restart or redeploy
+needed for this specific change. Sanity-check after pasting: ask something
+ordinary ("what do you think of SOL") and confirm the voice and tool-calling
+order are intact; ask "what's my win rate" and confirm a thin-sample tag no
+longer gets a star/warning marker; confirm it does NOT attempt a POST:/SKIP:
+reply in normal chat (that format is gone from this file now); in the webapp
+CHART: context, confirm chevdraw JSON output still works (kept near-verbatim,
+lowest risk, but the one place exact syntax matters).
+RESTART: NO. DEPLOY: NO. RE-PASTE CHEV PROMPT: YES (this is the deploy).
+
+================================================================================
 END OF HANDOFF
 ================================================================================

@@ -1,0 +1,123 @@
+CHEV PROMPT TRIM — SECTION-BY-SECTION DIFF
+Source: "Chev Prompt" (711 lines, ~13.9k tokens chars/4)
+Proposed: chev_prompt_proposed.txt (308 lines, ~5.0k tokens chars/4)
+================================================================================
+
+KEPT VERBATIM
+  Lines 1-68 (identity/voice: persona intro, Beijing Cocktail, Who You Are, Trading
+  Philosophy, How You Talk) — unchanged, per explicit instruction. Not a single word
+  touched.
+
+REMOVED — escalation-only, now safely dead weight
+  DEXTER ESCALATIONS — NO TOOL CALLS (91-92): a carve-out written for a mechanism that no
+    longer applies to this model. Confirmed by code: ask_chev_to_judge routes escalations
+    to model_id=ESCALATION_MODEL_ID ("chev-chelios-clone"), never MODEL_ID ("chev-
+    chelios") — this model never receives an escalation message to apply this rule to.
+  Cross-reference lines 107-109 ("This mapping is for Kev's normal chat requests. For
+    Dexter escalations, see the OPPORTUNITY BLOCK precedence rule under WHEN DEXTER
+    ESCALATES...") — pointed at a section being removed; the chat-relevant OPPORTUNITY
+    grading logic itself (101-106) is kept, just without the dangling escalation pointer.
+  EXPLORATION PHASE (462-466): explicitly self-labeled "READ THIS FIRST, DEXTER
+    ESCALATIONS ONLY" — same reasoning as above, this model never sees an escalation.
+  WHEN DEXTER ESCALATES A SIGNAL (468-542, 75 lines — the single largest removal): the
+    full POST:/SKIP:/TRADE: escalation format. This is now the Clone's job, has its own
+    dedicated, restated prompt (chev_escalation_prompt_proposed.txt), and the two formats
+    had already drifted apart (different field names) before this trim — Chev Prompt's
+    copy was the stale one.
+  WHEN DEXTER SENDS A MANAGEMENT CHECKPOINT (622-657, 36 lines): TRAIL_SL/TRAIL_SIP/HOLD/
+    CLOSE reply format for Dexter's management checkpoints.
+    *** DEPENDENCY — READ BEFORE PASTING: this removal is safe ONLY because dexter.py's
+    three checkpoint call sites (ask_chev_manage_trade, _ask_chev_partial_tp,
+    _ask_chev_time_stop) were rerouted to model_id=ESCALATION_MODEL_ID earlier in this
+    audit (2026-07-11/12) and CONFIRMED STILL IN PLACE after the later chev-learn revert
+    (that revert only touched the three LEARNING-session calls, not the checkpoint
+    reroutes — verified by grep before writing this diff). If those three checkpoint
+    reroutes were ever reverted without restoring this section to Chev Prompt, checkpoint
+    messages would go to a model with no instructions for them. Do not paste this trim
+    without the checkpoint reroutes being live in the deployed dexter.py. ***
+  TELEGRAM (459-460): trimmed to its general capability sentence only ("You can post into
+    Kev's trading group via the Telegram tool when explicitly asked by Kev or Alejandro").
+    Removed clause: "The one exception is Dexter's escalation flow ... posting POST: in
+    that specific context is your own judgment call" — stale, this model doesn't handle
+    escalations, the sentence describes a decision this model is never asked to make.
+  vp_start anchor tagging tail (619-620): "vp_start anchor: when tagging vp, set
+    vp_start=<YYYY-MM-DD>..." — this is TRADE:-line tagging mechanics for the escalation
+    format being removed above; the conceptual VP READING content above it is kept (see
+    below), only the tag-field mechanics are cut.
+  Trailing "--- / END OF ADDITION / ---" banner (708-711): leftover formatting artifact
+    from an earlier merge, no content, dropped.
+
+KEPT, CONDENSED (not deleted, not verbatim — every operative rule preserved, prose/
+examples/redundant restatement cut)
+  YOUR OPERATING SYSTEM, ACCOUNTABILITY, HONESTY, TOOLS, MARKET SURVEY, TOOL TIER SYSTEM —
+    condensed into tighter bullet form, same rules, same call order, same tier gating.
+  Output-section reading (MARKET STATE/AUCTION/GEOMETRY/HYPOTHESES/OPPORTUNITY + grading)
+    — condensed, same A+/A/B/C thresholds and behavior.
+  THE THREE MARKET STATES, THINKING PROCESS (6 steps), THESIS-FIRST REASONING, ACTIVE
+    FALSIFICATION, COMPETING HYPOTHESES, BELIEF REVISION (lifecycle states) — condensed,
+    every named state/step/rule intact, worked prose examples cut (the "WRONG:.../RIGHT:
+    ..." illustration, the EMA-vs-RSI example) since the rule itself is stated directly.
+  PLAYBOOKS (Pullback/Breakout/Range) — condensed, every entry condition and every skip
+    condition preserved verbatim in substance, just tightened to one line each.
+  ABSOLUTE RULES, SKIP CONDITIONS, UNCERTAINTY IS NOT A STOP CONDITION, PRINCIPLES
+    (Weakest Link, Auction Maturity Governor, Bold Not Reckless) — condensed, same
+    thresholds (85%/25/50pts/20-70%/70-85% etc.), same rules, tighter prose.
+  WEBAPP CHART DRAWING — kept close to verbatim (JSON format and hex colors are
+    functional, not stylistic, so not compressed); dropped one redundant sentence that
+    referenced tool-based SR judgment inside a context that has no tool access at all.
+  TOOL HONESTY (never-claim-no-access / no-narrating-in-progress / no-fake-confirmation /
+    VP+ATR trigger phrases / zoom direction / zoom-on-existing-analysis / no news access)
+    — condensed into one tighter block, same rules.
+  TRADING PARTNER, KNOWLEDGE BOOKS vs TOOLS, GET TO KNOW HIM, FORMAT, ANALYSIS OUTPUT
+    FORMAT (THESIS/BECAUSE/AGAINST/UNKNOWN/TRIGGER), TRACEABILITY RULE, OBSERVATION vs
+    INFERENCE, WEBAPP vs OPEN WEBUI, GENERAL, TRUST REAL TOOL DATA — condensed, same rules.
+
+FLAGGED, NOT SILENTLY HANDLED
+  VOLUME PROFILE READING (593-618, minus the vp_start tail already covered above): KEPT in
+    the trimmed prompt, condensed — this section is genuinely chat-relevant (Kev asks
+    about VP in normal conversation constantly) and is not escalation-only, so it stays
+    here rather than being deleted.
+    Separately — the Clone's own prompt (chev_escalation_prompt_proposed.txt, already
+    written and awaiting your paste) still has NO explanation of POC/VAH/VAL at all, even
+    though its TRADE:-line format accepts a vp_start field implying it may tag vp. This
+    trim does NOT edit the Clone's file to add one — that file was already finalized and
+    approved in an earlier phase, and reopening it wasn't asked for here. Flagging it as
+    an open item: if you want the Clone to actually understand VP rather than just pass
+    the tag through blind, that's a small follow-up to the Clone prompt, your call.
+
+AMENDMENTS TO PERFORMANCE REVIEW (kept section, three additions applied)
+  (i) Per-tag ★/⚠ markers now explicitly ignored under n=10 for that INDIVIDUAL tag (the
+      original only gated on Kev's overall trade count, not per-tag sample size) — new
+      clause: "ignore ★/⚠ on any tag with fewer than 10 trades of its OWN, a single tag can
+      look starred/flagged on a tiny sample even when his overall count is fine."
+  (ii) Tool error/empty → say so, never estimate — new clause: "If it errors or returns
+      empty, say so plainly, never fill the gap with a made-up number."
+  (iii) Name the data source — new clause: "Name the data source when you report it (the
+      Google Sheet, via get_trade_performance) so Kev knows it's live, not recalled."
+
+SIZE
+  Original: 711 lines / 55,684 chars / ~13.9k tokens (chars/4) or ~15.9k (chars/3.5, this
+  project's own convention, audit_context.py:36).
+  Proposed: 308 lines / 19,996 chars / ~5.0k tokens (chars/4) or ~5.7k (chars/3.5).
+  Note: the original spec targeted <=250 lines / ~4k tokens. Landed at 308/~5.0k-5.7k
+  instead — hitting 250 would have required cutting further into operative rule substance
+  (dropping a whole playbook's conditions, or the full skip-condition list, etc.), not
+  just prose.
+
+  Combined with the learning session's own worst-case prompt (23,167 chars, measured via
+  the standalone synthetic reproduction in Phase 0c of this audit) against the confirmed
+  12,288 ctx, since learning still runs on this same model (MODEL_ID) per your decision
+  against a dedicated learning model:
+    chars/4   : 4,999 (system) + 5,792 (learning) = 10,791 -> fits, ~1,497 tokens headroom
+    chars/3.5 : 5,713 (system) + 6,619 (learning) = 12,332 -> OVERFLOW by ~44 tokens
+  The two heuristics disagree on whether this trim alone is enough — one says comfortable
+  headroom, the other says a hair over the edge on the single worst-case learning session
+  (20 entries all at the 400-char analysis cap, long tag strings, 30 distinct combos — an
+  extreme case, not the typical one). Read as: this trim gets you out of guaranteed,
+  every-time overflow (the pre-trim combined total was ~16.6k-22.5k against 12,288) into
+  "close enough that real-world runs are probably fine, worst-case runs may still clip a
+  few hundred tokens." Not a hard guarantee. If you want a hard guarantee rather than good-
+  odds, the remaining lever is the same one already on record in Phase 2(d)'s options: a
+  dedicated learning-only model — which you specifically declined. That's still your call
+  to revisit or not; this isn't re-arguing it, just stating the actual number so it's
+  clear what "accepted risk" concretely means with the trim in place.

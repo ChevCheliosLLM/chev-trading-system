@@ -2297,7 +2297,10 @@ _sl_notify_ts: dict = {}  # symbol -> last SL trail notification timestamp (15-m
 OPENWEBUI_API_KEY = "sk-91bd167cca0142c983379ebe27b4e621"
 OPENWEBUI_URL     = "http://localhost:3000/api/chat/completions"
 ESCALATION_MODEL_ID = "chev-chelios-clone"  # lean escalation model in Open WebUI — its API id is "chev-chelios-clone" (display name "chev-escalation"); must match the model id registered in Open WebUI
-LEARNING_MODEL_ID = "chev-learn"  # dedicated learning brain — minimal system prompt in Open WebUI; the learning prompt carries its own instructions
+# Learning sessions deliberately run on MODEL_ID (chat-Chev). REQUIREMENT: the
+# chev-chelios system prompt must stay <= ~5k tokens or learning prompts will
+# silently overflow the 12,288 ctx -- see handoff, learning-overflow finding
+# 2026-07-11. Do not let the prompt regrow.
 
 FIREBASE_URL  = "https://chev-monitor-default-rtdb.firebaseio.com"
 JOURNAL_PATH       = os.path.join(CHEV_TOOLS_ROOT, "chev_journal.json")
@@ -3960,7 +3963,7 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
     )
     try:
         print(f"[Playbook] Learning session — {_asset_label}: {len(recent)} entries (+ {len(jane_recent)} Jane's)...")
-        new_playbook = _call_chev([{"role": "user", "content": prompt}], timeout=120, model_id=LEARNING_MODEL_ID)
+        new_playbook = _call_chev([{"role": "user", "content": prompt}], timeout=120)
         if not new_playbook:
             raise Exception("No response from Chev")
         _pb_path = PLAYBOOK_PATHS.get(asset_type, PLAYBOOK_PATH) if asset_type else PLAYBOOK_PATH
@@ -4013,7 +4016,7 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
                 f"are decided on data available at scan time, not on watching for one more candle.\n\n"
                 f"Write only the 3 bullet points. No intro, no conclusion, no additional text."
             )
-            loss_analysis = _call_chev([{"role": "user", "content": loss_prompt}], timeout=90, model_id=LEARNING_MODEL_ID)
+            loss_analysis = _call_chev([{"role": "user", "content": loss_prompt}], timeout=90)
             if loss_analysis:
                 # ── Step 3: Win/Loss comparison — what did winners have that losers didn't ──
                 win_trades = [e for e in asset_journal if e.get("outcome") == "WIN"][-10:]
@@ -4041,7 +4044,7 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
                         f"wait for a confirmation candle or additional price action after entry conditions are met. "
                         f"No intro, no conclusion — just the 2 bullets."
                     )
-                    compare_analysis = _call_chev([{"role": "user", "content": compare_prompt}], timeout=90, model_id=LEARNING_MODEL_ID)
+                    compare_analysis = _call_chev([{"role": "user", "content": compare_prompt}], timeout=90)
                 else:
                     compare_analysis = None
 
