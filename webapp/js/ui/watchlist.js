@@ -184,6 +184,7 @@
 
   // Forex prices: Firebase primary (Dexter pushes every 3s) → FreeForexAPI fallback
   const _forexSessionOpen = {};
+  let _forexApiDownUntil = 0;   // ms epoch; while in the future, skip the fallback fetch entirely
   async function refreshForexPrices() {
     const forexItems = groups.forex || [];
     if (!forexItems.length) return;
@@ -203,10 +204,18 @@
       if (matched > 0) return;
     }
 
-    // Fallback: FreeForexAPI (slow, rate-limited, works when Dexter is offline)
+    // Fallback: FreeForexAPI (slow, rate-limited, works when Dexter is offline).
+    // Backed off after a failure -- this function is polled every 3s (see the
+    // setInterval below), and the provider being down/CORS-blocked must never
+    // turn into a request every 3s forever (that's the retry storm + console
+    // spam this guard exists to stop). One warning, then quiet until the
+    // cooldown expires -- watchlist prices just keep showing their last-known
+    // value (or "—" if never set) in the meantime.
+    if (Date.now() < _forexApiDownUntil) return;
     try {
       const pairParam = forexItems.map(i => i.symbol.replace('/', '')).join(',');
       const res = await fetch(`https://www.freeforexapi.com/api/live?pairs=${pairParam}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.code === 200 && data.rates) {
         forexItems.forEach(item => {
@@ -219,7 +228,10 @@
           applyWatchPrice(item.symbol, price, changePct);
         });
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[watchlist] FreeForexAPI unavailable, backing off 5 min:', e.message);
+      _forexApiDownUntil = Date.now() + 5 * 60 * 1000;
+    }
   }
 
   const _lastPriceMap = {};

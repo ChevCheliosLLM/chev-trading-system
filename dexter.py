@@ -25,6 +25,7 @@ import risk_gauntlet
 import honest_sim
 import counterfactual_report
 import weight_proposal
+import real_performance
 import io
 import contextlib
 
@@ -847,6 +848,7 @@ def _build_weight_proposal_payload():
     overrides = _read_weight_overrides_file()
     entries = overrides.get("entries", [])
     freeze_epoch = None
+    frozen_since = None
     if entries:
         for e in entries:
             try:
@@ -855,6 +857,7 @@ def _build_weight_proposal_payload():
                 continue
             if freeze_epoch is None or ts > freeze_epoch:
                 freeze_epoch = ts
+                frozen_since = e["approved_at"]
 
     eligible = [r for r in kept if (r.get("ts_epoch") or 0) > freeze_epoch] if freeze_epoch is not None else kept
 
@@ -863,6 +866,8 @@ def _build_weight_proposal_payload():
             "ok": True, "frozen": True,
             "records_since_last_change": len(eligible),
             "needed": FREEZE_MIN_RECORDS,
+            "frozen_since": frozen_since,
+            "note": "window keys off approval time; records between approval and restart are conservatively excluded.",
             "proposals": [],
         }
 
@@ -881,10 +886,17 @@ def _build_weight_proposal_payload():
         coef = float(beta[j])
         lo, hi = float(ci_lo[j]), float(ci_hi[j])
         significant = (lo > 0) or (hi < 0)
-        current_weight = CONFLUENCE_SCORES.get(tag)
+        if tag in WEIGHT_LAB_VERIFIED_TAGS:
+            mapping = "verified"
+        elif tag in CONFLUENCE_SCORES:
+            mapping = "unverified"
+        else:
+            mapping = "unmapped"
+        current_weight = CONFLUENCE_SCORES.get(tag) if mapping == "verified" else None
         row = {
             "tag": tag, "n": tag_counts[tag], "coef": round(coef, 4),
             "ci": [round(lo, 4), round(hi, 4)], "significant": significant,
+            "mapping": mapping,
             "current_weight": current_weight,
             "proposed_delta": None, "effective_weight_preview": None, "agreement": None,
         }
@@ -895,7 +907,7 @@ def _build_weight_proposal_payload():
             if cross["avg_netR_with"] is not None and cross["avg_netR_without"] is not None:
                 raw_diff = cross["avg_netR_with"] - cross["avg_netR_without"]
                 row["agreement"] = "agree" if (coef > 0) == (raw_diff > 0) else "conflict"
-            if current_weight is not None:
+            if mapping == "verified" and current_weight is not None:
                 delta = 1 if coef > 0 else -1
                 row["proposed_delta"] = delta
                 row["effective_weight_preview"] = current_weight + delta
@@ -961,7 +973,9 @@ def api_weight_proposal_approve():
     if abs(delta) != 1:
         return jsonify({"ok": False, "error": "delta must be exactly +1 or -1"}), 400
     if tag not in CONFLUENCE_SCORES:
-        return jsonify({"ok": False, "error": f"'{tag}' is not a known CONFLUENCE_SCORES tag"}), 400
+        return jsonify({"ok": False, "error": f"'{tag}' is not a known CONFLUENCE_SCORES tag (unmapped)"}), 400
+    if tag not in WEIGHT_LAB_VERIFIED_TAGS:
+        return jsonify({"ok": False, "error": f"'{tag}' shares a name with a CONFLUENCE_SCORES key but its mechanic has not been verified (unverified) — see handoff PHASE 16 no-aliasing rule"}), 400
     if tag not in _weight_proposal_significant_tags:
         return jsonify({"ok": False, "error": f"'{tag}' was not in the most recently served significant proposal set"}), 400
 
@@ -1009,6 +1023,37 @@ def api_weight_overrides():
     entries = data.get("entries", [])
     annotated = [{**e, "active": e in _WEIGHT_OVERRIDES_STARTUP_SNAPSHOT} for e in entries]
     return jsonify({"ok": True, "version": data.get("version", 1), "entries": annotated})
+
+
+# =============================================================================
+# REAL PERFORMANCE — era-aware, R claimed only where actually recorded (see
+# real_performance.py for the full rationale: two conflicting "real average R"
+# claims led to this — one silently dropped the pre-tracking era, the other
+# back-derived risk from the CURRENT `sl` field, which this system trails, so it
+# no longer reflects the risk actually taken on a managed trade). Read-only,
+# never derives R from the current `sl`, never touches chev_journal.json.
+# =============================================================================
+REAL_PERFORMANCE_CACHE_SECS = 300
+_real_performance_cache = {"ts": 0.0, "payload": None}
+
+
+@flask_app.route("/api/real_performance")
+def api_real_performance():
+    """Read-only. Same structured data as real_performance_report.txt (single
+    source of truth — build_real_performance_dict()), 300s cache, same pattern
+    as /api/strategy/counterfactual."""
+    now = time.time()
+    cache_age = now - _real_performance_cache["ts"]
+    if _real_performance_cache["payload"] is None or cache_age >= REAL_PERFORMANCE_CACHE_SECS:
+        records = real_performance.load_journal(real_performance.JOURNAL_FILE)
+        data = real_performance.build_real_performance_dict(records)
+        _real_performance_cache["ts"] = now
+        _real_performance_cache["payload"] = data
+        cache_age = 0.0
+
+    payload = dict(_real_performance_cache["payload"])
+    payload["cache_age_secs"] = round(cache_age, 1)
+    return jsonify({"ok": True, **payload})
 
 
 @flask_app.route("/api/strategy/heatmap")
@@ -2252,6 +2297,7 @@ _sl_notify_ts: dict = {}  # symbol -> last SL trail notification timestamp (15-m
 OPENWEBUI_API_KEY = "sk-91bd167cca0142c983379ebe27b4e621"
 OPENWEBUI_URL     = "http://localhost:3000/api/chat/completions"
 ESCALATION_MODEL_ID = "chev-chelios-clone"  # lean escalation model in Open WebUI — its API id is "chev-chelios-clone" (display name "chev-escalation"); must match the model id registered in Open WebUI
+LEARNING_MODEL_ID = "chev-learn"  # dedicated learning brain — minimal system prompt in Open WebUI; the learning prompt carries its own instructions
 
 FIREBASE_URL  = "https://chev-monitor-default-rtdb.firebaseio.com"
 JOURNAL_PATH       = os.path.join(CHEV_TOOLS_ROOT, "chev_journal.json")
@@ -2262,6 +2308,21 @@ PLAYBOOK_PATHS     = {
     "crypto": os.path.join(CHEV_TOOLS_ROOT, "chev_playbook_crypto.txt"),
     "stocks": os.path.join(CHEV_TOOLS_ROOT, "chev_playbook_stocks.txt"),
 }
+
+def _norm_asset_type(v):
+    """Normalize an asset_type value to the vocabulary PLAYBOOK_PATHS/the learning
+    session use ("forex"/"crypto"/"stocks", plural stocks). WATCHLIST entries and
+    every real trade/journal record use singular "stock" (dexter.py:3117-3141 ->
+    log_new_trade -> the journal's own "asset_type" field) -- that's correct and
+    must NOT be changed, since MAX_LEVERAGE_BY_TYPE, ESCALATION_TF_FLOOR, fee/
+    slippage tables, and risk_gauntlet/labeller all key off the singular form
+    consistently. This helper exists so the handful of sites that key off the
+    PLURAL playbook vocabulary can compare/look up correctly without touching
+    that singular convention anywhere else. None-safe: passthrough on None."""
+    if v == "stock":
+        return "stocks"
+    return v
+
 MODEL_ID = "chev-chelios"
 
 TRADE_TYPE_EXPIRY_HOURS = {"scalp": 2, "day": 6, "swing": 48}
@@ -2335,6 +2396,13 @@ CONFLUENCE_SCORES = {
     # Market / price structure (higher timeframe context)
     "ms_1d": 5, "ms_4h": 4, "ms_1h": 3, "ms_30m": 2, "ms_15m": 1, "ms": 3,
 }
+
+# Labeller `features` codes confirmed by Kev to be the same mechanic as the
+# identically-named CONFLUENCE_SCORES key. Never add entries without that
+# confirmation — see handoff PHASE 16 no-aliasing rule. (Confirmed 2026-07-11:
+# labeller's REASON_MAP tokenizes dexter's own emitted reason strings for all
+# three, so these are the same computation quoted twice, not a name collision.)
+WEIGHT_LAB_VERIFIED_TAGS = {"gp", "rsi_ob", "rsi_os"}
 
 # =============================================================================
 # WEIGHT LAB — startup-only override loader
@@ -3287,7 +3355,7 @@ def _push_to_firebase():
 
 
 def _load_playbook(asset_type=None):
-    path = PLAYBOOK_PATHS.get(asset_type, PLAYBOOK_PATH) if asset_type else PLAYBOOK_PATH
+    path = PLAYBOOK_PATHS.get(_norm_asset_type(asset_type), PLAYBOOK_PATH) if asset_type else PLAYBOOK_PATH
     try:
         with open(path, "r", encoding="utf-8") as f:
             return f.read().strip()
@@ -3602,13 +3670,32 @@ def _preserve_critical_section(existing_text, generated_text):
     Extracts the section verbatim (heading line to next heading line) from the
     EXISTING playbook file and re-inserts it into the freshly GENERATED text,
     replacing whatever the model produced there or inserting it in the same
-    position if the model omitted it. Supports both heading styles used across
-    the playbook files: '### TRENDING...' and '**TRENDING...**'.
+    position if the model omitted it.
     Returns generated_text unchanged if the existing file has no such section
     (e.g. a fresh file) — nothing to preserve yet.
     """
-    import re as _re
-    _heading_re = _re.compile(r'^(?:#{1,6}\s*.+|\*\*[^\n]+\*\*)\s*$')
+    # Known section names the playbook is actually built from: the headings
+    # _run_learning_session's own prompt asks for (dexter.py ~3873-3891) plus the
+    # two supplemental sections it appends afterward (dexter.py ~3995/3997). The
+    # model is inconsistent about which markup it wraps a heading in ('### NAME',
+    # '**NAME**', or a bare ALL-CAPS line with no markup at all) -- a generic
+    # heading-style regex missed the bare-line case, which let the boundary scan
+    # fall through to end-of-text and splice the ENTIRE old file tail back into
+    # the freshly generated playbook (the duplicate-sections bug found in the live
+    # chev_playbook_forex.txt). Matching against this known, finite name list
+    # instead of any markup pattern is what actually fixes that failure mode.
+    _PLAYBOOK_SECTION_NAMES = {
+        "CONFLUENCE CONDITIONS", "MARKET STRUCTURE RULES", "ENTRY QUALITY STANDARDS",
+        "TRADE MANAGEMENT PATTERNS", "REASONING QUALITY", "ASSET NOTES",
+        "JANE'S PATTERNS", "STRUCTURAL RISK FACTORS", "WIN/LOSS INSIGHT",
+    }
+
+    def _is_section_heading(line):
+        stripped = line.strip().lstrip("#").strip()
+        if stripped.startswith("**") and stripped.endswith("**") and len(stripped) > 4:
+            stripped = stripped[2:-2].strip()
+        stripped = stripped.rstrip(":").strip()
+        return stripped.upper() in _PLAYBOOK_SECTION_NAMES
 
     def _extract(text):
         lines = text.splitlines()
@@ -3621,7 +3708,7 @@ def _preserve_critical_section(existing_text, generated_text):
             return None, None, lines
         end = len(lines)
         for j in range(start + 1, len(lines)):
-            if _heading_re.match(lines[j].strip()):
+            if _is_section_heading(lines[j]):
                 end = j
                 break
         return start, end, lines
@@ -3651,11 +3738,29 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
     When asset_type is given, only trades of that type are used and the asset-specific
     playbook file is updated.  Generic (all-asset) mode still works when asset_type=None.
     """
-    asset_journal = [e for e in journal if e.get("asset_type") == asset_type] if asset_type else journal
+    asset_journal = [e for e in journal if _norm_asset_type(e.get("asset_type")) == asset_type] if asset_type else journal
     if asset_type and len(asset_journal) < 5:
         return  # not enough data to write a meaningful asset-specific playbook yet
     recent = asset_journal[-20:]
-    jane_recent = (jane_journal or [])[-10:]
+
+    def _jane_asset_type(symbol):
+        # jane_journal.json entries carry no "asset_type" field at all (unlike Chev's
+        # own journal, dexter.py:10358-10370) -- classify from symbol instead, using
+        # the same heuristic already used for Jane's open trades (dexter.py:10180),
+        # bucketed to "stocks" (plural) to match this function's own asset_type
+        # vocabulary (the caller loop passes "forex"/"crypto"/"stocks").
+        if symbol.endswith("USDT"):
+            return "crypto"
+        if "/" in symbol:
+            return "forex"
+        return "stocks"
+
+    jane_journal = jane_journal or []
+    jane_asset_journal = (
+        [e for e in jane_journal if _jane_asset_type(e.get("symbol", "")) == asset_type]
+        if asset_type else jane_journal
+    )
+    jane_recent = jane_asset_journal[-10:]
 
     def _fmt_entry(i, e):
         moves = e.get("chev_moves", [])
@@ -3815,6 +3920,7 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
         f"  State every win-rate or performance claim with its sample size in parentheses, e.g. '3/3 (n=3)'.\n"
         f"  No absolute language ('always', 'never', '100% win rate', 'guaranteed') unless n ≥ 20.\n"
         f"  Patterns with fewer than 10 supporting trades: label them tentative.\n"
+        f"  Any pattern with fewer than 5 supporting trades must be written as 'tentative (n=X)' — never stated as a rule.\n"
         f"  Only reference tag codes that actually appear in the journal data above — never invent shorthand.\n"
         f"  TRENDING MARKET BEHAVIOUR — CRITICAL is maintained by the system — do not attempt to rewrite it.\n\n"
         f"Rewrite your playbook under these exact headings:\n\n"
@@ -3854,7 +3960,7 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
     )
     try:
         print(f"[Playbook] Learning session — {_asset_label}: {len(recent)} entries (+ {len(jane_recent)} Jane's)...")
-        new_playbook = _call_chev([{"role": "user", "content": prompt}], timeout=120)
+        new_playbook = _call_chev([{"role": "user", "content": prompt}], timeout=120, model_id=LEARNING_MODEL_ID)
         if not new_playbook:
             raise Exception("No response from Chev")
         _pb_path = PLAYBOOK_PATHS.get(asset_type, PLAYBOOK_PATH) if asset_type else PLAYBOOK_PATH
@@ -3907,7 +4013,7 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
                 f"are decided on data available at scan time, not on watching for one more candle.\n\n"
                 f"Write only the 3 bullet points. No intro, no conclusion, no additional text."
             )
-            loss_analysis = _call_chev([{"role": "user", "content": loss_prompt}], timeout=90)
+            loss_analysis = _call_chev([{"role": "user", "content": loss_prompt}], timeout=90, model_id=LEARNING_MODEL_ID)
             if loss_analysis:
                 # ── Step 3: Win/Loss comparison — what did winners have that losers didn't ──
                 win_trades = [e for e in asset_journal if e.get("outcome") == "WIN"][-10:]
@@ -3935,7 +4041,7 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
                         f"wait for a confirmation candle or additional price action after entry conditions are met. "
                         f"No intro, no conclusion — just the 2 bullets."
                     )
-                    compare_analysis = _call_chev([{"role": "user", "content": compare_prompt}], timeout=90)
+                    compare_analysis = _call_chev([{"role": "user", "content": compare_prompt}], timeout=90, model_id=LEARNING_MODEL_ID)
                 else:
                     compare_analysis = None
 
@@ -6554,7 +6660,7 @@ def _build_rich_market_brief(symbol, asset_type, primary_tf="1h", confluence_zon
 
         session = _get_session_context()
         pdhl    = _get_previous_day_hl(symbol, asset_type)
-        adr     = _get_adr(symbol, asset_type) if asset_type in ("forex", "stocks") else None
+        adr     = _get_adr(symbol, asset_type) if _norm_asset_type(asset_type) in ("forex", "stocks") else None
 
         # ── Assemble brief ────────────────────────────────────────────────
         lines = [f"=== MARKET BRIEF: {symbol} ({asset_type.upper()}) ===\n"]
@@ -9431,7 +9537,7 @@ def _ask_chev_partial_tp(trade, current_price, price_r, level_verdict=None, leve
     )
 
     print(f"[PARTIAL MILESTONE] {symbol} {direction.upper()} +{price_r:.1f}R — asking Chev HOLD/TAKE25/TAKE50/TRAIL_SL")
-    reply = _call_chev([{"role": "user", "content": content}], timeout=90)
+    reply = _call_chev([{"role": "user", "content": content}], timeout=90, model_id=ESCALATION_MODEL_ID)
     reply_upper = (reply or "").strip().upper()
 
     if reply:
@@ -9513,7 +9619,7 @@ def _ask_chev_time_stop(trade, current_price, hours_open, hours_allowed, price_r
 
     print(f"[TIME-STOP] {symbol} {direction.upper()} — {hours_open:.1f}h open vs {hours_allowed}h allowed "
           f"({price_r:+.2f}R) — asking Chev CLOSE_NOW/CONVERT_TO_SWING")
-    reply = _call_chev([{"role": "user", "content": content}], timeout=90)
+    reply = _call_chev([{"role": "user", "content": content}], timeout=90, model_id=ESCALATION_MODEL_ID)
     if reply:
         trade["last_chev_decision"]  = f"TIME-STOP: {reply.strip()[:60]}"
         trade["last_decision_price"] = round(current_price, 5)

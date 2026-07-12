@@ -6316,5 +6316,227 @@ RESTART: N/A (launcher is a standalone GUI; just re-run launcher.py). DEPLOY:
 N/A. RE-PASTE CHEV PROMPT: NO.
 
 ================================================================================
+*** VP-ONLY ANCHOR DETECTION + MULTI-TIMEFRAME VP POPUP — 2026-07-11 —
+RESTART: YES (dexter.py changed), DEPLOY: YES (webapp changed — push_dashboard.py),
+RE-PASTE CHEV PROMPT: NO ***
+CONTEXT: Kev flagged that the Arsenal Volume Profile tool was anchoring wrong —
+screenshots showed it landing on a recent mid-range retest dip instead of the true
+start of the current range, and separately, an entire OLD price distribution
+(78-84) was getting merged into the CURRENT range's (76-79.5) value area after a
+decisive, never-retested breakdown between them. Both traced to the same root
+cause: VP shared `_detect_auction_anchor()` (the dual-pivot swing detector) with
+Fib/SR/VWAP, which is tuned to find "the most recent clean swing" — correct for
+Fib, wrong for VP, which needs "the full life of the CURRENT auction."
+WHAT CHANGED AND WHY:
+1. dexter.py — new `_detect_vp_anchor()` (next to `_detect_auction_anchor`,
+   Fib/SR/VWAP untouched). Walks ATR compression -> expansion transitions OLDEST
+   to NEWEST (reverse of the existing ATR fallback), and for each candidate tests
+   whether the value area (POC/VAH/VAL) from candidate-to-now still statistically
+   matches the value area from just the recent window — noise-tolerant (ATR-scaled
+   ​tolerance, so an ordinary wick/fakeout can't break the chain, per Kev's explicit
+   requirement that the range doesn't have to be perfect). First (oldest) passing
+   candidate wins, so VP gets the longest history still provably the same auction.
+   SECOND GUARDRAIL (added after Kev caught a real case in his own chart): a
+   candidate is now ALSO rejected if the older portion of its window never
+   actually overlaps the current value area (a "did it ever come back" check,
+   separate from the raw POC/VAH/VAL tolerance test) — this is what distinguishes
+   an ordinary sharp move THAT HAPPENED INSIDE a persistent range (should merge)
+   from a genuine, un-retraced regime change into a separate distribution (must
+   NOT merge). Falls back to the farthest-fractal method if nothing passes.
+2. Call sites switched to the new function (verified by reading each site, not
+   guessed): /api/analysis/vp (now /api/analysis/vp_stack, see #3), the 4H/1H VP
+   text block in _build_rich_market_brief, and the vp_score block in scan_pair_tf
+   (Chev's real confluence-scoring gate) — per Kev's explicit choice to fix this
+   EVERYWHERE VP is used, not just the chart, so Chev's reasoning and the chart
+   always agree. Left untouched (confirmed general/Fib-specific): /api/analysis/
+   anchor, Fib's own anchor call (comment there updated — it no longer claims to
+   share VP's anchor), and two general "Active Auction Anchor" narrative blocks.
+3. Multi-timeframe VP popup — mirrors the existing Fib stack exactly, since VP's
+   anchor legitimately differs by timeframe and Kev was tired of changing the
+   chart's TF and re-clicking VP to compare. New /api/analysis/vp_stack route
+   (15m/1h/4h, same TFS-with-color convention as /api/analysis/fib_stack), new
+   #ctpVpBody popup section with per-TF checkboxes, new _fetchAndDrawVpStack()
+   replacing the old single-TF _fetchAndDrawVP() in chat.js (renamed the old one's
+   naming collision away — rsi-canvas.js has its own unrelated _fetchAndDrawVP()
+   for the Radar idea-pill trade overlay, kept on the restored single-TF
+   /api/analysis/vp route, untouched).
+4. Backend/frontend consistency — /api/analysis/vp[_stack] now also returns
+   bin_edges/bin_volumes (previously computed and discarded); the frontend's
+   drawing.js no longer recomputes its own histogram from currentCandles
+   (computeVP() deleted) — the chart always renders exactly what Dexter computed,
+   never a silently-different client-side approximation.
+5. Anchor dragging — found and fixed a real gap: hitTest()'s generic-overlay
+   exclusion was blocking a VP box's own anchor-drag hit case from ever being
+   reached for Dexter-detected (tagged) boxes, so only manually hand-drawn VP-tool
+   boxes were ever actually draggable. Fixed the exclusion to let tagged VP boxes
+   through to their anchor-only hit test (drawing.js), while separately fixing
+   _drawHoverX so tagged boxes still can't be deleted via the generic hover-X
+   shortcut (only via the Arsenal button/checkboxes) — dragging an anchor now
+   locally recomputes that box's histogram from currentCandles (the one place
+   client-side recompute is intentional, since it's a deliberate user override of
+   a specific range, not the auto-detected case).
+6. Pair-switch reset + a real bug found mid-session: loadDrawings/_syncDrawings
+   now strip _vp/_vp_stack-tagged drawings so VP never carries over to a new
+   symbol. Found (via Kev's bug report) that the SAME filter, if also applied to
+   the PERSISTENT Firebase SSE listener (_subscribeDrawings), wiped out a user's
+   own just-added VP box moments after adding it — because saveDrawings() echoes
+   back through that same listener. Fixed by only filtering the two one-shot
+   load paths, not the live listener, which must trust its own echoes.
+VERIFICATION: new test_vp_anchor.py (standalone, no dexter import, same
+convention as test_risk_net.py) — 7 scenarios: screenshot-reproduction (anchor
+lands at the true breakout, not the dip), noise tolerance (one wick doesn't move
+it), multiple-compressions precedence (earliest wins), the regime-change rejection
+(an old, abandoned high-price range must NOT merge into a new one after a
+never-retraced breakdown), a matching case confirming an ordinary in-range dip
+still merges correctly, fallback behavior, and the return-shape contract. ALL
+PASS. `python -m py_compile dexter.py` clean; `node --check` clean on all touched
+JS. Manually walked the exact screenshot scenario that started this — anchor now
+lands at the true breakout candle, not the retest dip.
+BENEFIT: Volume Profile's POC/VAH/VAL now represent the actual current auction on
+every timeframe, not a stale swing pivot borrowed from a tool built for a
+different job; Chev's vp_score confluence points and the chart the user watches
+are now provably the same numbers; two real interaction bugs (anchors that looked
+draggable but weren't, VP vanishing on its own echo) are fixed; comparing
+timeframes no longer requires manually re-clicking the tool per TF.
+RESTART: YES. DEPLOY: YES (webapp/index.html, webapp/js/*, webapp/css/* all
+changed — push_dashboard.py as usual). RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+*** SHADOW-TRADE DIAGNOSTICS: labeller.py COST_R FIX + WEIGHT LAB (CONFLUENCE TAG
+WEIGHT PROPOSALS) — 2026-07-11 — RESTART: YES (dexter.py changed), DEPLOY: YES
+(webapp changed), RE-PASTE CHEV PROMPT: NO ***
+CONTEXT: Kev asked to mine the accumulated shadow-trade data (labels_closed.jsonl,
+~10k records) for real, actionable edge Dexter's own gates might be missing.
+Running the existing counterfactual_report.py surfaced two real problems before
+any tag-weighting work could be trusted: (1) the "POST" bucket (Chev's real
+trades, re-simulated through the Examiner's shadow lens) showed impossibly large
+losses (-4.21R, -3.63R) that turned out to be a cost-model artifact, not real
+losses; (2) the raw per-tag leaderboard is fundamentally misleading for
+near-ubiquitous tags (ema13/ema21/bb_squeeze appear on nearly every setup, so
+their aggregate mostly just measures the whole population's base rate, not their
+own marginal effect) — confirmed concretely when gp_sr_combo's raw leaderboard
+total (+18.88R, looked like a missed edge) flipped to a significant NEGATIVE
+marginal coefficient once fit simultaneously against every other tag.
+WHAT CHANGED AND WHY:
+1. labeller.py — found and fixed a real formula bug in _compute_cost_R(): cost is
+   round-trip fee/slippage divided by stop_pct, where stop_pct comes from a flat
+   R_MULT x ATR box; on low-ATR%-relative-to-price instruments (forex swing
+   especially) this produced cost_R of 2-3R+ — nonsensical, since risk_gauntlet.py
+   hard-caps REAL trade cost at 0.20-0.45R and would never have approved a trade
+   that expensive. Added COST_R_CAP = 0.50 and capped the function's return value.
+   Historical labels_closed.jsonl records were NOT rewritten (old records keep
+   their old values); counterfactual_report.py and weight_proposal.py both apply
+   the same cap at READ time instead, so old data self-corrects without a rewrite.
+   Verified: the three "largest losers" that looked like -4.21R/-3.63R/-3.46R all
+   turned out to be the ordinary capped -1.0R shadow loss, inflated entirely by
+   this formula — confirmed by pulling those exact records.
+2. counterfactual_report.py — relabeled the misleading "POST — REALITY ANCHOR"
+   section to "POST — SHADOW REPLAY (NOT real trade P&L)" with an explicit note
+   that real fills/stops/P&L live in chev_journal.json and are NOT what this
+   section shows (it's Chev's stated entry re-simulated through the SAME
+   mean-reversion-zone-touch box SKIP/NOT_ESCALATED use, which is a structurally
+   different, harder test for a real trade's actual entry/direction — confirmed
+   by checking that POST's shadow win rate stays much worse than SKIP's even
+   within matched asset/trade-type slices). Separately pulled REAL numbers
+   directly from chev_journal.json (n=108 usable trades, computed R = pnl /
+   (position_size_usd x |entry-sl|/entry), verified against a sample record's
+   real pnl first): avg R = -0.12, total = -12.60R, win rate 38% — better than
+   the shadow-POST number but still net negative; NOT the "everything's fine"
+   result an earlier unverified claim asserted mid-session, which is why this got
+   checked directly instead of taken on faith.
+3. NEW weight_proposal.py — standalone, read-only, no dexter.py import. Answers
+   "what is each confluence tag's MARGINAL contribution to net_R, holding every
+   other tag and asset_type/trade_type constant" via Ridge regression (handles
+   the heavy tag collinearity far better than plain OLS/groupby) with bootstrap
+   95% confidence intervals. Excludes POST from the regression sample entirely
+   (see #2 — structurally different population). THIS IS THE EXACT FEATURE
+   FLAGGED AS A RISK AND DELIBERATELY NOT BUILT in the CONFLUENCE SCORING SYSTEM
+   section above ("brainstorm item 6" — auto-tuning point values from real
+   performance needs guardrails against a runaway feedback loop, the same shape
+   as the playbook self-reinforcement bug). Built NOW with exactly the three
+   guardrails that section specified: (a) MIN_N=30 AND a bootstrap CI that must
+   not cross zero before a tag's effect is trusted at all; (b) proposals are
+   sign-only, capped at +/-1 point per run regardless of how large the estimated
+   effect looks; (c) the script only ever prints a proposal — it never applies
+   anything itself. New test_vp_anchor.py-style self-test (`--selftest`, synthetic
+   data only): a planted +0.4R tag must come out significant-positive, a
+   planted-zero-effect tag must NOT be significant, a huge-effect n=5 tag must be
+   dropped by MIN_N before it ever reaches the regression. ALL PASS.
+4. NEW "Weight Lab" — turns the text report into an approve-by-hand UI, built in
+   four gated phases (recon -> backend loader -> API routes -> frontend), each
+   verified before the next began:
+   - dexter.py: WEIGHT_OVERRIDES_FILE + _apply_weight_overrides(), called ONCE at
+     startup only (deliberately NOT a per-cycle hot-reload like tunables.json — a
+     weight change is a bigger behavioral commitment than a tunable). Sums deltas
+     per tag, applies to CONFLUENCE_SCORES in place, with a HARD safety clamp
+     independent of the UI's own +/-1 cap (defense in depth): a tag's final value
+     can never leave [0, 2x its original value + 2]. Unknown tags are ignored
+     (never added as a new key) with a logged warning; a malformed file applies
+     nothing and startup continues normally. CONFLUENCE_SCORES itself was never
+     hand-edited — only this runtime override mechanism was added.
+   - New read-only GET /api/weight_proposal (300s cache, same pattern as
+     /api/strategy/counterfactual): runs weight_proposal.py's regression
+     in-process, gated by its own self-test (serves NO numbers if the checker
+     itself is broken — verified by deliberately breaking a planted assertion,
+     confirming the API-facing error names exactly which one failed, then
+     restoring it), applies a FREEZE-WINDOW rule (only records after the most
+     recent approved change are eligible once one exists; needs 200+ fresh
+     records before proposing again), and includes an independent raw with/
+     without-tag cross-check per proposed tag plus an "agree"/"conflict" flag
+     against the regression's sign — a second, cheaper check on the checker.
+   - New @require_key POST /api/weight_proposal/approve and /revert: validate
+     |delta|==1, tag exists in CONFLUENCE_SCORES, tag was in the last-served
+     SIGNIFICANT set (server-side, never client-trusted), no duplicate pending
+     entry for the same tag; atomic writes (temp file + os.replace) to
+     weight_overrides.json. New read-only GET /api/weight_overrides annotates
+     each entry "active" (already applied this run) by comparing against a
+     snapshot taken at startup.
+   - New Engine-pane "⚖️ Weight Lab" section (webapp/js/ui/weight-lab.js, new
+     webapp/css/components/weight-lab.css): reuses the exact existing X-Chev-Key
+     mechanism (_apiFetch already handles the key prompt/401-reprompt — no second
+     auth flow invented), friendlyTag()/tag registry, and the existing toast
+     system. Six states (loading/self-test-failed/frozen/pending-restart/
+     proposals/nothing-significant); a loud pending-restart banner always shows
+     above everything else; conflicting rows get a visible warning badge and a
+     muted approve button; every card states plainly "Proposal only. Nothing
+     changes until you approve AND restart Dexter."
+VERIFICATION: could not use a Flask test client for the new routes (dexter.py
+starts live threads at bare module import, no __main__ guard — the same reason
+every test_*.py in this project reimplements logic standalone rather than
+importing dexter). Instead: standalone reimplementations of every piece of new
+logic (loader clamps/unknown-tag/malformed-file, approve/revert validation +
+atomic writes, the self-test-gate capture mechanism against a deliberately broken
+real assertion) verified against temp files and the real weight_proposal.py; a
+full end-to-end chain test feeding a realistic multi-entry approve output
+(including a negative-delta floor-clamp case) through the actual loader logic;
+@require_key wiring confirmed correct by direct source read (its 401 behavior is
+already proven in production by 6 pre-existing routes using the identical
+decorator). `python -m py_compile dexter.py` clean; `node --check` clean.
+BENEFIT: closes the loop this project's own history flagged as worth having but
+too dangerous to build carelessly — real evidence about which confluence tags
+carry genuine edge, with the exact guardrails already specified (minimum sample +
+significance, hard per-run cap, human-approval-only) rather than a silent
+auto-tuner. The cost_R fix stops a measurement artifact from ever again being
+mistaken for a real trading result; the POST relabeling stops the exact
+misreading that happened mid-session from happening again to someone reading the
+report cold.
+NEXT (Kev, manual): CURRENT_WEIGHTS in weight_proposal.py is deliberately an
+empty placeholder — populating it (or approving via the Weight Lab UI, which
+reads live CONFLUENCE_SCORES directly and needs no manual dict) is a TRANSLATION
+job, not copy-paste: the labeller's tag vocabulary and CONFLUENCE_SCORES' keys are
+different languages that mostly don't string-match (PHASE 16's own note above).
+Only map/approve a tag where the underlying mechanic is certain; leave anything
+ambiguous unmapped. Also: the current sample is one week of one market regime —
+treat a first approval as a hypothesis, not a conviction, and prefer letting a
+tag clear the evidence bar across more than one freeze-window before spending the
+capped point. Deploy webapp changes via push_dashboard.py, restart Dexter, then
+follow the manual checklist (open Engine pane -> confirm Weight Lab loads ->
+approve one tag -> confirm the restart banner -> restart -> confirm /api/
+tag_registry serves the new value and the banner clears).
+RESTART: YES. DEPLOY: YES (webapp/index.html, webapp/js/ui/weight-lab.js,
+webapp/css/components/weight-lab.css — push_dashboard.py as usual).
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
 END OF HANDOFF
 ================================================================================

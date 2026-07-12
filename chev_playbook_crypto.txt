@@ -1,20 +1,24 @@
 CHEV TRADING PLAYBOOK — CRYPTO
-Last updated: 2026-07-10 02:41:24 | Based on 71 CRYPTO trades
+Last updated: 2026-07-11 16:42:19 | Based on 77 CRYPTO trades
 ========================================
 
 ### CONFLUENCE CONDITIONS
-- **High-quality confluences:** sr_4h + fib_1h + ema_55 (n=3)
-- **Marginal confluences:** dv + ema_13 + ema_21 + ema_55 + fib_1h + rsi_form_1h + sr_4h (0% WR, n=2)
-- **RSI divergence signals:** Valid in 4H and 1H when combined with strong SR levels (n=6)
+- **fib_1h+sr_4h** shows 2W/0L (n=2), indicating strong performance when Fibonacci levels and 4H support/resistance align.
+- **sr_4h** alone has a perfect win rate of 2W/0L (n=2) but with limited data, suggesting robust structural support at higher timeframes.
+- RSI divergence (**dv**) combined with multiple EMAs and Fibonacci levels shows mixed results; only one winning trade out of two attempts.
 
 ### MARKET STRUCTURE RULES
-- Trend context improves setup quality: Uptrend with multiple confluences at support levels (n=5)
-- Strong TP reach: When price has momentum post-entry, especially near swing highs or Fibonacci golden pockets (n=4)
-- Early reversals: Often seen when initial momentum is weak and structural support is marginal (n=3)
+- Trend context improves setup quality when setups align with 4H SR levels, as seen in **fib_1h+sr_4h** combinations.
+- Price reaches TP more often when there is a clear inverse head and shoulders breakout or strong EMA support/resistance confluence.
 
 ### ENTRY QUALITY STANDARDS
-- High-conviction entries have robust confluences with clear SR levels and strong RSI divergence (n=5)
-- Marginal entries often lack multiple confluences or have weak structural support (n=4)
+- High-conviction entries have multiple structural supports like 4H SR levels, Fibonacci golden pockets, and RSI divergence.
+- Winners typically had well-defined invalidation levels and clear momentum indicators, unlike marginal setups with tight risk management.
+
+### TRADE MANAGEMENT PATTERNS
+- Raised TP often resulted in price hitting the SIP floor instead of the raised TP (3 out of 4 times), suggesting overconfidence in momentum continuation.
+- Moving SL early did not protect profit effectively; trades still closed at loss when moved too early, indicating cautious SL adjustments are needed.
+
 ### TRENDING MARKET BEHAVIOUR — CRITICAL
 - In a confirmed uptrend (4H making HH/HL, net move > +5%), resistance levels are CONTINUATION ZONES. The market is expected to break them, not reverse from them. Shorting resistance in an uptrend is the single lowest-probability trade in crypto — historical win rate < 15%.
 - In a confirmed downtrend (4H making LH/LL, net move < -5%), support levels are CONTINUATION ZONES. The market is expected to break them. Longing support in a downtrend fails ~85% of the time.
@@ -26,31 +30,27 @@ Last updated: 2026-07-10 02:41:24 | Based on 71 CRYPTO trades
 
 - Winners typically have well-defined invalidation levels, allowing for better risk management (n=3)
 
-### TRADE MANAGEMENT PATTERNS
-- Raised TP: Often ended at SIP floor instead of hitting the raised TP (chased too aggressively) (n=3)
-- Moved SL early: Generally protected profit without getting stopped out prematurely (n=4)
-- No management: Trades with original SL/TP settings hit TP more often than not (n=4)
-
 ### REASONING QUALITY
-- Validated reasoning: 5 trades, partially validated in 12 (n=17)
-- Invalidated reasoning: Common theme of misreading structural support or resistance levels (n=1)
-- A+ setups show better validation rates compared to B setups (n=5)
+- Only 10% of reasoning was validated by price action (n=3), with partial validation being more common (50%, n=15).
+- Invalidated reasoning often misread the market structure or timeframe, leading to incorrect bias assumptions.
+- A+ setups showed slightly better validation rates compared to B setups but still had mixed results.
 
 ### ASSET NOTES
-- BTCUSDT shows strong performance with Fibonacci and EMA confluences (n=6)
-- ETHUSDT less consistent, often reverses early despite good setup quality (n=2)
-- UNIUSDT performs well with bearish divergence and EMA resistance (n=3)
+- Cryptos like BTCUSDT and ETHUSDT show strong performance when setups align with 4H SR levels and Fibonacci confluences.
+- No significant patterns noted for forex or stocks as the data is primarily crypto-focused.
 
 ### JANE'S PATTERNS
-- Jane consistently profitable on BTCUSDT longs with strong Fibonacci and RSI confluences (n=2)
-- Her instincts diverge from models in ETHUSDT, where she often takes early losses despite good setups (n=1)
+- Jane's instincts outperform models on **BTCUSDT LONG** trades, suggesting she has a better feel for market momentum in this asset.
+- Her setups tend to be more profitable when aligned with clear structural support and resistance levels at higher timeframes.
 
 ### STRUCTURAL RISK FACTORS
-- Marginal entry mid-range without well-defined structural support levels: Require an additional confluence of EMA alignments or Fibonacci levels to confirm robustness.
-- Proximity to stop-loss with tight risk-reward ratio: Ensure a minimum distance from the entry to SL based on ATR, typically 1.5× ATR for better breathing room.
-- Multiple indicators suggesting caution in ranging market conditions: Demand clear confirmation of breakout strength through higher timeframe confluences or momentum indicators before entering.
+- **Proximity to Invalidation Level**: Treat setups where entry levels are very close to invalidation levels as high-risk — require a wider buffer or an additional confluence from a different timeframe or indicator.
+  
+- **Marginal Confluences Near Structural Levels**: Entries near structural levels that lack decisively aligned indicators (e.g., EMAs, RSI divergences) should be treated with caution and require more robust confirmation before entry.
+  
+- **Overextension at Upper Bollinger Bands**: Entries near the upper Bollinger Band (%B > 0.94) in a ranging market structure are prone to mean reversion — require additional bullish signals or structural support beyond the band itself.
 
 ### WIN/LOSS INSIGHT
 WIN/LOSS INSIGHT:
-- The winning trades featured multiple EMAs (EMA_55, EMA_21, EMA_13) providing layered support, whereas losing trades lacked this multi-level EMA confluence.
-- Winning setups included hidden or bullish divergence signals (dv, bullish_divergence), indicating potential price reversals, while losing trades relied more on forming patterns and RSI divergences without the confirmation of a hidden or bullish divergence.
+- The winning trades consistently featured multiple EMAs providing support (e.g., EMA55, EMA21, EMA13) and clear Fibonacci levels, whereas losing trades had fewer or less robust structural supports.
+- Winning trades often included a breakout pattern like H&S breakout or Bollinger Bands lower burst with well-defined invalidation levels, while losing trades frequently involved setups near the upper Bollinger Band or close to the invalidation level, suggesting overextension or tight risk management.

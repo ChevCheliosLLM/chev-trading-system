@@ -19,6 +19,17 @@
 
   function _wlBody() { return document.getElementById('weightLabBody'); }
 
+  // Never call .json() on a non-JSON body (e.g. a 404's HTML error page, or a
+  // proxy/tunnel error page) -- that's what produced "Unexpected token '<'".
+  // Applied to every Weight Lab fetch, not just the proposal one.
+  async function _wlSafeJson(res) {
+    const ct = res.headers.get('content-type') || '';
+    if (!res.ok || !ct.includes('application/json')) {
+      throw new Error(`Weight Lab endpoint not available (HTTP ${res.status}). If you just deployed, restart Dexter — the routes load at startup.`);
+    }
+    return res.json();
+  }
+
   function _wlSkeleton() {
     let rows = '';
     for (let i = 0; i < 3; i++) {
@@ -99,21 +110,39 @@
       ? `With this tag: ${p.winrate_with}% WR, ${fmtR(p.avg_netR_with)}R avg · Without: ${p.winrate_without}% WR, ${fmtR(p.avg_netR_without)}R avg`
       : '';
     const conflict = p.agreement === 'conflict';
-    const canPropose = p.proposed_delta != null && p.current_weight != null;
+    // Missing mapping (e.g. a stale cached payload from before this field existed)
+    // is treated as 'unmapped' -- never render an Approve button on an assumption.
+    const mapping = p.mapping || 'unmapped';
+    // The mapping gate is checked client-side too, independent of whatever
+    // current_weight/proposed_delta the payload happens to carry -- a stale
+    // cache must never be able to resurrect an Approve button for a
+    // now-unverified tag.
+    const canPropose = mapping === 'verified' && p.proposed_delta != null && p.current_weight != null;
     const deltaLabel = canPropose ? (p.proposed_delta > 0 ? `+${p.proposed_delta}` : `${p.proposed_delta}`) : null;
     const weightLine = canPropose
       ? `${p.current_weight}pt → ${p.effective_weight_preview}pt`
-      : `current: ${p.current_weight != null ? p.current_weight + 'pt' : 'n/a (unmapped)'}`;
+      : mapping === 'unverified'
+        ? 'current: n/a (unverified mapping)'
+        : 'current: n/a (unmapped)';
 
-    const approveBtn = canPropose
-      ? `<button class="wlApproveBtn" data-tag="${esc(p.tag)}" data-delta="${p.proposed_delta}"
+    let actionEl = '';
+    if (canPropose) {
+      actionEl = `<button class="wlApproveBtn" data-tag="${esc(p.tag)}" data-delta="${p.proposed_delta}"
            data-evidence='${esc(JSON.stringify({ n: p.n, coef: p.coef, ci: p.ci }))}'
            style="margin-left:auto;font-family:'Share Tech Mono',monospace;font-size:11px;
              font-weight:700;padding:4px 10px;border-radius:5px;cursor:pointer;
              ${conflict
                ? 'background:rgba(240,180,41,0.12);border:1px solid rgba(240,180,41,0.5);color:#f0b429'
                : 'background:rgba(212,175,55,0.12);border:1px solid var(--gold);color:var(--gold)'}">
-           APPROVE ${deltaLabel}</button>`
+           APPROVE ${deltaLabel}</button>`;
+    } else if (mapping === 'unverified') {
+      actionEl = `<span title="Same labeller code as a CONFLUENCE_SCORES key, but the mechanic behind it hasn't been confirmed identical — see handoff PHASE 16's no-aliasing rule."
+        style="margin-left:auto;font-family:'Share Tech Mono',monospace;font-size:9.5px;font-weight:700;
+          padding:4px 10px;border-radius:5px;color:var(--txt3);background:rgba(255,255,255,0.03);
+          border:1px dashed rgba(255,255,255,0.15);cursor:help">same name, unconfirmed mechanic — not approvable</span>`;
+    }
+    const unmappedNote = mapping === 'unmapped'
+      ? `<div style="font-size:9px;color:var(--txt3);margin-top:4px;font-family:'Inter',sans-serif">no live weight uses this code — informational only</div>`
       : '';
 
     return `
@@ -129,8 +158,9 @@
         <div style="display:flex;align-items:center;gap:8px;margin-top:6px;
              font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--txt1)">
           <span>${esc(weightLine)}</span>
-          ${approveBtn}
+          ${actionEl}
         </div>
+        ${unmappedNote}
         <div style="font-size:9px;color:var(--txt3);margin-top:6px;font-family:'Inter',sans-serif">
           Proposal only. Nothing changes until you approve AND restart Dexter.</div>
       </div>`;
@@ -177,8 +207,8 @@
         _apiFetch('/api/weight_proposal'),
         _apiFetch('/api/weight_overrides'),
       ]);
-      const prop = await propRes.json();
-      const ov = await ovRes.json();
+      const prop = await _wlSafeJson(propRes);
+      const ov = await _wlSafeJson(ovRes);
       _wlLoaded = true;
 
       let html = _wlPendingBanner(ov.entries || []);
@@ -207,7 +237,7 @@
       body.innerHTML = html;
       _wireCardButtons(body);
     } catch (e) {
-      body.innerHTML = _wlBanner('error', `Weight Lab failed to load: ${esc(e.message)}`);
+      body.innerHTML = _wlBanner('error', esc(e.message));
     }
   }
   window.loadWeightLab = loadWeightLab;

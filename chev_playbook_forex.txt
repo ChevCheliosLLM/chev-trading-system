@@ -1,20 +1,24 @@
 CHEV TRADING PLAYBOOK — FOREX
-Last updated: 2026-07-10 02:39:57 | Based on 34 FOREX trades
+Last updated: 2026-07-11 16:40:54 | Based on 38 FOREX trades
 ========================================
 
 ### CONFLUENCE CONDITIONS
-- **fib_1h+rsi_form_4h+sr_4h** shows 50% win rate (n=2), suggesting strong structural support at 4H levels with RSI divergence.
-- **dv+ema_13+ema_21+fib_1h+gp+rsi_form_4h+sr_4h** has a perfect win rate (1W/0L, n=1) but is tentative due to low sample size.
-- RSI divergence signals are more reliable when combined with 4H SR levels and Fibonacci retracements.
+- **fib_1h+rsi_1h+sr_4h** has a 25% win rate (n=4), indicating marginal reliability.
+- **dv+ema_13+ema_21+fib_1h+sr_4h** shows no wins (n=2), suggesting overfitting or noise in the setup.
+- RSI divergence signals are more reliable on 1H and 4H timeframes, as seen in winning setups like **dv+ema_13+ema_21+fib_1h+sr_4h**.
 
 ### MARKET STRUCTURE RULES
-- High-quality setups tend to occur in ranging markets where price respects structural support/resistance (e.g., USD/JPY).
-- Trending markets require additional confirmation from indicators like EMA crossovers or RSI divergence to ensure TP is reached.
-- Entries at 4H SR levels with multiple confluences are more reliable than those based solely on 1H structures.
+- High-quality entries often occur at 4H SR levels with multiple confluences, as seen in winners like NZD/USD LONG.
+- Ranging markets can lead to choppy price action, making setups less reliable (e.g., USD/CAD LONG).
+- Trending conditions improve setup quality when combined with strong structural support/resistance.
 
 ### ENTRY QUALITY STANDARDS
-- High-conviction entries have clear structural support (e.g., 4H SR) and multiple technical indicators aligned, such as RSI divergence and Fibonacci retracement.
-- Winners often had strong confluence at the entry point with well-defined TP levels within a ranging market context.
+- Winners typically have multiple confluences at well-defined SR levels and within Bollinger Bands squeeze zones.
+- Marginal entries often fail due to tight stop-loss placement or weak market directional bias (e.g., GBP/USD LONG).
+- High-conviction entries are supported by strong technical indicators like EMA crossovers, Fibonacci retracements, and RSI divergences.
+
+### TRADE MANAGEMENT PATTERNS
+- Insufficient data — revisit next session.
 **TRENDING MARKET BEHAVIOUR — CRITICAL**
 - In a confirmed uptrend (4H HH/HL, net move > +2%), resistance levels are CONTINUATION ZONES, not reversal points. Shorting resistance in an uptrend is the lowest-probability trade in forex. The pair will walk through resistance, not bounce from it.
 - In a confirmed downtrend (4H LH/LL, net move < -2%), support levels are CONTINUATION ZONES. Longing support in a downtrend is similarly low probability.
@@ -47,29 +51,29 @@ Insufficient data — revisit next session.
 
 - Marginal entries lacked robust structural support or were in volatile conditions where price action was unpredictable.
 
-### TRADE MANAGEMENT PATTERNS
-- Insufficient data — revisit next session.
-
+  
 ### REASONING QUALITY
-- 2 validated and 13 partial reasoning out of the last 30 trades indicate moderate confidence in setup analysis.
-- Invalidated reasoning often stemmed from misreading market structure or timeframe, particularly in volatile conditions.
-- A+ setups show better validation (n=1), but B setups have lower win rates (17%, n=6).
+- 3 validated out of 23 (n=23), indicating a validation rate of about 13%.
+- Invalidated reasoning often stems from misreading market structure or wrong timeframe analysis.
+- A+ setups show no better validation than B setups, suggesting further refinement is needed.
 
 ### ASSET NOTES
-- Forex pairs like USD/JPY and GBP/USD tend to respect structural levels more when ranging, while trending markets require additional confirmation from indicators.
+- Cryptos like BTCUSDT and ETHUSDT have mixed performance, with Jane showing better instincts on these assets.
+- Forex pairs (e.g., USD/JPY) often fail due to ranging market conditions and choppy price action.
 
 ### JANE'S PATTERNS
-- Jane's instincts outperform models in high-volatility setups where technical indicators are less reliable.
-- Her consistent wins on BTCUSDT and ETHUSDT suggest she excels in volatile crypto markets where traditional confluences may not hold.
+- Jane is consistently profitable on crypto setups, particularly BTCUSDT and ETHUSDT.
+- Her instincts diverge from models in trending markets where she captures larger moves.
+- Jane's success suggests a focus on trend-following strategies rather than range-bound setups.
 
 ### STRUCTURAL RISK FACTORS
-- **Ranging Market Conditions**: High volatility risk as indicated by a Bollinger Bands squeeze (BBS) or tight trading range, suggesting that price action could be choppy and less directional.
-  
-- **Marginal Structural Levels**: Entry points located between clear support and resistance zones without strong confirmation from multiple timeframes or additional indicators, leading to weaker structural backing.
+- **Ranging Market Conditions**: In ranging markets, setups with tight stop-loss placements and multiple confluences near marginal structural levels (e.g., EMA crossovers without clear support/resistance) are at higher risk of being whipsawed. A quantitative factor that would have flagged this risk is the presence of a Bollinger Bands squeeze (BBS), indicating high volatility risk.
 
-- **Multiple Indicators Without Clear Directional Bias**: Setup quality based on a high number of confluences (e.g., SR, Fibonacci, EMAs) but lacking a definitive directional bias in the market context, increasing the risk of whipsaws and false breakouts.
+- **Marginal Entry Levels**: Entries near the edges of well-defined structural zones, such as Fibonacci levels and EMAs, but not directly at key support or resistance areas, are more susceptible to price reversals. The absence of clear confluence with a primary SR level (e.g., 4H SR) would have flagged this risk.
+
+- **High Volatility Indicators**: Setups in environments where volatility indicators like Bollinger Bands Squeeze (BBS) and RSI overbought/oversold conditions are present, indicate potential for rapid price movements that can quickly invalidate tight stop-loss levels. The presence of a BBS would have flagged the risk of high volatility leading to quick SL hits.
 
 ### WIN/LOSS INSIGHT
 WIN/LOSS INSIGHT:
-- Winning trades often included tags like `gp` (Golden Pocket) and `dv` (Non-RSI divergence), which were absent in losing trades.
-- Winning setups frequently occurred in trending market conditions as opposed to ranging markets, where price action was more unpredictable and less reliable.
+- Winning trades often included non-RSI divergence (dv) and forming RSI divergence (rsi_form_Xtf), which provided an additional layer of confirmation beyond structural levels.
+- Losing trades frequently involved tight stop-loss placements in ranging markets, leading to premature exits due to normal price fluctuations within the range.

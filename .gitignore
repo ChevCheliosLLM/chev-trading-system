@@ -35,6 +35,7 @@ tunables.json
 counterfactual_report.txt
 weight_proposal_report.txt
 weight_overrides.json
+real_performance_report.txt
 *.log
 
 # ─── Not part of this project ────────────────────────────────────────────────
