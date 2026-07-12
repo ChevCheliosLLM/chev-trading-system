@@ -6774,5 +6774,113 @@ build and deployment" run instead of the failure streak.
 RESTART: NO. DEPLOY: NO. RE-PASTE: NO.
 
 ================================================================================
+*** WEEKLY AUTOPILOT FOR THE WEIGHT LAB — 2026-07-13 —
+RESTART: YES (dexter.py changed — this is the last restart this feature will
+ever need), DEPLOY: YES (webapp/js/ui/weight-lab.js — push_dashboard.py),
+RE-PASTE: NO ***
+CONTEXT: the Weight Lab (propose/approve confluence-tag weight changes) worked
+but required a restart to arm every approval, had no way to approve several
+proposals at once, and had no path at all for Kev's own judgment calls (only
+the 3 vocabulary-verified tags could ever get a live Approve button — a manual
+"I think ema13 is overweighted" instinct had nowhere to go). Three-part fix,
+same propose/approve philosophy throughout: the explicit approve/confirm action
+is retained on every single path — nothing anywhere can change a weight without
+one.
+PART 1 — HOT-RELOAD (no restart per approval):
+  _CONFLUENCE_BASELINE = dict(CONFLUENCE_SCORES) snapshotted once, pristine,
+  before any override ever applies. _reload_weight_overrides() replaces the
+  old startup-only _apply_weight_overrides() — now called once per scan cycle
+  (same spot as tunables.json's load_tunables()) and recomputes EVERY tag's
+  effective value as baseline + summed file deltas FRESH every call. This is
+  the detail that matters: recomputing from a pristine baseline instead of
+  summing against whatever CONFLUENCE_SCORES currently holds is what makes
+  repeated reloads idempotent (a +1 stays +1 forever, never drifts to +12 by
+  lunchtime) and makes removing an entry a clean revert to baseline, not a
+  value stuck wherever it last landed. Clamp stays baseline-relative
+  ([0, 2*baseline+2]); missing file reverts everything to baseline (the normal
+  steady state); malformed file changes nothing and warns once, not every
+  cycle. applied_at is stamped on an entry's first live apply (migrating
+  pre-existing entries that only have approved_at); the freeze window prefers
+  applied_at, falling back to approved_at for entries written before this
+  field existed. /api/weight_overrides' "active" flag now means "currently
+  live-applied," not "present when the process started."
+PART 2 — DIGEST + MANDATORY CONFIRMATION:
+  A digest header appears once >=2 verified-significant proposals exist:
+  count, a combined evidence table, one APPROVE ALL button, and "N proposals
+  since <date>" (last_reviewed_at, stamped automatically by any approval and
+  by a standalone mark-reviewed link for a week where nothing gets approved).
+  Every apply path — single approve, batch approve, and Part 3's manual set —
+  now runs through the SAME in-panel confirm step first (not a bare browser
+  confirm()): CANCEL fires nothing; CONFIRM shows each tag's current -> new
+  value and a visible "(clamped from X)" note when the clamp engaged, plus the
+  freeze-reset warning, THEN fires the real write. Critically, those numbers
+  come from a new server-side dry-run (/api/weight_preview) running the exact
+  same clamp math the reload uses — never client-computed — so Kev is always
+  confirming the true post-clamp value, not a guess that could disagree with
+  the server. Batch approval (/api/weight_proposal/approve_batch) loops the
+  identical per-tag validation the single-approve route uses
+  (_validate_weight_approval), not a separate trust path — one tag failing
+  doesn't block the rest, reported by tag.
+PART 3 — MANUAL OVERRIDE EDITOR:
+  A quiet, collapsed "Manual adjustment" section at the bottom of the panel —
+  searchable dropdown of ALL CONFLUENCE_SCORES tags (not just the 3 verified
+  ones the proposal pipeline is restricted to — manual mode edits Dexter's own
+  CONFLUENCE_SCORES vocabulary directly, no labeller-vocabulary aliasing risk
+  exists here, confirmed by Kev). Numeric input, clamp range shown, at most one
+  neutral "FYI: current data proposes +1 here" line if a live significant
+  proposal disagrees with the edit's direction — informational only, never
+  blocking, and read ONLY from the already-cached /api/weight_proposal payload
+  from page load, never a fresh regression run just to decorate this input
+  (stale-but-labeled beats fresh-but-expensive; empty cache = no note at all).
+  /api/weight_manual/tags is deliberately independent of the regression
+  engine's cache/self-test gate — manual judgment must work even when the
+  statistics engine is broken. Stored as delta-from-baseline (source:"manual",
+  plus set_to:<value> for the audit trail); a second manual set for the same
+  tag REPLACES the first, never appends; setting a tag back to its exact
+  BASELINE (never its live effective value, which can be mid-clamp or stale)
+  with no weight_lab entry present removes the manual entry cleanly.
+  LEDGER HONESTY (the rule with teeth): a manual write for any tag that
+  currently carries a weight_lab-source (statistics-driven) entry is refused
+  outright — Kev specified this for the set-to-baseline case (otherwise
+  deleting the manual attempt would silently erase that a proposal was ever
+  approved); the same session extended it to non-baseline manual sets too,
+  flagged explicitly rather than added quietly, because the identical failure
+  mode exists there (silent overwrite, or a summed value matching neither
+  record). Redirect message either way: undo the proposal in the pending list
+  first. The two sources of truth are untangled only by an explicit separate
+  action, never guessed at by the code.
+VERIFIED: three standalone scratch-test files (no dexter import, project
+convention) — hot-reload (12 checks, including 5 reloads of a +1 staying at
++1, never drifting to +5), Phase 2's shared validator + preview math (10
+checks), Phase 3's manual-mode ledger rules (11 checks, both directions of the
+rejection, replace-not-append, clamp both ends, cross-tag coexistence). All
+33 pass. py_compile and node --check clean throughout.
+END STATE: Dexter scans and trades; the shadow/labeller pipeline studies every
+outcome; the regression engine proposes evidence-gated, vocabulary-verified,
+capped changes that freeze after every approval until ~200 fresh records
+accumulate; Sunday is one digest, one APPROVE ALL, one confirm against a
+truthful server preview, live within a scan cycle; a Tuesday instinct is three
+clicks through the manual editor, same clamp, same confirm, same hot-reload,
+labeled "manual" forever in the ledger. Nothing anywhere applies a number
+without Kev's hand and an honest preview of exactly what is about to happen.
+STANDING DISCIPLINES (the two things only Kev can still break):
+  1. Let the freeze windows fill. The machinery is now faster than the
+     evidence — the ~200-record freeze exists specifically so approvals don't
+     outrun what the data can actually support. Don't chase it.
+  2. Keep Chev's system prompt under its ~5k-token ceiling (see the 2026-07-12
+     entry above) and keep the DURABLE LESSONS bar high (recurring across
+     different regimes, not just repeated). Both are structurally enforced
+     everywhere else in the system except these two — everything else now
+     defends itself.
+NEXT (Kev, manual): restart Dexter — arms _reload_weight_overrides() and all
+six new/changed routes, the last restart this feature will ever need. Hard-
+refresh the webapp, open Engine -> Weight Lab, confirm the collapsed "Manual
+adjustment" section renders. Sanity check: approve or manually set one real
+tag, confirm the panel shows server-computed before/after, confirm it, then
+watch for "[WEIGHT OVERRIDES] ... adjusted this cycle" in the Dexter console
+on the next scan (~5 min) — no restart needed for that or ever again.
+RESTART: YES. DEPLOY: YES (weight-lab.js). RE-PASTE: NO.
+
+================================================================================
 END OF HANDOFF
 ================================================================================
