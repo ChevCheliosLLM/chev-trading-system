@@ -6641,5 +6641,138 @@ lowest risk, but the one place exact syntax matters).
 RESTART: NO. DEPLOY: NO. RE-PASTE CHEV PROMPT: YES (this is the deploy).
 
 ================================================================================
+*** TWO-TIER PLAYBOOK MEMORY (DURABLE LESSONS + RECURRENCE) — 2026-07-12 —
+RESTART: YES (dexter.py changed), DEPLOY: NO,
+RE-PASTE CHEV PROMPT: NO. RE-PASTE CLONE PROMPT: YES (chev_escalation_prompt_v2.txt,
+third and final Clone paste of this whole audit) ***
+CONTEXT: closing move of the Chev/Dexter/Clone communication audit. Two real
+gaps left in the learning system after everything else in this audit: (1) no
+lesson Kev writes could ever survive a rewrite except the one hardcoded
+TRENDING section, so there was no way to hand-curate a permanent rule the way
+the Weight Lab lets Kev hand-approve a weight; (2) the learning session had no
+memory of its OWN past output, so it could rediscover (or contradict) the same
+finding every 10 trades with no way to tell a durable pattern from noise.
+DESIGN: two-tier memory, mirroring the Weight Lab's propose/approve split.
+FAST TIER: the existing auto-rewritten sections, now window-labeled (see
+below). DURABLE TIER: a new "### DURABLE LESSONS (HUMAN-CURATED)" section per
+playbook that the learning session can READ but can NEVER write — preserved
+across every rewrite by the same mechanism that already protected TRENDING
+MARKET BEHAVIOUR, generalized to support more than one such section. Promotion
+into it is Kev's manual act ONLY, guided by machine-flagged "(recurring)"
+markers — auto-promotion was explicitly out of scope and was never built.
+WHAT CHANGED (dexter.py):
+1. _PRESERVED_SECTION_ANCHORS — a module-level tuple of substring-AND anchor
+   pairs (currently DURABLE LESSONS + HUMAN-CURATED, and TRENDING MARKET
+   BEHAVIOUR + CRITICAL) replacing the old single-purpose hardcoded check. A
+   third preserved section is now a one-line addition. _is_section_heading,
+   _extract_section, _strip_preserved_sections, and _preserve_critical_section
+   were all generalized to loop over this tuple — proven with a real playbook
+   (chev_playbook_crypto.txt's actual TRENDING section spliced byte-identical
+   through the new code) plus scratch tests for both-present, DURABLE-only-no-
+   TRENDING, and the explicit byte-identical-survival requirement (23 checks
+   total, all passing).
+2. WINDOW LABELING: every fast-tier section must now open with "Window:
+   <oldest ts> -> <newest ts>, n=<count>, regime: <trending/ranging/mixed>" --
+   the dates and n are computed in Python from the actual trade batch, only
+   the regime word is the model's own judgment. Lessons now say which week's
+   weather, not just what the weather was.
+3. RECURRENCE: the previous playbook (with BOTH preserved sections stripped --
+   not just DURABLE LESSONS, TRENDING is equally human-authored teaching that
+   must not be echoed back as a false "derived today" claim) is fed back into
+   the prompt as a fenced, rules-bound reference block: re-derive every claim
+   from today's data, mark a repeated finding "(recurring)", list anything
+   recurring 2+ consecutive rewrites under a PROMOTION CANDIDATES subsection
+   addressed to Kev. The model never promotes anything itself.
+4. SMART TRUNCATION: the reference block is capped at 1200 chars, but NOT via
+   a blind head-slice -- _build_reference_block_text does breadth-first round-
+   robin (every section's bullet #1 before any section's #2), because playbook
+   sections front-load their strongest claim and a head-slice would have given
+   perfect recall of whichever section is written first and zero recall of the
+   rest, biasing every "(recurring)" marker toward one section. Proven with a
+   maxed-out synthetic playbook (all 9 sections, cap forced to exactly this
+   edge) plus a direct contrast showing a naive head-slice of the same text
+   would miss 5 of 9 sections.
+5. TOKEN BUDGET: shrunk `recent` from asset_journal[-20:] to [-15:] to make
+   room for the reference block. Worst-case combined prompt (system + this
+   learning prompt) now clears 12,288 ctx with 148 tokens of real headroom
+   under the pessimistic chars/3.5 estimate (1,665 under the optimistic
+   chars/4). Two named pressure-release valves are in the code comment on
+   _REFERENCE_BLOCK_CHAR_CAP if that margin is ever needed back: drop `recent`
+   to 14 entries, or shave _fmt_entry's analysis cap from 400 to 350 chars --
+   both cost less signal than shrinking the reference block itself, which is
+   the piece doing the long-term-learning work.
+6. OVERFIT GUARDS added to the prompt: the existing tentative(n<5) rule is
+   unchanged; new lines forbid generalizing a pattern beyond the regime named
+   in its own window line, and require a rule that contradicts a DURABLE
+   LESSON to be flagged as a conflict for Kev rather than silently overridden.
+7. LEGACY PLAYBOOK CONSUMERS fixed per caller: _ask_chev_about_jane_trade
+   (symbol is in scope) now derives the asset class from Jane's symbol and
+   reads the correct asset-specific playbook -- every verdict Chev has given
+   on one of Jane's trades until now was judged against the stale, generic,
+   pre-split chev_playbook.txt (last real update 2026-07-02), never the actual
+   asset-specific file. This matters beyond Jane's trades alone: those
+   verdicts feed the cross-analysis advisory-accuracy tracking. _push_to_
+   firebase (no symbol/trade in scope, a pure account-wide dashboard snapshot)
+   correctly keeps the generic file, with a dated comment explaining why.
+8. CLONE PROMPT v2 (prompts/chev_escalation_prompt_v2.txt, 142 lines): adds an
+   8-line VOLUME PROFILE RULES block after BOLLINGER BAND RULES -- closes the
+   last flagged gap from this whole audit, where the Clone accepted vp_start
+   tags without ever being told what POC/VAH/VAL mean. Byte-identical to
+   chev_escalation_prompt_proposed.txt everywhere else, confirmed by diff.
+OUT OF SCOPE, NEVER BUILT (on the record, not an oversight): auto-promotion to
+the durable tier, shadow/simulated data appearing in any playbook, Weight Lab
+changes, learning cadence changes. The TP-only checkpoint parser defect found
+earlier in this audit is still open and still its own future task.
+NEXT (Kev, manual): paste chev_escalation_prompt_v2.txt into the Clone in Open
+WebUI (replaces the prompt pasted a few days prior). Restart Dexter -- this
+arms the two-tier memory, the round-robin reference, window labels, the Jane
+playbook fix, and everything else queued from this audit in one restart. Watch
+the next learning trigger: each playbook's fast-tier sections should show the
+new Window line; a rewrite or two later, expect the first "(recurring)"
+markers and a PROMOTION CANDIDATES note. THE DISCIPLINE THAT MATTERS: don't
+rush the first DURABLE LESSONS entry. Let candidates marinate across at least
+two windows spanning different regimes (a claim that survived both a trending
+week and a ranging week is worth more than five claims from the same regime).
+When Kev writes one, write it dated, in his own words -- that section is the
+only place in the system where a lesson can live forever, and the only hand
+that can put one there is his.
+RESTART: YES. DEPLOY: NO. RE-PASTE CLONE PROMPT: YES. RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+*** CI FIX: GITHUB PAGES BUILD FAILING ON EVERY PUSH ("backup" submodule) —
+2026-07-12 — RESTART: NO, DEPLOY: NO, RE-PASTE: NO ***
+CONTEXT: Kev reported a failing GitHub Actions "build" job. Traced via `gh run
+view --log` (not guessed): this repo's auto-generated "pages build and
+deployment" workflow (GitHub Pages, not a workflow file committed in this
+repo) has been failing on EVERY push to main since at least 2026-07-11 04:37
+UTC -- confirmed via `gh run list`, every single run in that window shows
+`completed failure`. The exact failure: GitHub Pages' checkout step runs with
+`submodules: recursive` by default, hits `git submodule update --init --force
+--depth=1 --recursive`, and fails with "fatal: No url found for submodule path
+'backup' in .gitmodules", exit 128.
+ROOT CAUSE: `backup/` is Kev's own local nested copy of this entire tree,
+which itself contains a `.git` folder (confirmed: `backup/.git/` exists
+locally with its own COMMIT_EDITMSG/FETCH_HEAD). At some point a `git add`
+from the ChevTools root recorded this as a submodule gitlink (160000 mode,
+commit 17ce4780...) instead of recursing into its files, because git treats a
+directory containing its own .git as a nested-repo boundary -- but no
+.gitmodules entry was ever created to go with it, since this was never an
+intentional submodule. Every checkout since then (this repo's own CI, any
+future `git clone`) has been silently exposed to this, but only GitHub Pages'
+default recursive-submodule checkout actually surfaces it as a hard failure.
+FIX: `git rm --cached backup` (untracks the gitlink from the index only --
+confirmed backup/'s actual files are untouched on disk, still present and
+unchanged locally after this command) + added `backup/` to .gitignore with a
+comment recording why, so it can never be re-added the same way by accident.
+VERIFIED: nothing else in git status changed as a result: this is a scoped,
+one-directory fix, not a rewrite of history (the old gitlink commit stays in
+the log; it's just no longer tracked going forward).
+NEXT (Kev): none -- this resolves itself on the next push once committed and
+pushed. To confirm: check Settings -> Pages, or `gh run list --repo
+ChevCheliosLLM/chev-trading-system` after the next push, for a green "pages
+build and deployment" run instead of the failure streak.
+RESTART: NO. DEPLOY: NO. RE-PASTE: NO.
+
+================================================================================
 END OF HANDOFF
 ================================================================================

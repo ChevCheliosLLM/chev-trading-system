@@ -44,6 +44,14 @@ Ale/
 # ─── Local backups / scratch ─────────────────────────────────────────────────
 *.bak
 *.bak-*
+# backup/ is Kev's own local nested copy of this tree (it has its own .git
+# folder inside it). It was accidentally committed as a submodule gitlink with
+# no .gitmodules entry (2026-07-XX, source commit unknown/pre-existing), which
+# broke GitHub Pages' auto "pages build and deployment" workflow on every push
+# ("fatal: No url found for submodule path 'backup' in .gitmodules", exit 128)
+# -- fixed 2026-07-12 by untracking it (git rm --cached, local files untouched)
+# and ignoring it here so it can never be re-added the same way.
+backup/
 
 # ─── Third-party tools downloaded locally, not part of this project ─────────
 scrcpy-win64-v4.0/
