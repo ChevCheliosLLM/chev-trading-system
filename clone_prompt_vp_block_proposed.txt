@@ -1,0 +1,34 @@
+# PROPOSAL ONLY — this header is bookkeeping for Kev/Claude Code, NOT part of the
+# paste. Paste only the fenced block below (between the ---- lines) into the
+# Clone's Open WebUI prompt, placed immediately after the existing BOLLINGER
+# BAND RULES section and before ZONE DWELL — matching where
+# prompts/chev_escalation_prompt_v2.txt already places its own VOLUME PROFILE
+# RULES block.
+#
+# TOKEN MATH (chars/4 estimate, same convention used elsewhere in this project):
+#   VP block below:                                657 chars -> ~164 tokens
+#   Current escalation prompt (chev_escalation_prompt_v2.txt, the most recent
+#   version on file — see NOTE below):          8,255 chars -> ~2,064 tokens
+#   Combined:                                                 ~2,228 tokens
+#   Headroom check: 2,228 tokens is well under the 6,500-token warn line
+#   (num_ctx 16,000 minus room for the per-message brief) — no warning needed.
+#
+# NOTE FOR KEV: prompts/chev_escalation_prompt_v2.txt (142 lines, dated
+# 2026-07-12, per handoff.txt's "TWO-TIER PLAYBOOK MEMORY" entry) already
+# contains its OWN "VOLUME PROFILE RULES" section — added in that earlier
+# audit to close this exact gap. If you already pasted v2 into the Clone live,
+# this file is redundant; the block below is offered as a slightly fuller
+# version (adds the "structural anchor" framing and the POC-retest line that
+# v2's wording doesn't spell out) in case you want to swap it in instead, not
+# because v2's version is wrong. See the full report for the side-by-side.
+----
+VOLUME PROFILE RULES
+  POC = highest-volume price in the range — the strongest magnet/fair-value level.
+  VAH/VAL = the value area's edges (~70% of volume) — acceptance above VAH means acceptance
+    higher, acceptance below VAL means acceptance lower.
+  A vp_start-tagged level is a volume-derived S/R zone — treat it as a structural anchor, the
+    same tier as a Fib or SR level, never a soft suggestion.
+  A retest of POC with real structure behind it is a higher-quality entry than a fade in the
+    middle of the value area — mid-value chop has no magnet pulling price toward it.
+  A vp tag requires the vp_start anchor date — never tag vp without it.
+----

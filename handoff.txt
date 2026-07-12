@@ -6882,5 +6882,500 @@ on the next scan (~5 min) — no restart needed for that or ever again.
 RESTART: YES. DEPLOY: YES (weight-lab.js). RE-PASTE: NO.
 
 ================================================================================
+=== 2026-07-12 — PHASE A: Retire the fossil playbook (LEARNING GAPS + SUGGESTION ENGINE series) ===
+
+WHAT WAS DONE: Recon-only, no code changes. Searched dexter.py for every
+_load_playbook( occurrence (8 total: 1 definition at dexter.py:3689, 7 call
+sites) and checked each caller's asset-type resolution by hand:
+  - dexter.py:3661 _push_to_firebase() — the one genuinely no-argument call.
+    Already carries a dated comment (2026-07-12, "two-tier memory audit,
+    Phase 2") explaining why it stays generic: this is a single account-wide
+    Firebase dashboard snapshot with no symbol/trade in scope, so there is no
+    asset class to derive — matches this phase's own prescribed fallback
+    (flag it, don't guess).
+  - dexter.py:3880 _ask_chev_about_jane_trade — already passes
+    _jane_trade_asset_type, derived from the symbol one line above.
+  - dexter.py:4404 — inside _run_learning_session (out of scope per this
+    phase's DO NOT TOUCH list anyway), already receives asset_type as a real
+    function parameter.
+  - dexter.py:9108 ask_chev_to_judge, 9997 _ask_chev_partial_tp, 10116
+    _ask_chev_time_stop, 10322 ask_chev_manage_trade — all already resolve
+    asset_type from WATCHLIST (or the symbol) before calling _load_playbook,
+    same pattern in all four.
+  - dexter.py:4496, inside _run_learning_session (off-limits, and a playbook
+    WRITE path, not a fossil-read consumer) — same PLAYBOOK_PATHS/PLAYBOOK_PATH
+    fallback shape as _load_playbook itself, asset_type is a real parameter
+    there too, so no fossil exposure.
+  Conclusion: every consumer that reads a playbook already resolves the
+  correct per-asset file; the one remaining no-arg call is the one case this
+  phase itself says to leave generic and flag, and it is already flagged.
+  Phase A's goal was already satisfied before this session started (most
+  likely landed during the 2026-07-12 "two-tier memory audit" pass evidenced
+  by the inline comments) — nothing left to change.
+WHY: Phase A exists to stop any consumer from silently learning off the
+frozen, pre-split, mixed-asset chev_playbook.txt instead of the correct
+per-asset playbook. Verifying this by reading every call site rather than
+trusting the task description's "believed to be two" line-number guess is
+what the anchors-not-line-numbers rule is for.
+HOW IT BENEFITS THE PROJECT: Confirms, with a full inventory instead of an
+assumption, that Chev's per-trade and per-checkpoint reasoning (judge, partial
+TP, time-stop, management, Jane's advisory) is reading the live, asset-correct
+playbook everywhere it matters. Saves a redundant/no-op edit and gives Kev an
+honest "already done" instead of busywork padding.
+RESTART: NO (no code changed). DEPLOY: NO. RE-PASTE: NO.
+
+================================================================================
+=== 2026-07-12 — PHASE B: Volume Profile explainer proposal for the Clone (LEARNING GAPS + SUGGESTION ENGINE series) ===
+
+WHAT WAS DONE: Created C:\ChevTools\clone_prompt_vp_block_proposed.txt — a
+standalone proposal file (not a live prompt edit) containing an 8-line
+VOLUME PROFILE RULES block (POC/VAH/VAL definitions, vp_start levels treated
+as structural anchors, POC retests as higher-quality entries, the mandatory
+vp_start anchor date) plus a bookkeeping header with token math. No files in
+the DO NOT TOUCH list were touched; Chev Prompt and the live Open WebUI
+prompt were not read or edited.
+IMPORTANT FINDING (flagged, not silently fixed): searching for "the escalation
+prompt" in prompts/ found four candidates — chev_escalation_prompt.txt (base,
+5,876 chars, unchanged since 2026-07-08), chev_escalation_prompt_proposed.txt,
+chev_escalation_prompt_v2.txt (142 lines, 8,255 chars, dated 2026-07-12), and
+chev_escalation_prompt_diff_summary.txt (a change-log, not a prompt). Per
+handoff.txt's own "TWO-TIER PLAYBOOK MEMORY" entry, chev_escalation_prompt_v2.txt
+is already the most current version on file and ALREADY CONTAINS its own
+"VOLUME PROFILE RULES" section (added in that earlier audit specifically to
+close this same gap — the Clone accepting vp_start tags with no POC/VAH/VAL
+definition). Whether Kev has actually pasted v2.txt into the live Clone prompt
+yet is not something this file system confirms either way. Token math in the
+new proposal file was computed against chev_escalation_prompt_v2.txt (8,255
+chars / ~2,064 tokens) as the current baseline, since it is the most recent
+version this project's own records point to.
+WHY: Phase B's stated problem — the Clone receiving vp_start tags with no
+POC/VAH/VAL definition — appears to already have been addressed in a prior
+session's proposal (v2.txt). Rather than silently skip the phase or silently
+duplicate it without comment, a new standalone block file was still produced
+as instructed (it adds two framing points — "structural anchor" status and
+the POC-retest quality distinction — that v2's existing wording doesn't
+spell out), with the pre-existing v2 block flagged explicitly so Kev can
+choose whichever wording he prefers, or ignore this file entirely if v2 is
+already live.
+HOW IT BENEFITS THE PROJECT: Kev gets a ready-to-paste, token-budgeted VP
+block either way, plus an explicit heads-up that this gap may already be
+closed — avoiding a redundant or conflicting second paste being applied on
+top of one that already fixed the same problem.
+RESTART: NO. DEPLOY: NO. RE-PASTE: Kev's call — see NOTE FOR KEV inside
+clone_prompt_vp_block_proposed.txt.
+
+================================================================================
+=== 2026-07-12 — PHASE C: Self-Check Rate (LEARNING GAPS + SUGGESTION ENGINE series) ===
+
+WHAT WAS DONE: Recon first turned up a premise mismatch, flagged to and resolved
+by Kev before any code was written (see IMPORTANT FINDING below). Built:
+  - dexter.py:3689 area — new `_playbook_version(asset_type)` right after
+    `_load_playbook`. Stamps "<asset>-<YYYYMMDD-HHMM>" from the playbook file's
+    own mtime.
+  - dexter.py, trade-open site (anchor: `new_trade["reasoning"]      =
+    parsed["trade"].get("reasoning") or ""`) — added
+    `new_trade["playbook_version"] = _playbook_version(asset_type)` immediately
+    after, using the `asset_type` already in scope there (set earlier in the
+    same scan-loop body at dexter.py:12404, confirmed no intervening `def`).
+  - dexter.py, `_do_postmortem`'s journal-entry dict (anchor:
+    `"reasoning_quality": reasoning_quality,`) — added
+    `"playbook_version": trade.get("playbook_version", ""),` so it flows onto
+    every new chev_journal.json entry going forward. Pre-existing entries have
+    no such field (123 entries checked, confirmed none have it) and bucket as
+    "pre-stamp" until new trades close under the new code.
+  - dexter.py — new `compute_validation_kpi()` (placed just before
+    `_do_postmortem`, not in labeller.py — see finding below for why), plus
+    module constant `VALIDATION_KPI_MIN_N = 5`. Reads chev_journal.json's
+    existing `reasoning_quality` field (VALIDATED/PARTIAL/INVALIDATED), groups
+    by asset_type + playbook_version, writes validation_kpi.json: per-asset-
+    and-version {validated, total, rate, window_start, window_end}, a
+    trailing-50 rate per asset, and a server-computed latest-vs-previous
+    delta + a ready-to-render plain-English `summary_text` once a second
+    trusted version (n>=5) exists.
+  - dexter.py (anchor: `print(f"[Journal] Post-mortem saved for
+    {trade['symbol']} ({outcome}). Total: {len(journal)} entries.")`) — added
+    `compute_validation_kpi()` immediately after, so the file refreshes on
+    every trade close, same trigger point as the existing cross-analysis call.
+  - dexter.py (anchor: `@flask_app.route("/api/weight_overrides")` block) —
+    added `@flask_app.route("/api/validation_kpi")` / `api_validation_kpi()`
+    right after it, read-only, serves validation_kpi.json as-is.
+  - webapp/index.html (anchor: `<tbody id="stratScoreboardBody"></tbody>`
+    closing the Indicator Scoreboard table) — added a new "🪞 Self-Check Rate"
+    section (`#stratValidationKpi`, reuses `.stratShadowSection`'s quarantine
+    styling) directly below it, still inside the Performance tab. Cache-bust
+    bumped: drawing.js?v=20260714-1.
+  - webapp/js/charts/drawing.js — new `loadValidationKpi()` (added to
+    `loadAll()`'s Promise.all alongside `loadScoreboard()`), purely rendering
+    server-computed `summary_text`/`delta_pct_points` per asset, never
+    recomputing a rate client-side. Added `self_check_rate` entries to
+    SECTION_TOOLTIPS, SECTION_STORY, and SECTION_ORDER (after
+    `indicator_scoreboard`) so the (i) icon and Learn tab both resolve.
+  - webapp/css/components/strategy.css — small `.vkRow` rule; reused the
+    existing `.perfValue.up`/`.perfValue.down` (green/red) classes for the
+    arrow, no new color tokens needed.
+  VERIFIED: py_compile and node --check clean. Standalone scratch test (no
+  dexter import) at .../scratchpad/test_validation_kpi.py — 9/9 checks pass
+  (two-trusted-version delta math, MIN_N gating, single-version "no prior
+  playbook" text, trailing-50 cap, empty-journal no-crash), plus a read-only
+  sanity pass against the real chev_journal.json confirming the expected
+  current shape: all 3 asset classes bucket under "pre-stamp" (23% crypto,
+  13% forex, 40% stock trailing-50 rates) since no trade has closed under the
+  new stamping code yet.
+IMPORTANT FINDING (flagged mid-phase, resolved with Kev before writing code):
+  the phase's premise was that reasoning-validation logic already exists in
+  labeller.py, operating on labels_closed.jsonl. It does not — grep for
+  "valid" (case-insensitive) in labeller.py returns zero matches, and
+  labels_closed.jsonl's schema is pure triple-barrier price-touch data
+  (label=+1/-1/0, hit_2r, realized_R) with no reasoning text field at all.
+  The only reasoning-validation signal anywhere in the codebase is
+  `reasoning_quality` in `_do_postmortem` (dexter.py) — Chev grading his OWN
+  trade's reasoning himself, stored on chev_journal.json entries. Presented
+  to Kev as a choice: (1) build on this self-graded signal now, honestly
+  labeled as such, or (2) design a genuinely independent price-action check
+  from scratch (a much bigger, undefined-scope project — there's no existing
+  hook, and building one is basically pointing the invalidation-candidates
+  engine backwards at history). Kev chose (1), with two explicit conditions:
+  rename everything user-facing from "Learning Gauge" to "Self-Check Rate" so
+  it can't be mistaken for an independent check, and log option (2) as
+  flagged future work, not built now, deserving its own design pass first.
+  Both conditions were followed exactly (see the docstring on
+  compute_validation_kpi() and every user-facing string above). This is also
+  why `compute_validation_kpi()` lives in dexter.py, not labeller.py as the
+  phase originally specified — the data source is chev_journal.json (dexter.py's
+  domain, via `_load_journal()`), and labeller.py has no relationship to that
+  file; adding a cross-import either direction would be architecturally
+  backwards (dexter.py already imports labeller.py in production).
+OUT OF SCOPE, FLAGGED FOR THE FUTURE (Kev's own framing, recorded verbatim):
+  an independent, price-action-based reasoning-validation engine — joining
+  Chev's stated invalidation/thesis at decision time (chev_decisions.jsonl's
+  "detail" field) against what price actually did afterwards, bypassing
+  Chev's own self-report entirely. Deserves its own design pass with Kev
+  before it ever reaches a Claude Code phase.
+WHY: The Clone provably follows his playbook (a prior audit already proved
+that); whether the playbook is making him a BETTER trader was invisible.
+Self-Check Rate is the first number that tracks that, even though it's a
+softer signal than originally assumed (self-graded, not independently
+verified) — the honest naming keeps it from being read as more authoritative
+than it is.
+HOW IT BENEFITS THE PROJECT: Kev now gets one line per asset class, in plain
+English, on the existing Performance tab, showing whether Chev's own
+self-assessment is trending up or down across playbook revisions — with an
+explicit, unmissable label that this is self-grading, not an audit. Because
+the underlying rate/delta math is entirely server-computed (same discipline
+as the Weight Lab's server-side preview), the frontend can never show a
+number the backend didn't actually compute. The version-stamping addition
+also means every future playbook revision now carries a real, comparable
+before/after in the data, instead of just a vague "sometime, on some
+version."
+NEXT (Kev, manual): restart Dexter to arm `_playbook_version` stamping,
+`compute_validation_kpi()`, and `/api/validation_kpi`. Hard-refresh the
+webapp (or deploy via push_dashboard.py) to see the new Self-Check Rate card
+under Strategy -> Performance. Expect it to show "no prior playbook version
+has enough closed trades yet to compare against" for a while after restart —
+the vs-previous comparison only lights up once a NEW playbook version (from
+the next weekly `_run_learning_session`) has closed at least 5 trades of its
+own to compare against the current "pre-stamp" bucket.
+RESTART: YES (dexter.py changed). DEPLOY: YES (index.html, drawing.js,
+strategy.css). RE-PASTE: NO.
+
+================================================================================
+=== 2026-07-12 — PHASE D: Elliot's Suggestions (LEARNING GAPS + SUGGESTION ENGINE series) ===
+
+WHAT WAS DONE: Recon turned up two premise gaps (durable-promotion "recurrence
+data" and per-asset threshold data), both flagged to and resolved by Kev before
+writing code (see IMPORTANT FINDINGS below). Built:
+  - counterfactual_report.py — new `_symbol_asset_type(symbol)` helper (same
+    crypto/forex/stock heuristic used throughout dexter.py) and a new optional
+    `asset_type=None` 5th parameter on `build_counterfactual()` (anchor:
+    `def build_counterfactual(baseline_ts=None,\n                          labels_closed_file=None, labels_open_file=None, decisions_file=None):`).
+    Filters labels_closed/labels_open by their own `asset_type` field and
+    chev_decisions.jsonl entries by `_symbol_asset_type(symbol)`, applied
+    before all existing bucket-building math runs — same join logic, just on
+    a pre-filtered input, not a second independent implementation. Confirmed
+    by grep: no existing caller (build_report(), dexter.py's
+    /api/strategy/counterfactual route, the test-fixture call) passes a 5th
+    argument, so this is fully backward compatible. VERIFIED: the file's own
+    `--selftest` (28 cases) passes unchanged; a scratch check confirmed
+    `build_counterfactual(asset_type='crypto'/'forex'/'stock')`'s three
+    coverage totals sum EXACTLY to the unfiltered call's total (9,565 records
+    both ways) — the partition is clean.
+  - dexter.py, new `ELLIOT_SUGGESTIONS_FILE`/`ELLIOT_GATE_MIN_N` (=30, per
+    Kev's explicit floor)/`ELLIOT_ONE_SIDED_PTS` (=10.0 percentage points, the
+    "evidence is one-sided" threshold — a display bucketing, not a new stat)
+    constants, plus five new functions placed just before `_run_learning_session`
+    (anchor: `def _run_learning_session(journal, jane_journal=None, asset_type=None):`):
+      - `_elliot_confidence(coef, lo, hi)` — buckets an already-computed
+        bootstrap CI into high/med/low.
+      - `_elliot_weight_lab_items(pending_tags)` — Step 1. Reads
+        `_build_weight_proposal_payload()` (dexter.py:840, the SAME live call
+        the Weight Lab tab itself uses), filtered to significant + verified-
+        mapping + not already in weight_overrides.json.
+      - `_elliot_underperformer_items(pending_tags, already_surfaced_tags)` —
+        Step 3. Same payload, filtered to WEIGHT_LAB_VERIFIED_TAGS with a
+        negative coefficient regardless of significance, excluding any tag
+        Step 1 already surfaced (so no tag appears twice in one digest).
+      - `_elliot_durable_candidates()` — Step 2. Parses each asset's
+        chev_playbook_*.txt for a "PROMOTION CANDIDATES" section (reusing
+        `_is_section_heading` for the boundary scan) and relays each bullet
+        VERBATIM, worded "Chev has flagged this lesson as recurring: '...'"
+        per Kev's explicit attribution requirement — never a fabricated
+        recurrence count.
+      - `_elliot_threshold_nudges()` — Step 4. Calls
+        `counterfactual_report.build_counterfactual(asset_type=...)` per
+        asset, reads the `GATE-SCORE_GATE` bucket, compares its `shadow_wr`
+        against the `_post` (real POST trades) base rate, emits nothing below
+        `ELLIOT_GATE_MIN_N` resolved records or below the one-sided gap.
+        action is always "manual", never mentions the Weight Lab.
+      - `build_elliot_suggestions()` — combines all four lists, writes
+        `elliot_suggestions.json` via `_atomic_write_json`.
+  - dexter.py (anchor: `except Exception as e:\n        print(f"[Playbook] Learning session failed: {e}")` at the end of
+    `_run_learning_session`) — added a second, independent try/except calling
+    `build_elliot_suggestions()`, so a playbook-rewrite failure can never
+    prevent the digest from refreshing and vice versa. Fires once per asset
+    thread (3x per journal-count-of-10 cycle) — harmless, since the function
+    only reads already-existing files and does a full rebuild every time.
+  - dexter.py (anchor: `@flask_app.route("/api/validation_kpi")` block) — new
+    `@flask_app.route("/api/elliot_suggestions")` / `api_elliot_suggestions()`
+    right after it, read-only, serves elliot_suggestions.json as-is.
+  - webapp/index.html (anchor: `<div id="stratQuietAlert">...</div>` in the
+    Overview pane) — new "🧑‍💻 Elliot's Suggestions" section
+    (`#elliotSuggestionsBody`, reuses `.stratShadowSection`) added directly
+    below it, at the top of the Overview tab. Cache-bust bumped:
+    drawing.js?v=20260715-1.
+  - webapp/js/charts/drawing.js — new `loadElliotSuggestions()` (added to
+    `loadAll()`'s Promise.all), rendering each item's `plain_english` text
+    plus an expandable `<details>` evidence block; `weight_lab_approve` items
+    get a "Go to Weight Lab →" button that does nothing but
+    `document.querySelector('.stratTab[data-spane="weightlab"]')?.click()` —
+    reusing the tab's own existing switch+lazy-load+approve machinery, no
+    second approval path. Added `elliot_suggestions` to SECTION_TOOLTIPS,
+    SECTION_STORY, and SECTION_ORDER (first entry, ahead of `scorecard`).
+  - webapp/css/components/strategy.css — new `.elliotRow`/`.elliotRowActions`/
+    `.elliotEvidence`/`.elliotGoBtn` rules.
+  VERIFIED: py_compile/node --check clean throughout.
+  counterfactual_report.py's own --selftest (28 cases) passes unchanged.
+  Standalone scratch test (no dexter import) at
+  .../scratchpad/test_elliot_suggestions.py — 10/10 checks: confidence
+  bucketing edge cases (including zero-coef, no div-by-zero), the durable-
+  candidates parser against all 3 REAL playbooks (correctly returns empty —
+  none has a PROMOTION CANDIDATES section yet) and a synthetic playbook
+  (correctly extracts exactly 2 bullets verbatim, stops at the next heading),
+  and the threshold-nudge gating iterated across all 3 real assets with no
+  exceptions. Current real-data finding (informational, not a bug): the
+  `GATE-SCORE_GATE` bucket is currently absent for all 3 assets within the
+  baseline window (no GATE_REJECT decision has landed there yet), so
+  threshold nudges will emit nothing until one does — same "empty until real
+  data arrives" shape as PHASE C's validation KPI and this phase's durable-
+  candidates parser.
+IMPORTANT FINDINGS (both flagged mid-phase, resolved with Kev before writing code):
+  1. Durable-promotion "recurrence data" is not a structured store anywhere —
+     it's free text Chev writes himself (a "(recurring)" tag + a
+     "PROMOTION CANDIDATES" subsection he adds to the generated playbook),
+     and that heading isn't even in `_PLAYBOOK_SECTION_NAMES`'s recognized
+     list. All 3 live playbooks were checked and currently have none. Kev's
+     call: best-effort verbatim relay with explicit "Chev has flagged..."
+     attribution (never a fabricated M-window count), emitting nothing until
+     Chev actually writes one — implemented exactly that way.
+  2. The real per-gate shadow win-rate join exists and works
+     (`counterfactual_report.py`'s `GATE-SCORE_GATE` bucket, joining
+     `chev_decisions.jsonl`'s `GATE_REJECT` entries to Examiner shadow labels
+     by symbol+tf+timestamp), but was asset-agnostic — no per-asset split
+     anywhere, and chev_decisions.jsonl carries no asset_type field at all.
+     Kev's call: extend `counterfactual_report.py` with an optional,
+     default-None `asset_type` filter parameter (reusing the exact join,
+     never duplicating it) rather than reimplementing the join independently
+     in dexter.py. Implemented exactly that way, confirmed backward-
+     compatible by grep + the file's own unchanged selftest.
+OUT OF SCOPE, NOT TOUCHED (per the phase's own DO NOT TOUCH list): the Weight
+Lab approval/apply logic itself, weight_overrides.json writing, playbook
+files (read-only), freeze-window logic. Nothing on this card can approve,
+write a tunable, or apply anything — every actionable item still routes
+through the existing, unmodified Weight Lab controls; every threshold item
+is display-only, pointing at the manual tuning panel.
+WHY: The learning machinery (Weight Lab, playbook rewrites, the Examiner)
+already produces real signal, but Kev had to go find each piece separately.
+This phase makes the system come to him: machine proposes in one place,
+human still ratifies everything, nothing auto-applies.
+HOW IT BENEFITS THE PROJECT: Kev now has one card, refreshed automatically
+after every learning session, that surfaces exactly four kinds of "this is
+worth a look" — a real Weight Lab proposal, a lesson Chev has personally
+flagged as recurring, a verified tag quietly underperforming, and a one-sided
+threshold signal — instead of needing to separately check the Weight Lab
+tab, read raw playbook text, and cross-reference the decision log by hand.
+Because the Weight Lab items link to the SAME approve button that already
+existed (never a new one), and every threshold item is explicitly manual-
+only, the "machine proposes, human ratifies" discipline this whole series
+has run on is extended here rather than loosened.
+NEXT (Kev, manual): restart Dexter to arm `build_elliot_suggestions()` and
+`/api/elliot_suggestions` (fires at the end of the next learning-session
+pass, same 10-closed-trades cadence as the playbook rewrite). Hard-refresh
+the webapp (or deploy via push_dashboard.py) to see the new card at the top
+of Strategy -> Overview. Expect it to show "Nothing to suggest right now" for
+a while — durable-candidates and threshold-nudges both need real data that
+hasn't landed yet (see VERIFIED above); Weight Lab proposals will appear as
+soon as a live, significant, unactioned proposal exists.
+RESTART: YES (dexter.py, counterfactual_report.py changed). DEPLOY: YES
+(index.html, drawing.js, strategy.css). RE-PASTE: NO.
+
+================================================================================
+=== 2026-07-12 — PHASE F: Post-build tightening on Phases C/D (LEARNING GAPS + SUGGESTION ENGINE series) ===
+
+WHAT WAS DONE: Three small, independent tightening tasks, all found already
+correctly scoped except F2 (missing entirely).
+  F1 — verified and documented the asset inference under the threshold
+  nudges. The code (unchanged from Phase D, only the comment improved):
+  `counterfactual_report.py`'s `_symbol_asset_type(symbol)` — a local
+  `endswith("USDT")`/`"/" in symbol` heuristic. Confirmed via grep: no
+  `import dexter` anywhere in counterfactual_report.py, and dexter.py imports
+  counterfactual_report.py (dexter.py:26) — so importing dexter.py's own
+  heuristic back would be a circular import, exactly as suspected. No
+  separate shared, importable helper module exists for this heuristic
+  anywhere in the project (it's duplicated ad hoc at dexter.py lines 468,
+  3921, 4495, 10990, 11131). Per the phase's own fallback instruction, kept
+  the local copy, rewrote its docstring to name the canonical mirror
+  explicitly (dexter.py:3921's `_jane_trade_asset_type` line) and to state
+  the circular-import reasoning, and added a scratch-test case per asset
+  (SOLUSDT/EUR-USD/NVDA) proving the two heuristics agree. Also gave the
+  idle-gate builder (F2, dexter.py) its OWN local copy
+  (`_elliot_dec_asset_type`) rather than reaching across into
+  `counterfactual_report`'s private helper — matches every other dexter.py
+  call site's existing pattern (duplicate the one-liner locally) instead of
+  adding a needless cross-module dependency for something dexter.py can
+  already do natively.
+  F2 — confirmed the idle-gate direction did NOT exist in Phase D's
+  `_elliot_threshold_nudges()` (dexter.py) — only the shadow-join
+  "filtering out profit"/"gate earning its keep" direction shipped. Added it
+  inside the SAME function (not a new one), reading `chev_decisions.jsonl`
+  directly via the existing `_read_jsonl`/`_parse_dt` helpers (dexter.py:505/
+  527) over a trailing 14-day window (`ELLIOT_IDLE_GATE_WINDOW_DAYS`), per
+  asset: fires when trailing decisions >= `ELLIOT_IDLE_GATE_MIN_TOTAL` (200)
+  AND GATE_REJECTs are < `ELLIOT_IDLE_GATE_MAX_PCT` (2.0)% of them. Mutual
+  exclusivity: an asset already surfaced by the shadow-join direction is
+  skipped for the idle-gate direction (tracked via a `fired_for` set) — "the
+  data-backed one wins," per Kev's own framing. Exact plain-English template
+  used: "{Asset}: the score gate rejected only {N} of {M} setups in the last
+  14 days — the threshold isn't doing any filtering work right now. If
+  that's intentional (exploration mode), ignore this; otherwise consider
+  whether the gate should be tighter, via the tuning panel." action is always
+  "manual"; evidence includes gate_rejects, total_decisions, pct, window
+  dates.
+  F3 — added a staleness header to the Elliot card.
+  webapp/js/charts/drawing.js's `loadElliotSuggestions()` (anchor:
+  `try {\n        const r = await _apiFetch('/api/elliot_suggestions');`)
+  now renders "Generated X ago" (computed client-side from `generated_at`,
+  new `_elliotRelativeTime()` helper) above the item list; past 72 hours it
+  gets the EXISTING `.perfValue.gold` class (reused, not a new color token).
+  If `generated_at` is absent entirely (the Flask route's own not-yet-
+  generated fallback omits it), the card now shows "No digest generated yet
+  — runs after the next learning session" instead of the generic empty-items
+  message, distinguishing "never ran" from "ran, nothing to say." New
+  `.elliotGeneratedAt` CSS rule (spacing only, no new color) in
+  webapp/css/components/strategy.css. Cache-bust bumped:
+  drawing.js?v=20260716-1.
+  VERIFIED: py_compile/node --check clean. counterfactual_report.py's own
+  --selftest (28 cases) passes unchanged after F1's docstring-only edit.
+  Standalone scratch test (no dexter import) at
+  .../scratchpad/test_phase_f.py — 10/10 checks: F1's 3-asset equivalence
+  (SOLUSDT/EUR-USD/NVDA), F2's gating math (today's real crypto shape --16
+  gate-rejects/4,742 decisions-- correctly fires; the <200-total floor;
+  exact-2%-boundary does NOT fire, just-under does; a normally-firing 15%
+  reject rate does NOT trigger idle-gate; mutual exclusivity both ways). A
+  read-only sanity pass against the REAL chev_decisions.jsonl confirms Kev's
+  own figure exactly (16 total gate-rejects across 4,759 decisions in the
+  trailing 14 days) and that the idle-gate nudge will fire for ALL THREE
+  assets on the next restart (crypto 7/3,503, forex 3/937, stock 6/319) --
+  unlike the shadow-join direction and durable-candidates, which are still
+  empty pending real data.
+WHY: Three small gaps in the otherwise-complete Phase C/D work: an
+unverified-but-plausible asset-inference guess sitting under statistics (this
+project's own history flags that pattern as where problems start); a spec'd
+suggestion direction that silently didn't ship, leaving a demonstrably idle
+gate unreported for weeks; and a digest card with no way to tell fresh
+numbers from stale ones.
+HOW IT BENEFITS THE PROJECT: The per-asset threshold split now has its
+inference method verified equivalent to dexter's own canonical heuristic
+rather than assumed. The idle-gate direction — the one that's actually true
+right now — will surface for crypto, forex, AND stocks on the very next
+restart, immediately giving Kev a concrete, real, data-backed nudge instead
+of a card that says nothing for weeks. And the staleness label means the
+digest can never be silently read as current when it's actually days old.
+RESTART: YES (dexter.py, counterfactual_report.py changed). DEPLOY: YES
+(index.html, drawing.js, strategy.css). RE-PASTE: NO.
+
+================================================================================
+=== PHASES A–E COMPLETE — LEARNING GAUGE + ELLIOT'S SUGGESTIONS ===
+
+FOR MY PARTNER — plain English, no code required to read this.
+
+WHAT THIS BUILD IS: the system already had real "learning" machinery running
+in the background — a statistics engine proposing confluence-tag weight
+changes (the Weight Lab), a weekly playbook rewrite per asset class, and an
+Examiner that shadow-tracks trades nobody took. What was missing was a
+reporting layer: nothing told Kev, in plain language, what any of that
+machinery had actually found. This build is that reporting layer. It reads
+existing files, never invents new statistics, and nothing in it can approve
+a change or write a trade parameter by itself — every actionable item still
+routes through the same manual approval buttons that already existed.
+
+WHAT CHANGED, PHASE BY PHASE:
+  PHASE A (fossil playbook retirement) — went looking for any code still
+    reading the old, frozen, pre-split playbook file from before the system
+    had separate crypto/forex/stock playbooks. Found none — every consumer
+    already reads the correct per-asset file. Recon-only, no code changed;
+    documented so nobody re-does this check later.
+  PHASE B (Volume Profile explainer) — the Clone (the fast escalation model)
+    was receiving `vp_start` tags without ever being told what POC/VAH/VAL
+    mean. Wrote a small, ready-to-paste prompt addition. Kev confirmed which
+    version of the prompt was actually live and pasted the two missing
+    sentences by hand (prompt edits are never made by Claude Code directly —
+    Kev always reviews and pastes prompt changes himself in Open WebUI).
+  PHASE C (Self-Check Rate) — added a new "Self-Check Rate" card (Strategy ->
+    Performance tab) showing, per asset class, how often Chev's own post-
+    trade verdict on his stated reasoning was VALIDATED. Important honesty
+    note: this is Chev grading his OWN reasoning, not an independent audit —
+    it's named and worded that way on purpose, because no independent
+    price-action check currently exists (that would be a separate, larger
+    future build). Also added a "playbook_version" stamp to every new trade,
+    so this rate can be compared version-over-version as new playbooks roll
+    out, not just as one all-time blob.
+  PHASE D (Elliot's Suggestions) — added a single consolidated digest card
+    (Strategy -> Overview tab, top of the page) that runs automatically
+    after every learning session and collects: real Weight Lab proposals
+    waiting on a signature, lessons Chev has personally flagged as recurring
+    in his own playbook notes, confluence tags that are statistically
+    verified but trending negative, and threshold nudges from the decision
+    log (both directions: "the gate may be filtering out profit" and "the
+    gate barely fires at all" — the second one is true right now, ~16
+    gate-rejections out of ~4,700+ decisions, which is worth Kev's attention
+    once exploration mode is eventually turned off). Nothing on this card
+    approves anything by itself — the Weight Lab items link to the Weight
+    Lab's own existing approve button; the threshold items just point at the
+    manual tuning panel.
+  PHASE F (tightening pass) — three small follow-ups found on a second read
+    of Phases C/D: verified the per-asset split's symbol-based asset
+    inference against the project's own canonical version (proven equivalent
+    by test, not assumed); added the missing "idle gate" nudge direction
+    described in phase D's own spec but not yet built; added a "Generated X
+    ago" staleness label to the Elliot's Suggestions card so it can never be
+    silently read as more current than it is.
+
+WHAT TO LOOK AT FIRST: open the dashboard, Strategy panel, Overview tab —
+that is Elliot's Suggestions, the new top-level summary card. Then Strategy
+-> Performance for the Self-Check Rate card. Both are read-only and safe to
+just look at; neither one can change anything by clicking around in them.
+
+WHAT THIS DOES NOT DO (on purpose, not an oversight): no suggestion on
+Elliot's card auto-applies. No weight, tunable, or prompt is ever written by
+this build without a human clicking the existing approve control that
+already existed before this work started. A genuinely independent (not
+self-graded) reasoning-validation engine and a richer visual "Tag Health"
+monitoring tab (sparklines, streaks, shadow-vs-real divergence per tag) were
+both discussed and deliberately deferred as separate future builds, not
+implemented here.
+
+RESTART: YES. DEPLOY: YES (frontend files). RE-PASTE: Kev's call on the Clone
+prompt (see PHASE B above) — already handled by the time this shipped.
+
+================================================================================
 END OF HANDOFF
 ================================================================================

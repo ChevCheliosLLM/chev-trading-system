@@ -310,6 +310,22 @@
 .perfSipRow { text-align: center; padding: 4px 14px 6px; font-size: 8px; font-family: 'Inter', sans-serif; color: var(--txt3); border-top: 1px solid rgba(255,255,255,0.04); }
 .perfSipRow span { color: var(--gold); }
 
+/* PHASE C, LEARNING GAPS series: Self-Check Rate rows (plain-English per asset) */
+.vkRow { display: flex; align-items: baseline; gap: 8px; padding: 6px 4px; font-size: 12px; font-family: 'Inter', sans-serif; color: var(--txt2); }
+.vkRow .perfValue { font-size: 13px; min-width: 12px; }
+
+/* PHASE D, LEARNING GAPS series: Elliot's Suggestions digest card */
+.elliotRow { padding: 8px 4px; font-size: 12px; font-family: 'Inter', sans-serif; color: var(--txt2); border-bottom: 1px solid rgba(255,255,255,0.05); }
+.elliotRow:last-child { border-bottom: none; }
+.elliotRowMain { display: flex; align-items: baseline; gap: 8px; }
+.elliotIcon { flex-shrink: 0; }
+.elliotRowActions { display: flex; align-items: center; gap: 10px; margin-top: 6px; margin-left: 22px; }
+.elliotRowActions summary { font-size: 10px; color: var(--txt3); cursor: pointer; outline: none; }
+.elliotEvidence { font-size: 10px; color: var(--txt3); margin-top: 4px; font-family: monospace; }
+.elliotEvKey { color: var(--txt2); }
+.elliotGoBtn { font-size: 10px; padding: 3px 8px; }
+.elliotGeneratedAt { font-size: 10px; padding: 2px 4px 8px; }
+
 /* Chev's Read — ENGINE tab narrative */
 .dexterNarrative {
   background: rgba(212,175,55,0.03); border-left: 3px solid rgba(212,175,55,0.4);

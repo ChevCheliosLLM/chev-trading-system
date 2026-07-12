@@ -1283,6 +1283,31 @@ def api_weight_overrides():
     return jsonify({"ok": True, "version": data.get("version", 1), "entries": annotated})
 
 
+@flask_app.route("/api/validation_kpi")
+def api_validation_kpi():
+    """Read-only. Self-Check Rate (PHASE C, LEARNING GAPS series) -- serves
+    validation_kpi.json as-is, written by compute_validation_kpi() after every
+    postmortem. Self-graded signal, not an independent check -- see that
+    function's docstring."""
+    try:
+        with open(VALIDATION_KPI_FILE, "r", encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify({"assets": {}, "note": "not yet generated — no closed trade has run a postmortem since this feature shipped"})
+
+
+@flask_app.route("/api/elliot_suggestions")
+def api_elliot_suggestions():
+    """Read-only. Elliot's Suggestions (PHASE D, LEARNING GAPS series) -- serves
+    elliot_suggestions.json as-is, written by build_elliot_suggestions() at the end of
+    every _run_learning_session() pass. This route computes nothing itself."""
+    try:
+        with open(ELLIOT_SUGGESTIONS_FILE, "r", encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify({"items": [], "note": "not yet generated — no learning session has run since this feature shipped"})
+
+
 # =============================================================================
 # REAL PERFORMANCE — era-aware, R claimed only where actually recorded (see
 # real_performance.py for the full rationale: two conflicting "real average R"
@@ -2563,6 +2588,7 @@ ESCALATION_MODEL_ID = "chev-chelios-clone"  # lean escalation model in Open WebU
 FIREBASE_URL  = "https://chev-monitor-default-rtdb.firebaseio.com"
 JOURNAL_PATH       = os.path.join(CHEV_TOOLS_ROOT, "chev_journal.json")
 JANE_JOURNAL_PATH  = os.path.join(CHEV_TOOLS_ROOT, "jane_journal.json")
+VALIDATION_KPI_FILE = os.path.join(CHEV_TOOLS_ROOT, "validation_kpi.json")   # Self-Check Rate (PHASE C, LEARNING GAPS series)
 PLAYBOOK_PATH      = os.path.join(CHEV_TOOLS_ROOT, "chev_playbook.txt")            # legacy / generic fallback
 PLAYBOOK_PATHS     = {
     "forex":  os.path.join(CHEV_TOOLS_ROOT, "chev_playbook_forex.txt"),
@@ -3694,6 +3720,22 @@ def _load_playbook(asset_type=None):
     except Exception:
         return ""
 
+def _playbook_version(asset_type):
+    """Stamp a trade with which playbook file (and revision) was live at decision
+    time -- "<asset>-<YYYYMMDD-HHMM>" from the playbook file's own last-modified
+    timestamp. Carried onto new_trade at open time, then copied onto the journal
+    entry at postmortem close time (see compute_validation_kpi(), PHASE C of the
+    LEARNING GAPS series) so a validation rate can be attributed to the specific
+    playbook version that was active, not just to "sometime, on some version."
+    """
+    path = PLAYBOOK_PATHS.get(_norm_asset_type(asset_type), PLAYBOOK_PATH) if asset_type else PLAYBOOK_PATH
+    try:
+        mtime = os.path.getmtime(path)
+        stamp = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y%m%d-%H%M")
+        return f"{asset_type or 'generic'}-{stamp}"
+    except Exception:
+        return "unknown"
+
 def _load_journal():
     try:
         with open(JOURNAL_PATH, "r", encoding="utf-8") as f:
@@ -4223,6 +4265,276 @@ def _preserve_critical_section(existing_text, generated_text):
     return "\n".join(g_lines)
 
 
+ELLIOT_SUGGESTIONS_FILE = os.path.join(CHEV_TOOLS_ROOT, "elliot_suggestions.json")
+ELLIOT_GATE_MIN_N = 30       # PHASE D's explicit floor: fewer resolved gate-blocked shadow
+                             # records than this for an asset -> emit nothing for it.
+ELLIOT_ONE_SIDED_PTS = 10.0  # percentage-point gap (shadow_wr vs base rate) that counts as
+                             # "the evidence is one-sided" -- a display threshold, not a new
+                             # statistic; the underlying win rates are already computed.
+ELLIOT_IDLE_GATE_WINDOW_DAYS = 14   # PHASE F: trailing window for the idle-gate count
+ELLIOT_IDLE_GATE_MIN_TOTAL = 200    # need this many trailing decisions before judging idle
+ELLIOT_IDLE_GATE_MAX_PCT = 2.0      # gate-rejects below this % of trailing decisions = idle
+
+
+def _elliot_confidence(coef, lo, hi):
+    """Buckets an already-computed bootstrap CI into high/med/low -- same spirit as PHASE
+    C's validation-KPI bucketing: no new statistic, just a deterministic categorization of
+    numbers _build_weight_proposal_payload() already computed."""
+    if not coef:
+        return "low"
+    rel_width = (hi - lo) / (2 * abs(coef))
+    if rel_width < 0.5:
+        return "high"
+    if rel_width < 1.0:
+        return "med"
+    return "low"
+
+
+def _elliot_weight_lab_items(pending_tags):
+    """Step 1: Weight Lab proposals pending approval. Source: _build_weight_proposal_payload()
+    (dexter.py:840) -- the SAME live ridge-regression computation the Weight Lab tab itself
+    calls, never a second copy. 'Pending approval' = significant, verified-mapping tags that
+    don't already have an entry in weight_overrides.json (pending_tags)."""
+    items = []
+    payload = _build_weight_proposal_payload()
+    if not payload.get("ok") or payload.get("frozen"):
+        return items
+    for row in payload.get("proposals", []):
+        if row["mapping"] != "verified" or not row["significant"] or row["proposed_delta"] is None:
+            continue
+        tag = row["tag"]
+        if tag in pending_tags:
+            continue   # already decided/pending -- not a fresh suggestion
+        direction = "raising" if row["proposed_delta"] > 0 else "lowering"
+        diff = None
+        if row.get("avg_netR_with") is not None and row.get("avg_netR_without") is not None:
+            diff = row["avg_netR_with"] - row["avg_netR_without"]
+        conf = _elliot_confidence(row["coef"], row["ci"][0], row["ci"][1])
+        diff_txt = f"earned {diff:+.2f}R more than its score assumes" if diff is not None else "shows a significant effect on outcome"
+        plain = (
+            f"Elliot suggests {direction} {tag} from {row['current_weight']:g} to "
+            f"{row['effective_weight_preview']:g} — over {row['n']} shadow trades it {diff_txt} "
+            f"(confidence: {conf})."
+        )
+        items.append({
+            "id": f"weight_lab-{tag}", "type": "weight_lab_proposal", "plain_english": plain,
+            "evidence": {
+                "tag": tag, "n": row["n"], "coef": row["coef"], "ci": row["ci"],
+                "current_weight": row["current_weight"], "proposed_weight": row["effective_weight_preview"],
+                "avg_netR_diff": diff, "confidence": conf,
+            },
+            "action": "weight_lab_approve",
+        })
+    return items
+
+
+def _elliot_underperformer_items(pending_tags, already_surfaced_tags):
+    """Step 3: any WEIGHT_LAB_VERIFIED_TAGS tag whose latest proposal direction is negative,
+    regardless of significance (a softer heads-up than step 1's hard proposals). Skips any
+    tag step 1 already surfaced, so the same tag never appears twice in one digest."""
+    items = []
+    payload = _build_weight_proposal_payload()
+    if not payload.get("ok") or payload.get("frozen"):
+        return items
+    by_tag = {row["tag"]: row for row in payload.get("proposals", [])}
+    for tag in sorted(WEIGHT_LAB_VERIFIED_TAGS):
+        row = by_tag.get(tag)
+        if not row or row["coef"] >= 0 or tag in already_surfaced_tags:
+            continue
+        actionable = row["significant"] and row["proposed_delta"] is not None and tag not in pending_tags
+        action = "weight_lab_approve" if actionable else "manual"
+        tail = "in the Weight Lab." if actionable else "(not yet statistically significant enough to approve — worth watching)."
+        plain = (
+            f"Elliot notes {tag} is underperforming its current weight ({row['n']} shadow trades, "
+            f"coefficient {row['coef']:+.4f}) — consider lowering it {tail}"
+        )
+        items.append({
+            "id": f"underperformer-{tag}", "type": "underperformer", "plain_english": plain,
+            "evidence": {"tag": tag, "n": row["n"], "coef": row["coef"], "ci": row["ci"], "significant": row["significant"]},
+            "action": action,
+        })
+    return items
+
+
+def _elliot_durable_candidates():
+    """Step 2: durable-promotion candidates. No structured recurrence counter exists anywhere
+    in the system (confirmed by recon, see handoff.txt PHASE D entry) -- recurrence is free
+    text Chev writes himself: bullets marked "(recurring)" under a "PROMOTION CANDIDATES"
+    subsection he adds to the generated playbook (see _run_learning_session's prompt). Best-
+    effort per Kev's explicit call: relay each bullet VERBATIM with clear attribution that
+    it's Chev's own flag, never worded as if a counter verified it. Emits nothing for any
+    asset whose current playbook has no such section -- that is the correct, expected
+    behavior right now (none of the 3 live playbooks have ever populated one yet), not a bug."""
+    items = []
+    for asset, path in PLAYBOOK_PATHS.items():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except Exception:
+            continue
+        start = next((i for i, line in enumerate(lines) if "PROMOTION CANDIDATES" in line.upper()), None)
+        if start is None:
+            continue
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            if _is_section_heading(lines[j]):
+                end = j
+                break
+        bullets = []
+        for line in lines[start + 1:end]:
+            s = line.strip()
+            if s.startswith(("-", "*", "•")):
+                bullets.append(s.lstrip("-*• ").strip())
+        for k, bullet in enumerate(bullets):
+            if not bullet:
+                continue
+            items.append({
+                "id": f"durable-{asset}-{k}", "type": "durable_promotion_candidate",
+                "plain_english": (
+                    f"{asset.title()}: Chev has flagged this lesson as recurring: \"{bullet}\" "
+                    f"— consider promoting it to DURABLE."
+                ),
+                "evidence": {"asset_type": asset, "source": "playbook PROMOTION CANDIDATES section", "raw_text": bullet},
+                "action": "manual",
+            })
+    return items
+
+
+def _elliot_dec_asset_type(symbol):
+    """Same heuristic as counterfactual_report._symbol_asset_type -- equivalence verified
+    by a standalone scratch test (PHASE F). Kept as a local one-liner rather than a call
+    into the counterfactual_report module, matching every other dexter.py call site that
+    needs this (e.g. dexter.py:3921's _jane_trade_asset_type) rather than adding a needless
+    cross-module dependency for something dexter.py can already do natively."""
+    symbol = symbol or ""
+    if symbol.endswith("USDT"):
+        return "crypto"
+    if "/" in symbol:
+        return "forex"
+    return "stock"
+
+
+def _elliot_threshold_nudges():
+    """Step 4: display-only threshold nudges, per asset class. Two independent directions:
+
+    (a) "filtering out profit" / "gate earning its keep" -- source: chev_decisions.jsonl
+    (read-only) joined against the Examiner's shadow labels, reusing
+    counterfactual_report.build_counterfactual(asset_type=...)'s existing GATE-SCORE_GATE
+    bucket (PHASE D extension, see counterfactual_report.py). Needs >= ELLIOT_GATE_MIN_N
+    resolved gate-blocked shadow records for that asset, so it can stay silent for weeks.
+
+    (b) "idle gate" (PHASE F addition) -- a trailing-14-day count straight off the decision
+    log, no shadow join needed: if a lot of decisions have happened but almost none were
+    GATE_REJECT, the threshold isn't doing any filtering work. True today for crypto
+    (~16 GATE_REJECTs across thousands of decisions).
+
+    Mutual exclusivity: if (a) already fired for an asset, (b) is skipped for that asset --
+    they can disagree in principle, and the shadow-join finding is the more data-backed one.
+    Neither direction ever carries an approve action, writes tunables, or mentions the
+    Weight Lab."""
+    items = []
+    fired_for = set()
+
+    # ── (a) shadow-join direction (PHASE D) ──────────────────────────────────────────
+    for asset in ("crypto", "forex", "stock"):
+        try:
+            data = counterfactual_report.build_counterfactual(asset_type=asset)
+        except Exception as e:
+            print(f"[Elliot] threshold nudge failed for {asset}: {e}")
+            continue
+        gate = next((b for b in data.get("buckets", []) if b["key"] == "GATE-SCORE_GATE"), None)
+        post = data.get("_post") or {}
+        if not gate or gate["resolved"] < ELLIOT_GATE_MIN_N:
+            continue
+        gate_wr, base_rate = gate.get("shadow_wr"), post.get("shadow_win_rate")
+        if gate_wr is None or base_rate is None:
+            continue
+        diff = gate_wr - base_rate
+        if abs(diff) < ELLIOT_ONE_SIDED_PTS:
+            continue   # not one-sided enough to say anything
+        asset_label = {"crypto": "Crypto", "forex": "Forex", "stock": "Stocks"}[asset]
+        if diff > 0:
+            plain = (
+                f"{asset_label}: setups rejected by the score gate have been winning in shadow at "
+                f"{gate_wr:.0f}% — above the {base_rate:.0f}% base rate for trades actually taken, over "
+                f"{gate['resolved']} resolved records. The threshold may be filtering out profit; consider "
+                f"lowering it in the tuning panel."
+            )
+        else:
+            plain = (
+                f"{asset_label}: setups rejected by the score gate have been winning in shadow at only "
+                f"{gate_wr:.0f}% — well below the {base_rate:.0f}% base rate for trades actually taken, over "
+                f"{gate['resolved']} resolved records. The gate is earning its keep here."
+            )
+        items.append({
+            "id": f"threshold-{asset}", "type": "threshold_nudge", "plain_english": plain,
+            "evidence": {
+                "asset_type": asset, "gate_shadow_wr": gate_wr, "base_rate": base_rate,
+                "n_resolved": gate["resolved"], "avg_r": gate.get("avg_r"),
+            },
+            "action": "manual",
+        })
+        fired_for.add(asset)
+
+    # ── (b) idle-gate direction (PHASE F) -- decision-log count only, no shadow join ──
+    all_decisions = _read_jsonl(_CHEV_DECISIONS_LOG)
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    window_start_dt = now_naive - timedelta(days=ELLIOT_IDLE_GATE_WINDOW_DAYS)
+    recent = [d for d in all_decisions if (_parse_dt(d.get("ts")) or datetime.min) >= window_start_dt]
+    for asset in ("crypto", "forex", "stock"):
+        if asset in fired_for:
+            continue   # (a) already spoke for this asset -- the data-backed one wins
+        asset_decisions = [d for d in recent if _elliot_dec_asset_type(d.get("symbol")) == asset]
+        total = len(asset_decisions)
+        if total < ELLIOT_IDLE_GATE_MIN_TOTAL:
+            continue
+        gate_rejects = sum(1 for d in asset_decisions if d.get("decision") == "GATE_REJECT")
+        pct = (gate_rejects / total * 100.0) if total else 0.0
+        if pct >= ELLIOT_IDLE_GATE_MAX_PCT:
+            continue
+        asset_label = {"crypto": "Crypto", "forex": "Forex", "stock": "Stocks"}[asset]
+        plain = (
+            f"{asset_label}: the score gate rejected only {gate_rejects} of {total} setups in the last "
+            f"{ELLIOT_IDLE_GATE_WINDOW_DAYS} days — the threshold isn't doing any filtering work right now. "
+            f"If that's intentional (exploration mode), ignore this; otherwise consider whether the gate "
+            f"should be tighter, via the tuning panel."
+        )
+        items.append({
+            "id": f"idle-gate-{asset}", "type": "threshold_nudge", "plain_english": plain,
+            "evidence": {
+                "asset_type": asset, "gate_rejects": gate_rejects, "total_decisions": total,
+                "pct": round(pct, 2), "window_days": ELLIOT_IDLE_GATE_WINDOW_DAYS,
+                "window_start": window_start_dt.strftime("%Y-%m-%d"),
+                "window_end": now_naive.strftime("%Y-%m-%d"),
+            },
+            "action": "manual",
+        })
+    return items
+
+
+def build_elliot_suggestions():
+    """Elliot's Suggestions (PHASE D, LEARNING GAPS + SUGGESTION ENGINE series). Assembles
+    one consolidated, plain-English digest from existing files only -- no new statistics
+    invented anywhere in this function, only rewordings/bucketings of numbers other parts of
+    the system already compute. Writes elliot_suggestions.json. Never raises into its caller
+    -- see the try/except at the call site in _run_learning_session."""
+    overrides = _read_weight_overrides_file()
+    pending_tags = {e.get("tag") for e in overrides.get("entries", [])}
+
+    weight_lab_items = _elliot_weight_lab_items(pending_tags)
+    already_surfaced = {i["evidence"]["tag"] for i in weight_lab_items}
+    underperformer_items = _elliot_underperformer_items(pending_tags, already_surfaced)
+    durable_items = _elliot_durable_candidates()
+    threshold_items = _elliot_threshold_nudges()
+
+    all_items = weight_lab_items + durable_items + underperformer_items + threshold_items
+    payload = {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "items": all_items,
+    }
+    _atomic_write_json(ELLIOT_SUGGESTIONS_FILE, payload)
+
+
 def _run_learning_session(journal, jane_journal=None, asset_type=None):
     """Every 10 closed trades, Chev reads his journal for this asset class and rewrites the playbook.
 
@@ -4586,6 +4898,16 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
     except Exception as e:
         print(f"[Playbook] Learning session failed: {e}")
 
+    # PHASE D, LEARNING GAPS series: end-of-session hook for Elliot's Suggestions. Own
+    # try/except -- must never raise into the session regardless of what the playbook
+    # rewrite above did. Fires once per asset_type thread (harmless -- the function only
+    # reads already-existing files and does a full rebuild each time, not an incremental one).
+    try:
+        build_elliot_suggestions()
+    except Exception as e:
+        print(f"[Elliot] build_elliot_suggestions failed: {e}")
+
+
 def _classify_outcome(base_outcome, pnl, trade):
     """Phase 6 — the ONE place outcome gets reclassified. A trade that booked a partial
     close earlier (e.g. +1R banked, then the remainder trailed out near breakeven) is
@@ -4627,6 +4949,113 @@ def _classify_outcome(base_outcome, pnl, trade):
     print(f"[OUTCOME] {trade.get('symbol','?')} reclassified {base_outcome} -> {new_outcome} "
           f"(final leg ${pnl:+.2f} + partial ${partial_pnl:+.2f} = {combined_r:+.2f}R combined)")
     return new_outcome
+
+
+VALIDATION_KPI_MIN_N = 5   # floor before a playbook-version bucket is trusted for the vs-previous comparison
+
+def compute_validation_kpi():
+    """Self-Check Rate (PHASE C, LEARNING GAPS + SUGGESTION ENGINE series). Reads
+    chev_journal.json's existing "reasoning_quality" field -- Chev's OWN post-mortem
+    QUALITY verdict on his OWN trade (see the prompt built above in _do_postmortem)
+    -- and writes validation_kpi.json: per asset class, per playbook version, plus
+    a trailing-50 rate. This is a self-graded signal, not an independent price-
+    action check (labeller.py's Examiner has no reasoning-validation logic at all
+    -- confirmed by recon, see handoff.txt PHASE C entry), so the rate is soft in
+    absolute terms. It still carries real signal version-over-version, since the
+    self-grading bias should be roughly constant across playbook revisions -- a
+    move from 27% to 35% after a playbook change means something even though
+    neither number is an independent check. An independent, price-action-based
+    version is flagged future work, not built here."""
+    try:
+        journal = _load_journal()
+    except Exception as e:
+        print(f"[Validation KPI] journal load failed: {e}")
+        return
+
+    by_asset_version = {}
+    by_asset_entries = {}
+    for e in journal:
+        q = e.get("reasoning_quality")
+        if q not in ("VALIDATED", "PARTIAL", "INVALIDATED"):
+            continue   # UNKNOWN / missing -- Chev's post-mortem didn't parse a verdict
+        asset = e.get("asset_type") or "unknown"
+        ver   = e.get("playbook_version") or "pre-stamp"   # entries written before this phase
+        key   = (asset, ver)
+        bucket = by_asset_version.setdefault(key, {"validated": 0, "total": 0, "ts": []})
+        bucket["total"] += 1
+        if q == "VALIDATED":
+            bucket["validated"] += 1
+        if e.get("ts"):
+            bucket["ts"].append(e["ts"])
+        by_asset_entries.setdefault(asset, []).append(e)
+
+    assets = {}
+    for (asset, ver), b in by_asset_version.items():
+        ts_sorted = sorted(b["ts"])
+        versions = assets.setdefault(asset, {}).setdefault("versions", {})
+        versions[ver] = {
+            "validated":     b["validated"],
+            "total":         b["total"],
+            "rate":          round(b["validated"] / b["total"], 3),
+            "window_start":  ts_sorted[0] if ts_sorted else None,
+            "window_end":    ts_sorted[-1] if ts_sorted else None,
+        }
+
+    for asset, entries in by_asset_entries.items():
+        last50 = entries[-50:]
+        v = sum(1 for e in last50 if e.get("reasoning_quality") == "VALIDATED")
+        assets.setdefault(asset, {})["trailing_50"] = {
+            "validated": v, "total": len(last50),
+            "rate": round(v / len(last50), 3) if last50 else None,
+        }
+
+    # Latest-vs-previous playbook version, trusted-N only, ordered by window_end
+    # (the version stamp itself is also lexically sortable by construction, but
+    # window_end is the truer ordering if a version's records straddle a restart).
+    for asset, data in assets.items():
+        versions = data.get("versions", {})
+        trusted = [(ver, v) for ver, v in versions.items() if v["total"] >= VALIDATION_KPI_MIN_N and v["window_end"]]
+        trusted.sort(key=lambda kv: kv[1]["window_end"])
+        data["latest_version"]   = None
+        data["previous_version"] = None
+        data["delta_pct_points"] = None
+        data["summary_text"] = None
+        asset_label = {"crypto": "Crypto", "forex": "Forex", "stock": "Stocks"}.get(asset, asset.title())
+        if len(trusted) >= 2:
+            prev_ver, prev = trusted[-2]
+            cur_ver, cur   = trusted[-1]
+            data["latest_version"]   = {"version": cur_ver, **cur}
+            data["previous_version"] = {"version": prev_ver, **prev}
+            delta = round((cur["rate"] - prev["rate"]) * 100, 1)
+            data["delta_pct_points"] = delta
+            direction = "up" if delta > 0 else ("down" if delta < 0 else "flat")
+            delta_txt = f"up from {round(prev['rate']*100)}%" if direction == "up" else (
+                        f"down from {round(prev['rate']*100)}%" if direction == "down" else
+                        f"flat vs {round(prev['rate']*100)}%")
+            data["summary_text"] = (
+                f"{asset_label}: Chev's reasoning checked out {round(cur['rate']*100)}% of the time "
+                f"on this playbook — {delta_txt} on the last one."
+            )
+        elif len(trusted) == 1:
+            ver, v = trusted[0]
+            data["latest_version"] = {"version": ver, **v}
+            data["summary_text"] = (
+                f"{asset_label}: Chev's reasoning checked out {round(v['rate']*100)}% of the time on this "
+                f"playbook — no prior playbook version has enough closed trades yet to compare against."
+            )
+        else:
+            data["summary_text"] = f"{asset_label}: not enough self-checked trades yet on any single playbook version."
+
+    payload = {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "note": "Self-graded by Chev's own post-mortem QUALITY verdict — not an independent price-action check.",
+        "min_n": VALIDATION_KPI_MIN_N,
+        "assets": assets,
+    }
+    try:
+        _atomic_write_json(VALIDATION_KPI_FILE, payload)
+    except Exception as e:
+        print(f"[Validation KPI] write failed: {e}")
 
 
 def _do_postmortem(trade, outcome, pnl, exit_price):
@@ -4781,6 +5210,7 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
         "structural_read":  trade.get("structural_read", ""),
         "analysis":         analysis,
         "reasoning_quality": reasoning_quality,
+        "playbook_version": trade.get("playbook_version", ""),
         "setup_grade":      trade.get("setup_grade", ""),
         "session_quality":  trade.get("session_quality", ""),
         "heat_at_entry":    trade.get("heat_at_entry", 0),
@@ -4800,6 +5230,7 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
         with open(JOURNAL_PATH, "w", encoding="utf-8") as f:
             json.dump(journal, f, indent=2)
         print(f"[Journal] Post-mortem saved for {trade['symbol']} ({outcome}). Total: {len(journal)} entries.")
+        compute_validation_kpi()
         icon = "✓" if outcome == "WIN" else ("➖" if outcome == "SCRATCH" else "✗")
         pnl_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
         send_telegram_alert(f"{trade['symbol']} {trade['direction'].upper()} {icon} {pnl_str}")
@@ -12992,6 +13423,7 @@ while True:
                     conf_prices = _build_confluence_prices(td)
                     new_trade = log_new_trade(worksheet, dashboard_ws, result["symbol"], item["type"], parsed["trade"], result["current_price"], confluence_prices=conf_prices, primary_tf=result.get("primary_tf"), regime_at_proposal=(result.get("regime_4h") or {}).get("regime"))
                     new_trade["reasoning"]      = parsed["trade"].get("reasoning") or ""
+                    new_trade["playbook_version"] = _playbook_version(asset_type)
                     new_trade["structure_4h"]  = parsed.get("structure_4h", "")
                     new_trade["invalidation"]  = parsed.get("invalidation", "")
                     new_trade["confirmation"]  = parsed.get("confirmation", "")

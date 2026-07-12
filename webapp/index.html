@@ -64,6 +64,7 @@
         <div class="stratTab" data-spane="diagnostics">Why It Skips</div>
         <div class="stratTab" data-spane="performance">Performance</div>
         <div class="stratTab" data-spane="raw">Raw Log</div>
+        <div class="stratTab" data-spane="weightlab">⚖️ Weight Lab</div>
         <div class="stratTab" data-spane="learn">📖 Learn</div>
       </div>
       <div id="stratBody">
@@ -71,6 +72,17 @@
         <!-- ===== OVERVIEW ===== -->
         <div class="stratPane active" data-spane="overview">
           <div id="stratQuietAlert"><span>⚠</span> <span id="stratQuietText"></span></div>
+
+          <!-- PHASE D, LEARNING GAPS series: Elliot's Suggestions -- one consolidated,
+               plain-English digest assembled after every learning session from files that
+               already exist (Weight Lab proposals, playbook PROMOTION CANDIDATES notes,
+               underperforming verified tags, asset-scoped threshold nudges). Read-only here:
+               weight_lab_approve items link to the Weight Lab tab's own existing approve
+               controls -- no second approval path lives on this card. manual items are
+               display-only with their evidence expandable via <details>. -->
+          <div class="stratSectionLabel">🧑‍💻 Elliot's Suggestions <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">— read one card instead of auditing every tool</span><span class="stratLearnIcon" data-learn="elliot_suggestions" title="What is this?">ⓘ</span></div>
+          <div id="elliotSuggestionsBody" class="stratShadowSection"></div>
+
           <div class="stratSectionLabel">🩸 Scorecard (all-time, paper)<span class="stratLearnIcon" data-learn="scorecard" title="What is this?">ⓘ</span></div>
           <div class="stratScoreRow" id="stratScoreRow">
             <div class="stratScoreCard"><div class="k">Win Rate</div><div class="v" id="scWinRate">—</div></div>
@@ -188,6 +200,15 @@
               <tbody id="stratScoreboardBody"></tbody>
             </table>
           </div>
+
+          <!-- PHASE C, LEARNING GAPS series: Self-Check Rate -- Chev grading his OWN
+               post-mortem reasoning (reasoning_quality) against what price actually did,
+               per asset class and per playbook version. Explicitly NOT an independent
+               check (labeller.py's Examiner has no reasoning-validation logic) -- named
+               and worded honestly rather than "Learning Gauge" so it isn't mistaken for
+               one. Reuses .stratShadowSection's quarantine treatment for that reason. -->
+          <div class="stratSectionLabel">🪞 Self-Check Rate <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt3);font-size:10px">— Chev grading his own reasoning, not an independent check</span><span class="stratLearnIcon" data-learn="self_check_rate" title="What is this?">ⓘ</span></div>
+          <div id="stratValidationKpi" class="stratShadowSection"></div>
         </div>
 
         <!-- ===== RAW LOG ===== -->
@@ -198,6 +219,20 @@
             <thead><tr><th>Time</th><th>Symbol</th><th>TF</th><th>Score</th><th>Decision</th><th>Reason</th><th>Detail</th></tr></thead>
             <tbody id="stratRawBody"></tbody>
           </table>
+        </div>
+
+        <!-- ===== WEIGHT LAB ===== moved here from the Engine pane (2026-07-13) --
+             this pane has the room the confluence-tag performance context actually
+             needs (real win rate, weekly trend, streak flags — same data as the
+             Indicator Scoreboard above, not a separate analysis). Loaded lazily on
+             this tab's own first click (see drawing.js), NOT part of loadAll()'s
+             25s auto-refresh -- the manual editor can have a value mid-type and a
+             background refresh silently wiping that would be its own small bug. -->
+        <div class="stratPane" data-spane="weightlab">
+          <div class="stratSectionLabel">⚖️ Weight Lab — loop-closer<span class="stratLearnIcon" data-learn="weight_lab" title="What is this?">ⓘ</span>
+            <button id="weightLabRefreshBtn" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:11px;color:var(--txt3);padding:0 4px" title="Refresh">⟳</button>
+          </div>
+          <div id="weightLabBody" class="stratShadowSection"></div>
         </div>
 
         <!-- ===== LEARN (PHASE 21) =====
@@ -705,17 +740,6 @@
         <!-- Main readout -->
         <div id="engineReadout"></div>
 
-        <!-- WEIGHT LAB -->
-        <div id="weightLabSection" style="flex-shrink:0;border-top:1px solid rgba(255,255,255,0.05);padding:0">
-          <div style="display:flex;align-items:center;gap:8px;padding:8px 14px 6px;font-size:9px;font-family:'Inter',sans-serif;font-weight:700;color:var(--txt3);text-transform:uppercase;letter-spacing:0.12em">
-            <span style="font-size:11px">⚖️</span>
-            WEIGHT LAB — loop-closer
-            <button id="weightLabRefreshBtn" style="margin-left:auto;background:none;border:none;cursor:pointer;font-size:11px;color:var(--txt3);padding:0 4px" title="Refresh">⟳</button>
-            <button id="weightLabToggleBtn" style="background:none;border:none;cursor:pointer;font-size:10px;color:var(--txt3);padding:0" title="Collapse">▾</button>
-          </div>
-          <div id="weightLabBody" class="stratShadowSection" style="margin:8px 14px 12px"></div>
-        </div>
-
         <!-- Hypothesis History -->
         <div id="hypHistorySection" style="display:none;flex-shrink:0;border-top:1px solid rgba(255,255,255,0.05);padding:0">
           <div style="display:flex;align-items:center;gap:8px;padding:8px 14px 6px;font-size:9px;font-family:'Inter',sans-serif;font-weight:700;color:var(--txt3);text-transform:uppercase;letter-spacing:0.12em">
@@ -978,7 +1002,7 @@
      Verified: concatenated files == original script byte-for-byte; no forward
      const/let references cross files (zero cross-file TDZ hazard).
      ============================================================ -->
-<script src="js/ui/panel-toggle.js?v=20260709-2"></script>
+<script src="js/ui/panel-toggle.js?v=20260713-1"></script>
 <script src="js/config/state.js?v=20260709-2"></script>
 <script src="js/charts/chart-core.js?v=20260709-2"></script>
 <script src="js/ui/watchlist.js?v=20260709-2"></script>
@@ -989,9 +1013,9 @@
 <script src="js/charts/rsi-canvas.js?v=20260709-2"></script>
 <script src="js/ui/chat.js?v=20260710-7"></script>
 <script src="js/charts/timeframe-load.js?v=20260709-2"></script>
-<script src="js/charts/drawing.js?v=20260709-2"></script>
+<script src="js/charts/drawing.js?v=20260716-1"></script>
 <script src="js/charts/engine.js?v=20260710-6"></script>
-<script src="js/ui/weight-lab.js?v=20260711-1"></script>
+<script src="js/ui/weight-lab.js?v=20260713-1"></script>
 <script src="js/ui/sparklines.js?v=20260709-2"></script>
 <script src="js/ui/radar.js?v=20260709-2"></script>
 <script src="js/ui/trade-dna.js?v=20260709-2"></script>

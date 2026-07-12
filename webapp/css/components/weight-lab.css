@@ -1,8 +1,10 @@
 /* ============================================================
-   WEIGHT LAB (Engine pane) — Ridge-regression confluence tag weight proposals.
-   #weightLabBody reuses .stratShadowSection's dashed violet quarantine
-   treatment (see strategy.css) since these are statistical suggestions, not
-   results — same visual language as the Strategy Dashboard's Shadow Outcomes.
+   WEIGHT LAB (Strategy panel "Chev's Edge" — moved from the Engine pane
+   2026-07-13) — Ridge-regression confluence tag weight proposals + manual
+   override editor. #weightLabBody reuses .stratShadowSection's dashed violet
+   quarantine treatment (see strategy.css) since these are statistical
+   suggestions, not results — same visual language as the Strategy Dashboard's
+   Shadow Outcomes.
    ============================================================ */
 @keyframes wlSkeleton {
   0%   { background-position: 200% 0; }
@@ -13,4 +15,4 @@
 #weightLabBody .wlApproveBtn:hover { filter: brightness(1.15); }
 #weightLabBody .wlApproveBtn:disabled,
 #weightLabBody .wlUndoBtn:disabled { opacity: 0.5; cursor: default; }
-#weightLabRefreshBtn:hover, #weightLabToggleBtn:hover { color: var(--gold); }
+#weightLabRefreshBtn:hover { color: var(--gold); }

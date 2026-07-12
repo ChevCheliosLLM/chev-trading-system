@@ -1046,7 +1046,7 @@
     }
 
     async function loadAll() {
-      await Promise.all([loadMode(), loadFeed(), loadFunnel(), loadPerformance(), loadHeatmap(), loadShadow(), loadTimeseries(), loadScoreboard()]);
+      await Promise.all([loadMode(), loadFeed(), loadFunnel(), loadPerformance(), loadHeatmap(), loadShadow(), loadTimeseries(), loadScoreboard(), loadValidationKpi(), loadElliotSuggestions()]);
       // Runs only after BOTH loadFunnel (renders the bars) and loadShadow (populates
       // _shadowBucketsCache) have settled -- no race between the two, regardless of which
       // resolves first.
@@ -1782,6 +1782,118 @@
       renderScoreboard();
     }
 
+    // ===== PHASE C, LEARNING GAPS series: SELF-CHECK RATE =====
+    // Server-computed only (compute_validation_kpi() in dexter.py) -- this function
+    // just renders summary_text/delta_pct_points as given, never recomputes a rate
+    // client-side. Self-graded signal (Chev's own postmortem verdict), not an
+    // independent check -- worded as "Self-Check Rate" everywhere, on purpose.
+    async function loadValidationKpi() {
+      const wrap = document.getElementById('stratValidationKpi');
+      if (!wrap) return;
+      let d;
+      try {
+        const r = await _apiFetch('/api/validation_kpi');
+        d = await r.json();
+      } catch (e) {
+        wrap.innerHTML = '<div class="stratEmptyState">Self-Check Rate unavailable — check the console.</div>';
+        console.warn('[Strategy] validation KPI load failed', e);
+        return;
+      }
+      const assets = d.assets || {};
+      const order = ['crypto', 'forex', 'stock'];
+      const keys = Object.keys(assets).sort((a, b) => {
+        const ai = order.indexOf(a), bi = order.indexOf(b);
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+      });
+      if (!keys.length) {
+        wrap.innerHTML = '<div class="stratEmptyState">No self-checked trades yet — this fills in as trades close and run their post-mortem.</div>';
+        return;
+      }
+      wrap.innerHTML = keys.map(asset => {
+        const a = assets[asset];
+        const cls = a.delta_pct_points > 0 ? 'up' : (a.delta_pct_points < 0 ? 'down' : '');
+        const arrow = a.delta_pct_points > 0 ? '▲' : (a.delta_pct_points < 0 ? '▼' : '');
+        return `<div class="vkRow">
+          <span class="perfValue ${cls}">${esc(arrow)}</span>
+          <span>${esc(a.summary_text || '')}</span>
+        </div>`;
+      }).join('');
+    }
+
+    // ===== PHASE D, LEARNING GAPS series: ELLIOT'S SUGGESTIONS =====
+    // Read-only digest card. weight_lab_approve items reuse the Weight Lab tab's own
+    // existing, authenticated approve controls (just clicking that tab, which already
+    // switches + lazy-loads it, per drawing.js's own weightLabTab listener) -- no second
+    // approval path is built here. manual items show plain_english plus an expandable
+    // <details> block with the evidence numbers, never an approve control.
+    const ELLIOT_TYPE_ICON = {
+      weight_lab_proposal: '⚖️', underperformer: '📉',
+      durable_promotion_candidate: '📌', threshold_nudge: '🎚️',
+    };
+    function _elliotEvidenceHTML(ev) {
+      const rows = Object.entries(ev || {}).map(([k, v]) => `<div><span class="elliotEvKey">${esc(k)}</span>: ${esc(JSON.stringify(v))}</div>`);
+      return rows.join('');
+    }
+    // PHASE F: staleness label. generated_at is "YYYY-MM-DD HH:MM:SS" UTC (no offset) --
+    // convert to a real ISO string before handing it to Date() so this doesn't get
+    // silently parsed as local time in some browsers.
+    function _elliotRelativeTime(tsStr) {
+      if (!tsStr) return null;
+      const then = new Date(tsStr.replace(' ', 'T') + 'Z');
+      if (isNaN(then.getTime())) return null;
+      const hours = (Date.now() - then.getTime()) / 3600000;
+      if (hours < 1) return { text: 'less than an hour ago', hours };
+      if (hours < 24) { const h = Math.round(hours); return { text: `${h} hour${h === 1 ? '' : 's'} ago`, hours }; }
+      const d = Math.round(hours / 24);
+      return { text: `${d} day${d === 1 ? '' : 's'} ago`, hours };
+    }
+    async function loadElliotSuggestions() {
+      const wrap = document.getElementById('elliotSuggestionsBody');
+      if (!wrap) return;
+      let d;
+      try {
+        const r = await _apiFetch('/api/elliot_suggestions');
+        d = await r.json();
+      } catch (e) {
+        wrap.innerHTML = '<div class="stratEmptyState">Elliot\'s Suggestions unavailable — check the console.</div>';
+        console.warn('[Strategy] elliot suggestions load failed', e);
+        return;
+      }
+      if (!d.generated_at) {
+        // Route's own not-yet-generated fallback omits generated_at entirely -- this is
+        // the "no digest has ever been written" case, distinct from "generated, but
+        // genuinely nothing to suggest" below.
+        wrap.innerHTML = '<div class="stratEmptyState">No digest generated yet — runs after the next learning session.</div>';
+        return;
+      }
+      const rel = _elliotRelativeTime(d.generated_at);
+      const staleCls = rel && rel.hours > 72 ? 'gold' : '';
+      const headerHTML = rel ? `<div class="elliotGeneratedAt perfValue ${staleCls}">Generated ${esc(rel.text)}</div>` : '';
+      const items = d.items || [];
+      if (!items.length) {
+        wrap.innerHTML = headerHTML + '<div class="stratEmptyState">Nothing to suggest right now — this fills in after learning sessions find something worth a look.</div>';
+        return;
+      }
+      wrap.innerHTML = headerHTML + items.map(it => {
+        const icon = ELLIOT_TYPE_ICON[it.type] || '💡';
+        const actionHTML = it.action === 'weight_lab_approve'
+          ? `<button class="pill elliotGoBtn" type="button" data-goto-weightlab="1">Go to Weight Lab →</button>`
+          : '';
+        return `<div class="elliotRow">
+          <div class="elliotRowMain"><span class="elliotIcon">${icon}</span><span>${esc(it.plain_english || '')}</span></div>
+          <div class="elliotRowActions">
+            ${actionHTML}
+            <details><summary>Evidence</summary><div class="elliotEvidence">${_elliotEvidenceHTML(it.evidence)}</div></details>
+          </div>
+        </div>`;
+      }).join('');
+      wrap.querySelectorAll('.elliotGoBtn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelector('.stratTab[data-spane="weightlab"]')?.click();
+        });
+      });
+    }
+
     function _sbCompare(a, b, col, dir) {
       const mul = dir === 'asc' ? 1 : -1;
       if (col === 'name') {
@@ -1889,6 +2001,18 @@
       tab.addEventListener('click', () => _switchStratTab(tab.dataset.spane));
     });
 
+    // Weight Lab (moved here from the Engine pane, 2026-07-13): loaded on this
+    // tab's own first click, not part of loadAll()'s 25s auto-refresh cycle —
+    // the manual editor can have a value mid-type, and a background refresh
+    // silently wiping that would be its own bug. Manual refresh icon inside
+    // the pane covers the "I want fresh numbers now" case explicitly.
+    const weightLabTab = document.querySelector('.stratTab[data-spane="weightlab"]');
+    if (weightLabTab) {
+      weightLabTab.addEventListener('click', () => {
+        if (typeof loadWeightLab === 'function') loadWeightLab(false);
+      });
+    }
+
     // Feed filter pills
     document.querySelectorAll('.stratFilterPill').forEach(pill => {
       pill.addEventListener('click', () => {
@@ -1926,6 +2050,9 @@
       planned_rr_distribution: "A histogram of the Risk:Reward ratio Dexter actually calculated for each closed trade at the moment it was entered — the same cost-adjusted formula George enforces, not a rough estimate. Shows whether trades are clustering in a healthy R:R range or getting waved through too close to the minimum.",
       system_over_time: "Three charts tracking how the system's own rules have moved over time, with markers for every restart or settings change: how tight the required Risk:Reward has been (the enforced floor, Chev's actual proposals, and the EV-based advisory number); how the escalation bar relates to how much actually gets escalated and posted; and how far stops have actually been placed versus the real cost floor. This is for spotting whether a tuning change actually helped, not for judging any single trade.",
       indicator_scoreboard: "The Indicator Scoreboard lines up every confluence tool in one table: its hand-set Points, its real win rate on actual closed trades, a week-by-week trend of that win rate, and — where it exists — the same tool's hypothetical (shadow) win rate on setups nobody took. Sort any column by tapping its header; rows with fewer than 3 closed trades are dimmed, not hidden.",
+      weight_lab: "Where a confluence tag's Points actually get changed. Approve a statistics-driven proposal (Ridge regression on shadow data, capped at ±1 per approval, frozen until ~200 fresh records accumulate after any change) or set any tag's weight manually yourself, no proposal needed. Either way, a confirm step shows the true server-computed before/after first, and the change goes live within one scan cycle — no restart. The tag list and detail view reuse the same real win rate and weekly trend the Indicator Scoreboard shows, so you're deciding with the same evidence you're reading here.",
+      self_check_rate: "How often Chev's own post-trade verdict on his stated reasoning was VALIDATED, per asset class and per playbook version — shown as one plain-English line per asset, with an up/down arrow versus the previous playbook. Read this carefully: it is Chev grading his OWN reasoning against what price did, not an independent check. The absolute percentage is soft for that reason, but the trend between playbook versions still means something, since that self-grading bias should stay roughly constant across versions.",
+      elliot_suggestions: "A consolidated digest built automatically after every learning session, from files that already exist elsewhere in this dashboard — nothing new is computed just for this card. It collects: Weight Lab proposals waiting on you, lessons Chev has flagged as recurring in his own playbook notes (worth considering for DURABLE), verified tags trending negative, and asset-scoped threshold nudges from the decision log. Threshold nudges never carry an approve button — they point you at the tuning panel and the decision stays yours. Weight Lab items link straight to that tab's own real approve controls; nothing approves from this card directly.",
     };
 
     // PHASE 27: same 16 keys as SECTION_TOOLTIPS, retold in-character. Never reproduces
@@ -1949,6 +2076,9 @@
       planned_rr_distribution: "This is the actual Risk:Reward George measured on every closed trade the moment it opened — the real cost-adjusted number, not a rough guess. He's the one who'd tell you if trades keep landing right on his minimum instead of comfortably clear of it.",
       system_over_time: "George's own numbers don't stay fixed — his required Risk:Reward, his cost ceiling, the bar Dexter has to clear before calling anyone over — all of it can move, and this tracks every one of those moves over time, with a marker for every restart. It's here to check whether a tuning change actually helped, not to judge any one trade.",
       indicator_scoreboard: "Every tool in Dexter's kit, lined up in one table — his own hand-set Points, its real win rate from Jax's honest ledger, and where Mike Ross has enough shadow data, its hypothetical win rate too. Tap any column to sort it; anything Jax has fewer than 3 real closes on gets dimmed, not hidden.",
+      weight_lab: "This is the one room where Dexter's own arithmetic can actually be changed — a point added or taken off a tag, never more than one at a time, never without someone reading the evidence first and saying yes out loud. The statistics can propose; only Kev signs off, and the room goes quiet on new proposals for a while after every signature so nobody mistakes yesterday's evidence for today's.",
+      self_check_rate: "Chev keeps a private scorecard nobody asked him to keep — after every trade closes, he writes down whether his own read of the market actually held up, and this is that scorecard, tallied by asset and by whichever playbook he was working from at the time. It's worth saying plainly: this is Chev marking his own homework, not Jax's honest ledger. But if a new playbook makes him call himself out less often, that's still worth noticing.",
+      elliot_suggestions: "Elliot doesn't build anything new — he just walks the building once a session and writes down what everyone else already found: a proposal from the statisticians waiting on a signature, a lesson Chev flagged as one he keeps seeing, a tool quietly underperforming, a gate that might be working too hard or not hard enough. He hands Kev one card instead of four separate desks to visit. He never signs anything himself — the Weight Lab items just point back to George's actual approve button, and the threshold notes just point at the tuning panel.",
     };
 
     const CONCEPT_GLOSSARY = [
@@ -1969,11 +2099,12 @@
     // PHASE 21: order matters for the Sections list -- same order the sections actually
     // appear in the dashboard (Overview, then Why It Skips, then Performance).
     const SECTION_ORDER = [
-      'scorecard', 'equity_curve', 'setup_volume_heatmap',
+      'elliot_suggestions', 'scorecard', 'equity_curve', 'setup_volume_heatmap',
       'funnel', 'skip_reject_reasons', 'shadow_outcomes', 'gate_scoreboard',
       'shadow_tag_leaderboard', 'shadow_combo_leaderboard', 'weekly_regret_trend',
       'win_rate_by_grade', 'tag_leaderboard', 'combo_leaderboard',
       'planned_rr_distribution', 'system_over_time', 'indicator_scoreboard',
+      'self_check_rate', 'weight_lab',
     ];
 
     // PHASE 27: light-touch Story Time voice for the 123-tag glossary. Every real

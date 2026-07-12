@@ -68,8 +68,8 @@
           }
           /* Render hypothesis history */
           if (typeof _renderHypHistory === 'function') _renderHypHistory();
-          /* Weight Lab: fetch on first open only, manual refresh icon thereafter */
-          if (typeof loadWeightLab === 'function') loadWeightLab(false);
+          /* Weight Lab moved to the Strategy panel's own tab (2026-07-13) —
+             see drawing.js's stratTab click wiring, not triggered from here. */
         }
       });
     });

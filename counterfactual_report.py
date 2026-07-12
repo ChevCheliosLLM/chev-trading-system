@@ -397,8 +397,31 @@ def build_weekly_regret(closed_all, weeks=6, now=None):
 
 # ── Shared bucketing (single source of truth for both the .txt report and the JSON endpoint) ──
 
+def _symbol_asset_type(symbol):
+    """Deliberately a LOCAL copy, not an import -- dexter.py imports this module
+    (see dexter.py:26 `import counterfactual_report`), so this module importing
+    dexter.py back would be a circular import (confirmed by grep: no `import dexter`
+    anywhere in this file, and it must stay that way). Mirrors the canonical
+    one-liner at dexter.py:3921 (`_ask_chev_about_jane_trade`'s
+    `_jane_trade_asset_type = "crypto" if symbol.endswith("USDT") else ("forex" if
+    "/" in symbol else "stock")`), which is itself duplicated ad hoc at several
+    other dexter.py call sites (lines 468, 4495, 10990, 11131) -- there is no
+    separate shared, importable helper module for this heuristic anywhere in the
+    project today. Equivalence with the canonical version is verified by a
+    standalone scratch test (PHASE F, LEARNING GAPS series) -- see handoff.txt.
+    chev_decisions.jsonl entries carry no asset_type field of their own, only
+    symbol/tf, so this is the only way to bucket a decision-log entry by asset."""
+    symbol = symbol or ""
+    if symbol.endswith("USDT"):
+        return "crypto"
+    if "/" in symbol:
+        return "forex"
+    return "stock"
+
+
 def build_counterfactual(baseline_ts=None,
-                          labels_closed_file=None, labels_open_file=None, decisions_file=None):
+                          labels_closed_file=None, labels_open_file=None, decisions_file=None,
+                          asset_type=None):
     """Pure, read-only. Loads the three source files, buckets everything since baseline_ts,
     and returns one dict consumed by both build_report() (text) and dexter.py's
     /api/strategy/counterfactual route (JSON) — single source of truth so the phone always
@@ -413,6 +436,15 @@ def build_counterfactual(baseline_ts=None,
     NOTE on "weekly": unlike every other key here, it is NOT scoped to baseline_ts and NOT
     subject to resolved_items' cap — see build_weekly_regret()'s own docstring for why a
     rolling regret trend needs to see history from before the current baseline too.
+
+    asset_type (PHASE D, LEARNING GAPS series): optional, default None -- every existing
+    caller passes nothing and sees identical all-assets-combined behavior (confirmed by
+    grep: build_report() and dexter.py's /api/strategy/counterfactual route both call this
+    with no 5th argument). When given ("crypto"/"forex"/"stock"), filters labels_closed/
+    labels_open by their own "asset_type" field, and chev_decisions.jsonl entries by
+    _symbol_asset_type(symbol) (that file has no asset_type field of its own). Reuses the
+    exact same bucket_stats/gate-kill-join logic below unchanged -- just on a pre-filtered
+    input -- rather than a second, independently-written per-asset join.
     """
     baseline_ts = baseline_ts or BASELINE_TS
     baseline_epoch = _baseline_epoch(baseline_ts)
@@ -420,6 +452,11 @@ def build_counterfactual(baseline_ts=None,
     closed_all = _load_jsonl(labels_closed_file or LABELS_CLOSED_FILE)
     open_all   = _load_jsonl(labels_open_file or LABELS_OPEN_FILE)
     dec_all    = _load_jsonl(decisions_file or DECISIONS_FILE)
+
+    if asset_type:
+        closed_all = [r for r in closed_all if r.get("asset_type") == asset_type]
+        open_all   = [r for r in open_all   if r.get("asset_type") == asset_type]
+        dec_all    = [r for r in dec_all    if _symbol_asset_type(r.get("symbol")) == asset_type]
 
     closed = [r for r in closed_all if (r.get("ts_epoch") or 0) >= baseline_epoch]
     opens  = [r for r in open_all   if (r.get("ts_epoch") or 0) >= baseline_epoch]

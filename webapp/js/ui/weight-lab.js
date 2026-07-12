@@ -1,11 +1,17 @@
 /* ============================================================
-   WEIGHT LAB — Ridge-regression confluence tag weight proposals (Engine pane).
-   Fetches /api/weight_proposal + /api/weight_overrides on Engine-pane first
-   open (see panel-toggle.js's engine-tab branch), manual refresh via the
-   header's refresh icon, no polling. Approve/revert/batch reuse the existing
-   _apiFetch()/X-Chev-Key mechanism (webapp/js/config/state.js) — no separate
-   auth flow. Tag display names reuse friendlyTag()/_loadTagRegistry()
-   (webapp/js/ui/watchlist.js), same as every other tag-leaderboard render site.
+   WEIGHT LAB — Ridge-regression confluence tag weight proposals. Lives in the
+   Strategy panel ("Chev's Edge") as its own tab (moved 2026-07-13 from the
+   Engine pane's sidebar — too cramped to show real per-tag context; this
+   panel already has the room and, via the Indicator Scoreboard, the exact
+   same win-rate/trend data this file now also draws on). Fetches
+   /api/weight_proposal + /api/weight_overrides on this tab's own first click
+   (see drawing.js's stratTab wiring), manual refresh via the header's refresh
+   icon, no polling, NOT part of the Strategy panel's 25s loadAll() cycle (a
+   background refresh mid-edit in the manual section would be its own bug).
+   Approve/revert/batch reuse the existing _apiFetch()/X-Chev-Key mechanism
+   (webapp/js/config/state.js) — no separate auth flow. Tag display names
+   reuse friendlyTag()/_loadTagRegistry() (webapp/js/ui/watchlist.js), same as
+   every other tag-leaderboard render site.
 
    HOT-RELOAD (2026-07-13): weight_overrides.json changes now go live within
    one Dexter scan cycle (~5min), no restart — see dexter.py's
@@ -14,6 +20,13 @@
    CONFIRM/CANCEL step first, backed by a server-side dry-run
    (/api/weight_preview) so the numbers Kev confirms are the true post-clamp
    values, never a client-side guess that could disagree with the server.
+
+   MANUAL EDITOR PERFORMANCE CONTEXT (2026-07-13): the tag list and the
+   selected-tag detail panel show real win rate, a weekly-trend sparkline, and
+   a losing/heating-streak flag — reusing the EXACT SAME /api/strategy/
+   performance and /api/strategy/tag_trends endpoints the Indicator Scoreboard
+   (Strategy → Performance tab) already calls, never a second, separately-
+   computed analysis of the same journal.
    ============================================================ */
 (function() {
   let _wlLoaded = false;
@@ -348,7 +361,64 @@
                                        // `proposals` array — the manual editor's FYI line reads
                                        // ONLY from this cache, never a fresh fetch (Pin 2).
   let _wlManualTagsCache = null;       // /api/weight_manual/tags response, fetched lazily on first open
+  let _wlManualPerfCache = null;       // merged real-WR + weekly-trend per tag (see below), same lazy fetch
   let _wlManualSelected = null;        // currently selected tag object
+
+  // Same 2-stop lerp drawing.js's Indicator Scoreboard uses (winRateColor) —
+  // duplicated here on purpose rather than reached across files, same
+  // standalone-per-file convention this project already uses elsewhere
+  // (COST_R_CAP is duplicated in labeller.py/counterfactual_report.py/
+  // weight_proposal.py rather than imported). 0%=red, 50%=gold, 100%=green.
+  function _wlWinRateColor(pct) {
+    if (pct >= 50) {
+      const t = Math.min((pct - 50) / 50, 1);
+      return `rgb(${Math.round(212 - t*204)}, ${Math.round(175 + t*(153-175))}, ${Math.round(55 + t*(129-55))})`;
+    }
+    const t = Math.min((50 - pct) / 50, 1);
+    return `rgb(${Math.round(212 + t*(242-212))}, ${Math.round(175 - t*(175-54))}, ${Math.round(55 + t*(69-55))})`;
+  }
+
+  // Small (list-row) sparkline: bars only, no labels — space is tight there on
+  // purpose, per Kev's own "too cramped to read" complaint. The bigger one in
+  // the detail panel below gets the hover tooltip with real numbers.
+  function _wlMiniSpark(trend) {
+    if (!trend || !trend.length) return '<span style="color:var(--txt3);font-size:9.5px">no history</span>';
+    const bars = trend.slice(-8).map(w =>
+      `<div style="width:3px;height:${Math.max(3, w.wr * 12).toFixed(1)}px;background:${_wlWinRateColor(w.wr * 100)};border-radius:1px"></div>`
+    ).join('');
+    return `<div style="display:flex;align-items:flex-end;gap:1.5px;height:12px">${bars}</div>`;
+  }
+
+  function _wlBigSpark(trend) {
+    if (!trend || !trend.length) {
+      return '<div style="font-size:10px;color:var(--txt3)">No closed-trade history yet for this tag.</div>';
+    }
+    const title = trend.map(w => `${w.week}: ${(w.wr * 100).toFixed(0)}% (n=${w.n})`).join(' | ');
+    const bars = trend.slice(-16).map(w =>
+      `<div style="width:6px;height:${Math.max(4, w.wr * 28).toFixed(1)}px;background:${_wlWinRateColor(w.wr * 100)};
+        border-radius:1px" title="${esc(w.week)}: ${(w.wr*100).toFixed(0)}% (n=${w.n})"></div>`
+    ).join('');
+    return `<div style="display:flex;align-items:flex-end;gap:2px;height:28px" title="${esc(title)}">${bars}</div>`;
+  }
+
+  // "Is this on a losing streak" — compares the most recent week's win rate
+  // against the tag's own all-time win rate. Deliberately simple and visible
+  // (no hidden model): a real drop, on real recent volume, is what a losing
+  // streak concretely looks like. n>=3 on the recent week guards against a
+  // single bad trade reading as a "streak."
+  function _wlStreakNote(allTimeWr, trend) {
+    if (!trend || !trend.length) return null;
+    const last = trend[trend.length - 1];
+    if (last.n < 3 || allTimeWr == null) return null;
+    const diffPts = (last.wr * 100) - allTimeWr;
+    if (diffPts <= -20) {
+      return { cold: true, text: `Cooling — last week ${(last.wr*100).toFixed(0)}% (n=${last.n}) vs ${allTimeWr.toFixed(0)}% all-time` };
+    }
+    if (diffPts >= 20) {
+      return { cold: false, text: `Heating up — last week ${(last.wr*100).toFixed(0)}% (n=${last.n}) vs ${allTimeWr.toFixed(0)}% all-time` };
+    }
+    return null;
+  }
 
   function _wlManualSectionHtml() {
     return `
@@ -360,7 +430,7 @@
             style="width:100%;box-sizing:border-box;padding:6px 8px;border-radius:5px;
               background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.12);
               color:var(--txt1);font-family:'Inter',sans-serif;font-size:11px" />
-          <div id="wlManualList" style="max-height:150px;overflow-y:auto;margin-top:6px"></div>
+          <div id="wlManualList" style="max-height:190px;overflow-y:auto;margin-top:6px"></div>
           <div id="wlManualEditor" style="display:none;margin-top:10px;padding-top:10px;
             border-top:1px solid rgba(255,255,255,0.08)">
             <div style="display:flex;justify-content:space-between;align-items:center">
@@ -369,7 +439,8 @@
               <span id="wlManualEditorRange" style="font-family:'Share Tech Mono',monospace;
                 font-size:10px;color:var(--txt3)"></span>
             </div>
-            <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+            <div id="wlManualPerf" style="margin-top:8px"></div>
+            <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
               <input id="wlManualValue" type="number" step="0.5" style="width:80px;padding:5px 8px;
                 border-radius:5px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.15);
                 color:var(--txt1);font-family:'Share Tech Mono',monospace;font-size:12px" />
@@ -389,18 +460,67 @@
     const q = (filterText || '').trim().toLowerCase();
     const rows = _wlManualTagsCache.filter(t =>
       !q || t.tag.toLowerCase().includes(q) || (t.name || '').toLowerCase().includes(q));
-    listEl.innerHTML = rows.slice(0, 40).map(t => `
-      <div class="wlManualTagRow" data-tag="${esc(t.tag)}" style="display:flex;justify-content:space-between;
-        gap:8px;padding:4px 6px;cursor:pointer;border-radius:4px;font-family:'Share Tech Mono',monospace;
+    listEl.innerHTML = rows.slice(0, 40).map(t => {
+      const perf = (_wlManualPerfCache || {})[t.tag];
+      const wr = perf && perf.n > 0 ? perf.win_rate * 100 : null;
+      const wrHtml = wr != null
+        ? `<span style="color:${_wlWinRateColor(wr)}">${wr.toFixed(0)}%</span><span style="color:var(--txt3)"> (n=${perf.n})</span>`
+        : `<span style="color:var(--txt3)">n/a</span>`;
+      return `
+      <div class="wlManualTagRow" data-tag="${esc(t.tag)}" style="display:flex;align-items:center;justify-content:space-between;
+        gap:8px;padding:5px 6px;cursor:pointer;border-radius:4px;font-family:'Share Tech Mono',monospace;
         font-size:10.5px;color:var(--txt2)">
-        <span>${esc(t.name)} <span style="opacity:0.5">(${esc(t.tag)})</span></span>
-        <span>${fmtNum(t.current_effective)}pt</span>
-      </div>`).join('') || `<div style="font-size:10.5px;color:var(--txt3);padding:4px">no match</div>`;
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}
+          <span style="opacity:0.5">(${esc(t.tag)})</span></span>
+        <span style="white-space:nowrap">${wrHtml}</span>
+        ${_wlMiniSpark(perf && perf.trend)}
+        <span style="width:44px;text-align:right;color:var(--txt1)">${fmtNum(t.current_effective)}pt</span>
+      </div>`;
+    }).join('') || `<div style="font-size:10.5px;color:var(--txt3);padding:4px">no match</div>`;
     listEl.querySelectorAll('.wlManualTagRow').forEach(row => {
       row.addEventListener('click', () => _wlManualSelectTag(row.dataset.tag));
       row.addEventListener('mouseenter', () => { row.style.background = 'rgba(255,255,255,0.05)'; });
       row.addEventListener('mouseleave', () => { row.style.background = ''; });
     });
+  }
+
+  // Regression context for the detail panel — reads the SAME cached proposal
+  // payload the FYI line uses (Pin 2: never a fresh fetch), but shown for
+  // ANY tag with a row in it, not just significant+verified ones. This is the
+  // honest answer to "could this have a better weight": what the regression
+  // currently estimates, clearly labeled with its own confidence (or lack of
+  // it) — informational only, same as the FYI line, never gating anything.
+  function _wlRegressionContext(tag) {
+    if (!_wlLastProposalPayload) return '';
+    const row = _wlLastProposalPayload.find(p => p.tag === tag);
+    if (!row) return '<div style="font-size:10px;color:var(--txt3);margin-top:4px">No regression data for this tag yet (needs enough closed shadow records).</div>';
+    const sigTxt = row.significant
+      ? `<span style="color:var(--gold,#d4af37)">statistically significant</span>`
+      : `<span style="color:var(--txt3)">not yet significant — could be noise</span>`;
+    const mapTxt = row.mapping === 'verified'
+      ? ''
+      : row.mapping === 'unverified'
+        ? ` · same-named tag, mechanic unconfirmed (see Weight Lab's own gate)`
+        : ` · not a live scored weight`;
+    return `<div style="font-size:10px;color:var(--txt2);margin-top:4px;line-height:1.5">
+      Regression read: ${fmtR(row.coef)}R effect (95% CI [${fmtR(row.ci[0])}, ${fmtR(row.ci[1])}], n=${row.n}) — ${sigTxt}${esc(mapTxt)}.
+    </div>`;
+  }
+
+  function _wlManualRenderPerf(t) {
+    const perfEl = document.getElementById('wlManualPerf');
+    if (!perfEl) return;
+    const perf = (_wlManualPerfCache || {})[t.tag];
+    const wr = perf && perf.n > 0 ? perf.win_rate * 100 : null;
+    const streak = perf ? _wlStreakNote(wr, perf.trend) : null;
+    perfEl.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;font-family:'Share Tech Mono',monospace;font-size:11px">
+        <span>Win rate: ${wr != null ? `<span style="color:${_wlWinRateColor(wr)};font-weight:700">${wr.toFixed(0)}%</span> (n=${perf.n})` : '<span style="color:var(--txt3)">no closed trades yet</span>'}</span>
+      </div>
+      <div style="margin-top:6px">${_wlBigSpark(perf && perf.trend)}</div>
+      ${streak ? `<div style="font-size:10px;margin-top:4px;color:${streak.cold ? '#ff8a95' : '#5ee6a0'}">${streak.cold ? '📉' : '📈'} ${esc(streak.text)}</div>` : ''}
+      ${_wlRegressionContext(t.tag)}
+    `;
   }
 
   // Pin 2: FYI text is derived ONLY from _wlLastProposalPayload (already
@@ -439,6 +559,7 @@
     const valueInput = document.getElementById('wlManualValue');
     valueInput.min = t.min; valueInput.max = t.max;
     valueInput.value = t.current_effective;
+    _wlManualRenderPerf(t);
     _wlManualUpdateFyi();
   }
 
@@ -475,10 +596,39 @@
   async function _wlManualEnsureTagsLoaded() {
     if (_wlManualTagsCache) return;
     try {
-      const r = await _apiFetch('/api/weight_manual/tags');
-      const d = await _wlSafeJson(r);
-      if (!d.ok) throw new Error(d.error || 'failed to load tags');
-      _wlManualTagsCache = d.tags;
+      // Real win rate + weekly trend reuse the EXACT SAME endpoints the
+      // Indicator Scoreboard (this same Strategy panel, Performance tab)
+      // already calls — no new analysis invented, no per-tag stats
+      // recomputed here. Both are plain public GETs, same as the scoreboard's
+      // own fetches. A failure on either degrades gracefully (perf cache
+      // stays empty, rows just show "n/a" — same "thin data isn't a bug"
+      // posture the scoreboard itself uses) rather than blocking the tag list.
+      const [tagsRes, perfRes, trendsRes] = await Promise.allSettled([
+        _apiFetch('/api/weight_manual/tags').then(r => _wlSafeJson(r)),
+        _apiFetch('/api/strategy/performance').then(r => r.json()),
+        _apiFetch('/api/strategy/tag_trends').then(r => r.json()),
+      ]);
+
+      if (tagsRes.status !== 'fulfilled' || !tagsRes.value.ok) {
+        throw new Error((tagsRes.status === 'fulfilled' && tagsRes.value.error) || 'failed to load tags');
+      }
+      _wlManualTagsCache = tagsRes.value.tags;
+
+      const tagStats = (perfRes.status === 'fulfilled' && perfRes.value.tag_stats) || {};
+      if (perfRes.status === 'rejected') console.warn('[Weight Lab] performance load failed', perfRes.reason);
+      const trendsByTag = (trendsRes.status === 'fulfilled' && trendsRes.value.tags) || {};
+      if (trendsRes.status === 'rejected') console.warn('[Weight Lab] tag_trends load failed', trendsRes.reason);
+
+      _wlManualPerfCache = {};
+      _wlManualTagsCache.forEach(t => {
+        const s = tagStats[t.tag];
+        _wlManualPerfCache[t.tag] = {
+          n: s ? s.n : 0,
+          win_rate: s ? s.win_rate : null,
+          trend: trendsByTag[t.tag] || [],
+        };
+      });
+
       _wlManualRenderList('');
     } catch (e) {
       const listEl = document.getElementById('wlManualList');
@@ -587,13 +737,4 @@
 
   const refreshBtn = document.getElementById('weightLabRefreshBtn');
   if (refreshBtn) refreshBtn.addEventListener('click', () => loadWeightLab(true));
-
-  const toggleBtn = document.getElementById('weightLabToggleBtn');
-  if (toggleBtn) toggleBtn.addEventListener('click', () => {
-    const body = _wlBody();
-    if (!body) return;
-    const collapsed = body.style.display === 'none';
-    body.style.display = collapsed ? '' : 'none';
-    toggleBtn.textContent = collapsed ? '▾' : '▸';
-  });
 })();
