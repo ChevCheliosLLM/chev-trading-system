@@ -3329,6 +3329,12 @@ def _push_to_firebase():
             for t in list(jane_trades)
         ]
         journal      = _load_journal()
+        # 2026-07-12 (two-tier memory audit, Phase 2): stays generic/legacy on
+        # purpose -- this is a single account-wide dashboard display field with
+        # no symbol or trade in scope (a periodic full-state snapshot, not a
+        # decision input), so there's no asset class to derive here. Showing
+        # the legacy generic playbook still has real display value for a human
+        # glancing at the monitor; dropping it loses that for no benefit.
         playbook     = _load_playbook()
         jane_journal = _load_jane_journal()
         resp = requests.put(
@@ -3541,7 +3547,14 @@ def _call_chev(messages, timeout=120, model_id=MODEL_ID):
 
 def _ask_chev_about_jane_trade(symbol, direction, entry, sl, tp, tags, jane_wins, jane_losses):
     """Ask Chev to evaluate Jane's trade idea. Returns raw response string."""
-    playbook = _load_playbook()
+    # 2026-07-12 (two-tier memory audit, Phase 2): symbol IS in scope here (it's
+    # a real parameter), unlike _push_to_firebase -- derive the asset class from
+    # it (same heuristic used elsewhere for Jane's trades, e.g. dexter.py:10180)
+    # so Chev judges her trade against the correct asset-specific playbook
+    # (including its DURABLE LESSONS once Kev writes one) instead of the stale
+    # generic fallback. _load_playbook normalizes "stock"->"stocks" internally.
+    _jane_trade_asset_type = "crypto" if symbol.endswith("USDT") else ("forex" if "/" in symbol else "stock")
+    playbook = _load_playbook(_jane_trade_asset_type)
     risk_pct   = abs(entry - sl) / entry * 100 if entry > 0 else 0
     reward_pct = abs(tp - entry) / entry * 100 if entry > 0 else 0
     rr         = round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0
@@ -3667,72 +3680,224 @@ def _run_cross_analysis():
         print(f"[Cross-analysis] Failed: {e}")
 
 
-def _preserve_critical_section(existing_text, generated_text):
-    """Protect TRENDING MARKET BEHAVIOUR — CRITICAL from the learning session's full
-    playbook overwrite, mechanically rather than by asking the model nicely.
-    Extracts the section verbatim (heading line to next heading line) from the
-    EXISTING playbook file and re-inserts it into the freshly GENERATED text,
-    replacing whatever the model produced there or inserting it in the same
-    position if the model omitted it.
-    Returns generated_text unchanged if the existing file has no such section
-    (e.g. a fresh file) — nothing to preserve yet.
-    """
-    # Known section names the playbook is actually built from: the headings
-    # _run_learning_session's own prompt asks for (dexter.py ~3873-3891) plus the
-    # two supplemental sections it appends afterward (dexter.py ~3995/3997). The
-    # model is inconsistent about which markup it wraps a heading in ('### NAME',
-    # '**NAME**', or a bare ALL-CAPS line with no markup at all) -- a generic
-    # heading-style regex missed the bare-line case, which let the boundary scan
-    # fall through to end-of-text and splice the ENTIRE old file tail back into
-    # the freshly generated playbook (the duplicate-sections bug found in the live
-    # chev_playbook_forex.txt). Matching against this known, finite name list
-    # instead of any markup pattern is what actually fixes that failure mode.
-    _PLAYBOOK_SECTION_NAMES = {
-        "CONFLUENCE CONDITIONS", "MARKET STRUCTURE RULES", "ENTRY QUALITY STANDARDS",
-        "TRADE MANAGEMENT PATTERNS", "REASONING QUALITY", "ASSET NOTES",
-        "JANE'S PATTERNS", "STRUCTURAL RISK FACTORS", "WIN/LOSS INSIGHT",
-    }
+# PRESERVED SECTIONS -- substring-AND anchor pairs identifying human-authored
+# sections that survive every learning-session rewrite verbatim, mechanically
+# rather than by asking the model nicely. A future third preserved section is a
+# one-line addition here, nothing else needs to change. This tuple's order is
+# also the deterministic re-splice order used when a file contains more than
+# one: DURABLE LESSONS is spliced back in first, then TRENDING MARKET
+# BEHAVIOUR -- CRITICAL.
+_PRESERVED_SECTION_ANCHORS = (
+    ("DURABLE LESSONS", "HUMAN-CURATED"),
+    ("TRENDING MARKET BEHAVIOUR", "CRITICAL"),
+)
 
-    def _is_section_heading(line):
-        stripped = line.strip().lstrip("#").strip()
-        if stripped.startswith("**") and stripped.endswith("**") and len(stripped) > 4:
-            stripped = stripped[2:-2].strip()
-        stripped = stripped.rstrip(":").strip()
-        return stripped.upper() in _PLAYBOOK_SECTION_NAMES
+# Known section names the playbook is actually built from: the headings
+# _run_learning_session's own prompt asks for (dexter.py ~3873-3891) plus the
+# two supplemental sections it appends afterward (dexter.py ~3995/3997), plus
+# the human-curated durable section name. The model is inconsistent about which
+# markup it wraps a heading in ('### NAME', '**NAME**', or a bare ALL-CAPS line
+# with no markup at all) -- a generic heading-style regex missed the bare-line
+# case, which let the boundary scan fall through to end-of-text and splice the
+# ENTIRE old file tail back into the freshly generated playbook (the
+# duplicate-sections bug found in the live chev_playbook_forex.txt). Matching
+# against this known, finite name list instead of any markup pattern is what
+# actually fixes that failure mode.
+_PLAYBOOK_SECTION_NAMES = {
+    "CONFLUENCE CONDITIONS", "MARKET STRUCTURE RULES", "ENTRY QUALITY STANDARDS",
+    "TRADE MANAGEMENT PATTERNS", "REASONING QUALITY", "ASSET NOTES",
+    "JANE'S PATTERNS", "STRUCTURAL RISK FACTORS", "WIN/LOSS INSIGHT",
+    "DURABLE LESSONS (HUMAN-CURATED)",
+}
 
-    def _extract(text):
-        lines = text.splitlines()
-        start = None
-        for i, line in enumerate(lines):
-            if "TRENDING MARKET BEHAVIOUR" in line and "CRITICAL" in line:
-                start = i
-                break
+# Reference-block cap for the recurrence mechanism (Phase 1c of the two-tier
+# memory audit, 2026-07-12): keeps the worst-case combined learning prompt
+# (this reference block + trade entries + stats + the ~5.0-5.7k-token system
+# prompt) clearing 12,288 ctx under the pessimistic chars/3.5 estimate by a real
+# ~148-token margin -- see handoff.txt for the full arithmetic, this number was
+# derived from it, not guessed. Set to 1200 rather than a rounder 1000 because
+# _build_reference_block_text's round-robin needs every one of the 9 fast-tier
+# sections to fit at least its headline bullet in the first pass (9 sections x
+# ~120 chars/heading+bullet ~= 1080 minimum) -- 1000 silently dropped whichever
+# section came last. If this margin ever needs to be reclaimed, the two cheaper
+# levers are: drop `recent` from 15 to 14 entries, or shave _fmt_entry's
+# analysis cap from 400 to 350 chars -- both cost less signal than shrinking
+# this reference block further, which is the piece doing the long-term-
+# learning work.
+_REFERENCE_BLOCK_CHAR_CAP = 1200
+
+
+def _is_section_heading(line):
+    """True if `line` is a recognized playbook section heading -- either one of
+    the fixed fast-tier/supplement names above, or either preserved section's
+    own heading. Checking preserved-section anchors here too (not just the
+    fixed name set) is what lets a boundary scan correctly stop at whichever
+    preserved section comes next, regardless of which order they appear in a
+    real file -- without it, DURABLE LESSONS immediately followed by TRENDING
+    MARKET BEHAVIOUR (or vice versa) would have one section's scan swallow the
+    other's content whole."""
+    for term1, term2 in _PRESERVED_SECTION_ANCHORS:
+        if term1 in line and term2 in line:
+            return True
+    stripped = line.strip().lstrip("#").strip()
+    if stripped.startswith("**") and stripped.endswith("**") and len(stripped) > 4:
+        stripped = stripped[2:-2].strip()
+    stripped = stripped.rstrip(":").strip()
+    return stripped.upper() in _PLAYBOOK_SECTION_NAMES
+
+
+def _extract_section(lines, anchor):
+    """Find one preserved section's (start, end) line-index range in `lines`:
+    start is the first line matching anchor's substring-AND pair, end is the
+    next recognized heading after it (or end-of-file if none). Returns
+    (None, None) if the anchor's start text isn't present in `lines` at all."""
+    term1, term2 = anchor
+    start = None
+    for i, line in enumerate(lines):
+        if term1 in line and term2 in line:
+            start = i
+            break
+    if start is None:
+        return None, None
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if _is_section_heading(lines[j]):
+            end = j
+            break
+    return start, end
+
+
+def _strip_preserved_sections(text):
+    """Remove every preserved (human-authored) section from `text` before it is
+    embedded as reference material in the learning prompt. The model must never
+    see its own or Kev's prior teaching text verbatim and risk echoing it back
+    marked '(recurring)' as if today's trade data had independently re-derived
+    it -- that would launder human-written text back as a false promotion
+    candidate. Applies to BOTH preserved sections, not just DURABLE LESSONS:
+    TRENDING MARKET BEHAVIOUR -- CRITICAL is equally human-authored teaching,
+    not something today's trades actually re-derived."""
+    lines = text.splitlines()
+    for anchor in _PRESERVED_SECTION_ANCHORS:
+        start, end = _extract_section(lines, anchor)
         if start is None:
-            return None, None, lines
-        end = len(lines)
-        for j in range(start + 1, len(lines)):
-            if _is_section_heading(lines[j]):
-                end = j
-                break
-        return start, end, lines
+            continue
+        del lines[start:end]
+    return "\n".join(lines)
 
-    e_start, e_end, e_lines = _extract(existing_text)
-    if e_start is None:
-        return generated_text
 
-    critical_block = e_lines[e_start:e_end]
-    while critical_block and not critical_block[-1].strip():
-        critical_block.pop()
+def _build_reference_block_text(stripped_playbook_text, char_cap):
+    """Breadth-first, round-robin truncation of a (preserved-sections-already-
+    stripped) previous playbook down to char_cap: take each fast-tier section's
+    1st bullet, then each section's 2nd, etc., in file order, accumulating only
+    WHOLE bullets (a bullet that would exceed the remaining budget is skipped,
+    never split mid-line).
 
-    g_start, g_end, g_lines = _extract(generated_text)
-    if g_start is not None:
-        new_lines = g_lines[:g_start] + critical_block + [""] + g_lines[g_end:]
-    else:
-        # Model omitted the section entirely — insert at the same relative
-        # position it held in the existing file.
-        insert_at = min(e_start, len(g_lines))
-        new_lines = g_lines[:insert_at] + critical_block + [""] + g_lines[insert_at:]
-    return "\n".join(new_lines)
+    Why round-robin instead of a plain head-slice: playbook sections front-load
+    their strongest claim -- the first bullet under CONFLUENCE CONDITIONS is the
+    headline finding, the third is garnish. A head-slice gives perfect recall of
+    whichever section happens to be written first and zero recall of the last
+    few, which would bias every '(recurring)' marker -- and therefore every
+    promotion candidate -- toward one section. Round-robin keeps the recurrence
+    check breadth-fair: every section's headline claim stays visible, at the
+    cost of deeper bullets (#3/#4) never being checked for recurrence -- a
+    lesson that only ever lives at bullet #4 wasn't a promotion candidate
+    anyway.
+
+    Output is grouped back by section (not interleaved in selection order) so
+    it still reads like a normal playbook excerpt.
+    """
+    lines = stripped_playbook_text.splitlines()
+    sections = []  # [(heading_line, [bullet_text, ...]), ...] in file order
+    current_heading = None
+    current_bullets = []
+    current_bullet_lines = []
+
+    def _flush_bullet():
+        if current_bullet_lines:
+            current_bullets.append("\n".join(current_bullet_lines).rstrip())
+            current_bullet_lines.clear()
+
+    def _flush_section():
+        _flush_bullet()
+        if current_heading is not None:
+            sections.append((current_heading, list(current_bullets)))
+        current_bullets.clear()
+
+    for line in lines:
+        if _is_section_heading(line):
+            _flush_section()
+            current_heading = line.strip()
+            continue
+        if current_heading is None:
+            continue  # stray content before the first heading -- ignore
+        stripped = line.strip()
+        if stripped.startswith("-"):
+            _flush_bullet()
+            current_bullet_lines.append(line)
+        elif stripped:
+            current_bullet_lines.append(line)  # continuation of a wrapped bullet
+    _flush_section()
+
+    selected = {i: [] for i in range(len(sections))}
+    total_chars = 0
+    round_idx = 0
+    progressed = True
+    while progressed:
+        progressed = False
+        for i, (heading, bullets) in enumerate(sections):
+            if round_idx >= len(bullets):
+                continue
+            bullet = bullets[round_idx]
+            addition = bullet if selected[i] else (heading + "\n" + bullet)
+            addition_len = len(addition) + 1  # +1 for the joining newline
+            if total_chars + addition_len > char_cap:
+                continue  # this bullet alone doesn't fit -- skip it, keep it whole
+            selected[i].append(bullet)
+            total_chars += addition_len
+            progressed = True
+        round_idx += 1
+
+    out_parts = [
+        heading + "\n" + "\n".join(selected[i])
+        for i, (heading, _bullets) in enumerate(sections)
+        if selected[i]
+    ]
+    return "\n\n".join(out_parts)
+
+
+def _preserve_critical_section(existing_text, generated_text):
+    """Protect every preserved section (see _PRESERVED_SECTION_ANCHORS) from the
+    learning session's full playbook overwrite, mechanically rather than by
+    asking the model nicely. For each preserved section found in the EXISTING
+    playbook file, extracts it verbatim and re-inserts it into the freshly
+    GENERATED text, replacing whatever the model produced there or inserting it
+    at the same relative position if the model omitted it. Sections are
+    processed -- and therefore re-spliced -- in _PRESERVED_SECTION_ANCHORS'
+    order. A section absent from the existing file (e.g. no DURABLE LESSONS
+    written yet, or a fresh file with neither) is simply left untouched.
+    """
+    g_lines = generated_text.splitlines()
+    e_lines = existing_text.splitlines()
+
+    for anchor in _PRESERVED_SECTION_ANCHORS:
+        e_start, e_end = _extract_section(e_lines, anchor)
+        if e_start is None:
+            continue  # this preserved section doesn't exist in the existing file yet
+
+        block = e_lines[e_start:e_end]
+        while block and not block[-1].strip():
+            block.pop()
+
+        g_start, g_end = _extract_section(g_lines, anchor)
+        if g_start is not None:
+            g_lines = g_lines[:g_start] + block + [""] + g_lines[g_end:]
+        else:
+            # Model omitted the section entirely — insert at the same relative
+            # position it held in the existing file.
+            insert_at = min(e_start, len(g_lines))
+            g_lines = g_lines[:insert_at] + block + [""] + g_lines[insert_at:]
+
+    return "\n".join(g_lines)
 
 
 def _run_learning_session(journal, jane_journal=None, asset_type=None):
@@ -3744,7 +3909,11 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
     asset_journal = [e for e in journal if _norm_asset_type(e.get("asset_type")) == asset_type] if asset_type else journal
     if asset_type and len(asset_journal) < 5:
         return  # not enough data to write a meaningful asset-specific playbook yet
-    recent = asset_journal[-20:]
+    # 15, not 20 -- shrunk to make room for the recurrence reference block below
+    # while still clearing 12,288 ctx under the pessimistic chars/3.5 estimate.
+    recent = asset_journal[-15:]
+    _window_oldest = recent[0]["ts"][:10] if recent else "?"
+    _window_newest = recent[-1]["ts"][:10] if recent else "?"
 
     def _jane_asset_type(symbol):
         # jane_journal.json entries carry no "asset_type" field at all (unlike Chev's
@@ -3905,9 +4074,31 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
             f"Note: Jane is a human trader. Look for patterns where her instincts outperform your models.\n"
         )
 
+    # Recurrence reference block: the previous playbook, human-authored sections
+    # stripped, capped, fenced, and marked reference-only -- see
+    # _strip_preserved_sections and _REFERENCE_BLOCK_CHAR_CAP.
+    _prev_playbook_text = _build_reference_block_text(
+        _strip_preserved_sections(_load_playbook(asset_type)), _REFERENCE_BLOCK_CHAR_CAP
+    )
+    reference_block = ""
+    if _prev_playbook_text.strip():
+        reference_block = (
+            f"PREVIOUS PLAYBOOK (REFERENCE ONLY — read this fence, then set it aside):\n"
+            f"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n"
+            f"{_prev_playbook_text}\n"
+            f"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n"
+            f"Reference only. Re-derive every claim from the trades below — a claim may appear "
+            f"in your output ONLY if today's data independently supports it. Never copy reference "
+            f"text forward. If a finding you derived today also appears in the reference, append "
+            f"'(recurring)' to it. List every finding marked (recurring) in 2+ consecutive rewrites "
+            f"under a final 'PROMOTION CANDIDATES' subsection addressed to Kev — you never promote "
+            f"anything yourself, that section is a suggestion list, not an action.\n\n"
+        )
+
     _asset_label = asset_type.upper() if asset_type else "ALL ASSETS"
     prompt = (
         f"You are reviewing your last {len(recent)} {_asset_label} trade post-mortems to update your {_asset_label} trading playbook.\n\n"
+        f"{reference_block}"
         f"{entries_text}\n"
         f"{jane_text}\n"
         f"CONFLUENCE COMBO WIN-RATE (last 30 trades — use this as statistical evidence):\n"
@@ -3924,8 +4115,21 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
         f"  No absolute language ('always', 'never', '100% win rate', 'guaranteed') unless n ≥ 20.\n"
         f"  Patterns with fewer than 10 supporting trades: label them tentative.\n"
         f"  Any pattern with fewer than 5 supporting trades must be written as 'tentative (n=X)' — never stated as a rule.\n"
+        f"  Never generalize a pattern beyond the regime stated in its window line — a lesson learned in a\n"
+        f"    trending week does not automatically apply in a ranging one.\n"
+        f"  A rule that contradicts a DURABLE LESSON must be flagged as a conflict for Kev, not written as a\n"
+        f"    new rule — name the DURABLE LESSON it conflicts with and describe the conflict, don't silently\n"
+        f"    override it.\n"
         f"  Only reference tag codes that actually appear in the journal data above — never invent shorthand.\n"
-        f"  TRENDING MARKET BEHAVIOUR — CRITICAL is maintained by the system — do not attempt to rewrite it.\n\n"
+        f"  TRENDING MARKET BEHAVIOUR — CRITICAL is maintained by the system — do not attempt to rewrite it.\n"
+        f"  DURABLE LESSONS (HUMAN-CURATED), if present, is maintained by Kev — do not attempt to rewrite it\n"
+        f"    either, and do not treat its presence in this prompt as something you wrote.\n\n"
+        f"WINDOW LABEL (hard requirement): every fast-tier section below (CONFLUENCE CONDITIONS through\n"
+        f"JANE'S PATTERNS) must open with exactly one line before its bullets:\n"
+        f"  \"Window: {_window_oldest} -> {_window_newest}, n={len(recent)}, regime: <your one-word read>\"\n"
+        f"The dates and n are fixed for this rewrite, given above — only the regime word (trending/ranging/\n"
+        f"mixed) is your own judgment from what these {len(recent)} trades show. Lessons are weather reports —\n"
+        f"they must say which week's weather.\n\n"
         f"Rewrite your playbook under these exact headings:\n\n"
         f"CONFLUENCE CONDITIONS\n"
         f"Based on the combo win-rate data above, which combinations are producing results and which are not? "
