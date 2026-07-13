@@ -150,13 +150,109 @@
   --role-mikeross: #5dade2;
 }
 
-/* ---- Two-column layout: sticky rail + main content ---- */
-.stratPane[data-spane="learn"].active {
-  display: grid; grid-template-columns: 172px 1fr; gap: 26px; align-items: start;
+/* ---- Hub navigation shell (v2): landing screen -> Team / Strategy / Dashboard /
+   Indicators, instead of one flat scroll. Same show/hide convention .stratPane.active
+   already uses, one level deeper -- .learnHub / .learnHub.active, reusing the existing
+   cmdFadeIn keyframe (defined elsewhere in this file for command-palette-style panels). ---- */
+.stratPane[data-spane="learn"].active { display: block; }
+.learnHub { display: none; }
+.learnHub.active { display: block; animation: cmdFadeIn 0.12s ease; }
+
+.learnHubIntro {
+  font-size: 15px; font-weight: 600; color: var(--txt1); font-family: 'Inter', sans-serif;
+  margin-bottom: 18px;
 }
+.learnHubGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; max-width: 640px; }
+.learnHubCard {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius);
+  padding: 22px 20px; cursor: pointer; text-align: left; transition: border-color 0.15s, transform 0.15s;
+}
+.learnHubCard:hover { border-color: var(--gold); transform: translateY(-2px); }
+.learnHubCard .lhcEmoji { font-size: 26px; margin-bottom: 4px; }
+.learnHubCard .lhcTitle { font-size: 14.5px; font-weight: 700; color: var(--txt1); font-family: 'Inter', sans-serif; }
+.learnHubCard small { font-size: 11px; color: var(--txt2); font-family: 'Inter', sans-serif; }
+
+.learnBackBtn {
+  display: inline-block; margin-bottom: 16px; padding: 6px 14px; border-radius: var(--r-sm);
+  background: none; border: 1px solid var(--border); color: var(--txt2); cursor: pointer;
+  font-family: 'Inter', sans-serif; font-size: 11.5px;
+}
+.learnBackBtn:hover { color: var(--txt1); border-color: var(--txt2); }
+
+.learnComingSoon {
+  font-family: 'Inter', sans-serif; font-size: 12.5px; color: var(--txt2);
+  background: var(--card-bg); border: 1px dashed var(--card-border); border-radius: var(--card-radius);
+  padding: 20px; max-width: 520px;
+}
+
+/* ---- Meet the Team: bio card grid + detail panel ---- */
+#learnTeamGrid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;
+  margin-bottom: 18px;
+}
+.learnTeamCard {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
+  background: var(--card-bg); border: 1px solid var(--card-border); border-left: 3px solid var(--border2);
+  border-radius: var(--card-radius); padding: 14px 16px; cursor: pointer; text-align: left;
+  transition: border-color 0.15s;
+}
+.learnTeamCard[data-owner="dexter"]   { border-left-color: var(--role-dexter); }
+.learnTeamCard[data-owner="chev"]     { border-left-color: var(--role-chev); }
+.learnTeamCard[data-owner="elliot"]   { border-left-color: var(--role-elliot); }
+.learnTeamCard[data-owner="jax"]      { border-left-color: var(--role-jax); }
+.learnTeamCard[data-owner="george"]   { border-left-color: var(--role-george); }
+.learnTeamCard[data-owner="mikeross"] { border-left-color: var(--role-mikeross); }
+.learnTeamCard:hover { border-color: var(--gold); }
+.learnTeamCard .ltcEmoji { font-size: 22px; }
+.learnTeamCard .ltcName { font-size: 13px; font-weight: 700; color: var(--txt1); font-family: 'Inter', sans-serif; }
+.learnTeamCard .ltcMission { font-size: 10.5px; color: var(--txt2); font-family: 'Inter', sans-serif; line-height: 1.4; }
+
+.learnTeamDetailCard {
+  background: var(--card-bg); border: 1px solid var(--card-border); border-left: 3px solid var(--border2);
+  border-radius: var(--card-radius); padding: 18px 20px; max-width: 560px;
+}
+.learnTeamDetailCard[data-owner="dexter"]   { border-left-color: var(--role-dexter); }
+.learnTeamDetailCard[data-owner="chev"]     { border-left-color: var(--role-chev); }
+.learnTeamDetailCard[data-owner="elliot"]   { border-left-color: var(--role-elliot); }
+.learnTeamDetailCard[data-owner="jax"]      { border-left-color: var(--role-jax); }
+.learnTeamDetailCard[data-owner="george"]   { border-left-color: var(--role-george); }
+.learnTeamDetailCard[data-owner="mikeross"] { border-left-color: var(--role-mikeross); }
+.ltdHeader { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.ltdEmoji { font-size: 24px; }
+.ltdName { font-size: 16px; font-weight: 700; color: var(--txt1); font-family: 'Inter', sans-serif; }
+.ltdMission { font-size: 12.5px; color: var(--txt2); font-family: 'Inter', sans-serif; line-height: 1.5; margin-bottom: 14px; }
+.ltdRow { margin-bottom: 12px; }
+.ltdLabel {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--txt3); font-family: 'Inter', sans-serif; margin-bottom: 5px;
+}
+.ltdGood { font-size: 11.5px; color: var(--green); font-family: 'Inter', sans-serif; margin-top: 2px; }
+.ltdBad { font-size: 11.5px; color: var(--red); font-family: 'Inter', sans-serif; margin-top: 2px; }
+.ltdChips { display: flex; gap: 6px; flex-wrap: wrap; }
+.ltdWorksWith {
+  background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 12px;
+  padding: 3px 11px; font-size: 10.5px; color: var(--txt2); font-family: 'Inter', sans-serif; cursor: pointer;
+}
+.ltdWorksWith:hover { color: var(--txt1); border-color: var(--gold); }
+.ltdOwns { display: flex; flex-direction: column; gap: 2px; }
+.ltdOwnsLink { font-size: 11.5px; color: var(--gold); font-family: 'Inter', sans-serif; text-decoration: none; }
+.ltdOwnsLink:hover { text-decoration: underline; }
+.ltdNone { font-size: 11px; color: var(--txt3); font-family: 'Inter', sans-serif; font-style: italic; }
+
+/* ---- Dashboard hub: sticky rail + main content (rescoped from the whole Learn pane,
+   which now hosts 4 separate hub views, to just this one view). 3 explicit grid children
+   here (Back button, Quick Nav, Main Col) -- auto-placement alone would put the Back
+   button in the narrow 172px column instead of spanning full width, so every child gets
+   an explicit row/column rather than relying on source-order placement. ---- */
+.learnHub[data-lview="dashboard"].active {
+  display: grid; grid-template-columns: 172px 1fr; grid-template-rows: auto 1fr; gap: 12px 26px; align-items: start;
+}
+.learnHub[data-lview="dashboard"] > .learnBackBtn { grid-column: 1 / -1; grid-row: 1; margin-bottom: 0; }
 .learnQuickNav {
   position: sticky; top: 0; display: flex; flex-direction: column; gap: 16px;
   padding-right: 14px; border-right: 1px solid var(--border);
+  grid-column: 1; grid-row: 2;
 }
 .lqnGroupLabel {
   font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em;
@@ -174,10 +270,14 @@
   font-family: 'Inter', sans-serif; padding: 3px 8px; border-radius: 5px; line-height: 1.4;
 }
 .learnQuickNav a:hover { background: rgba(255,255,255,0.06); color: var(--txt1); }
-.learnMainCol { min-width: 0; }
+.learnMainCol { min-width: 0; grid-column: 2; grid-row: 2; }
 
 @media (max-width: 720px) {
-  .stratPane[data-spane="learn"].active { grid-template-columns: 1fr; }
+  .learnHub[data-lview="dashboard"].active { grid-template-columns: 1fr; }
+  .learnHub[data-lview="dashboard"] > .learnBackBtn,
+  .learnQuickNav, .learnMainCol { grid-column: 1; }
+  .learnQuickNav { grid-row: 2; }
+  .learnMainCol { grid-row: 3; }
   .learnQuickNav {
     position: static; flex-direction: row; flex-wrap: wrap; gap: 6px 16px;
     padding-right: 0; padding-bottom: 12px; border-right: none; border-bottom: 1px solid var(--border);
@@ -185,6 +285,7 @@
   }
   .lqnGroup { display: flex; align-items: center; gap: 6px; }
   .lqnGroupLabel { margin-bottom: 0; }
+  .learnHubGrid { grid-template-columns: 1fr; }
 }
 
 /* ---- Mode toggle: premium segmented control instead of two loose pills ---- */
@@ -245,12 +346,51 @@
 
 .learnEntry .gCode { font-size: 9px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; margin-left: 6px; }
 .learnEntry .gPoints { font-size: 9px; color: #b39ddb; font-family: 'Share Tech Mono', monospace; margin-left: 6px; }
-.learnEntry .gDef { font-size: 11.5px; color: var(--txt2); font-family: 'Inter', sans-serif; margin-top: 5px; line-height: 1.6; }
+/* Quick Answer -- always visible, meant to be read in 2 seconds. Bolder/lighter than
+   gDef below it so it visually reads as the "fast" layer, not just more body text. */
+.learnEntry .gQuick { font-size: 12px; color: var(--txt1); font-family: 'Inter', sans-serif; margin-top: 6px; line-height: 1.5; font-weight: 500; }
+.learnEntry .gDef { font-size: 11.5px; color: var(--txt2); font-family: 'Inter', sans-serif; margin-top: 8px; line-height: 1.6; }
 .learnEntry .gHow { font-size: 10.5px; color: var(--txt3); font-family: 'Inter', sans-serif; margin-top: 6px; font-style: italic; }
 /* Persistent highlight after a deep-link jump -- stays lit (survives a
    Definition/Story Time toggle, which rebuilds this list's HTML) until you
    click the highlighted entry itself to clear it. */
 .learnEntry.learnPinned { background: rgba(155,89,182,0.20); border-color: rgba(155,89,182,0.5); cursor: pointer; transition: background 0.25s ease-out; }
+
+/* ---- Progressive disclosure layers (PHASE 6D PART 2): Story/Deep Dive/Real
+   Example/Common Mistake/Related, each an independently expandable <details>
+   below the always-visible Quick Answer + primary explanation. Native
+   <details>/<summary> -- same no-JS-collapsible convention already used
+   elsewhere in this codebase (Elliot's Suggestions evidence rows, the
+   Settings Size submenu). */
+.learnEntry .learnLayer { margin-top: 8px; }
+.learnEntry .learnLayer summary {
+  font-size: 10.5px; font-weight: 700; color: var(--txt2); font-family: 'Inter', sans-serif;
+  cursor: pointer; outline: none; list-style: none; user-select: none;
+}
+.learnEntry .learnLayer summary::-webkit-details-marker { display: none; }
+.learnEntry .learnLayer summary::before { content: '▸ '; color: var(--txt3); }
+.learnEntry .learnLayer[open] summary::before { content: '▾ '; }
+.learnEntry .learnLayer summary:hover { color: var(--txt1); }
+.learnEntry .learnLayer .gLayerBody {
+  font-size: 11px; color: var(--txt2); font-family: 'Inter', sans-serif; line-height: 1.6;
+  margin-top: 5px; padding-left: 14px; border-left: 2px solid var(--border2);
+}
+
+/* Real Example card -- built entirely from real, already-fetched decision/shadow
+   records (see _realExampleHTML in drawing.js), never a fabricated number. */
+.learnExample { font-family: 'Share Tech Mono', monospace; }
+.learnExample .leSymbol { font-size: 11.5px; font-weight: 700; color: var(--txt1); }
+.learnExample .leTf, .learnExample .leScore { color: var(--txt3); font-weight: 400; margin-left: 6px; }
+.learnExample .leOutcome { font-size: 10.5px; color: var(--txt2); margin-top: 4px; font-family: 'Inter', sans-serif; }
+.learnExample .leDetail { font-size: 10px; color: var(--txt3); margin-top: 4px; font-family: 'Inter', sans-serif; font-style: italic; }
+
+.gRelated { display: flex; flex-wrap: wrap; gap: 6px; }
+.gRelatedLink {
+  background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 12px;
+  padding: 3px 11px; font-size: 10.5px; color: var(--gold); font-family: 'Inter', sans-serif;
+  text-decoration: none;
+}
+.gRelatedLink:hover { border-color: var(--gold); text-decoration: underline; }
 
 /* ---- Confluence Tags: color-coded card grid, grouped by WHAT each tag
    measures (not who reports it -- a functional category matters more here
@@ -478,6 +618,13 @@
 }
 #stratShadowTagBars .stratBarVal .svLead, #stratShadowComboBars .stratBarVal .svLead { color: var(--txt3); }
 #stratShadowTagBars .stratBarVal .svFrag, #stratShadowComboBars .stratBarVal .svFrag { white-space: nowrap; }
+/* Combo labels (e.g. "EMA 13 + EMA 21 + Sweep") run far longer than single-tag names --
+   the shared 170px/ellipsis .stratBarLabel truncated them mid-combo. Widened + allowed to
+   wrap instead of ellipsis-clipping, scoped to the two combo containers only (single-tag
+   leaderboards keep the original 170px/ellipsis behavior, unchanged). */
+#stratShadowComboBars .stratBarLabel, #stratComboBars .stratBarLabel {
+  width: 230px; white-space: normal; overflow: visible; text-overflow: unset; line-height: 1.3;
+}
 /* PHASE 7B-4: hand-rolled sparkline (no charting library — matches the funnel/heatmap's
    own hand-rolled-div convention rather than the equity curve's LightweightCharts one,
    since this is a glanceable trend strip, not an interactive chart). */

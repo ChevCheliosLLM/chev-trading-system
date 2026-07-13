@@ -1,38 +1,81 @@
 CHEV TRADING PLAYBOOK — STOCKS
-Last updated: 2026-07-03 (seeded — will be rewritten by learning sessions)
+Last updated: 2026-07-13 18:25:38 | Based on 5 STOCKS trades
 ========================================
 
-### CONFLUENCE CONDITIONS
-- Stocks require daily/weekly SR levels as the primary anchor — intraday levels alone are too noisy. A weekly resistance level tested 3+ times is a wall; an intraday 15m level is context only.
-- Chart patterns (head and shoulders, wedge, ascending channel) are more reliable in stocks than in forex or crypto because institutional algos respond to classic patterns. Breakout + volume confirmation is the highest conviction signal.
-- Earnings and macro news override all technical setups. Never hold through earnings unless the setup is specifically an earnings play with defined risk. Check the economic calendar before entering.
+### Window: 2026-07-01 -> 2026-07-06, n=5, regime: trending
 
+#### CONFLUENCE CONDITIONS
+- High win-rate shadow combos include BB Squeeze with EMA and fast anchor conditions (shadow_total_R=+2.50).
+- RSI divergence signals are more reliable in trending markets, especially when combined with other indicators like GP SR Combo.
+- 4H SR levels tend to be more significant than 1H for confirming support or resistance.
+
+#### MARKET STRUCTURE RULES
+- Trending market conditions improve setup quality, particularly when setups align with higher time frame (e.g., 4H) support/resistance.
 ### TRENDING MARKET BEHAVIOUR — CRITICAL
 - In a confirmed uptrend (4H HH/HL, net move > +3%), resistance levels are CONTINUATION ZONES, not reversal zones. Stocks in strong uptrends break resistance with force — shorting resistance in an uptrend is almost always wrong.
 - In a confirmed downtrend (4H LH/LL, net move < -3%), support levels break down. Longing support in a downtrend is similarly low probability.
 - Counter-trend trades require ALL of: (1) A+ score ≥ 1.5× the normal threshold (stocks = 12), (2) confirmed RSI divergence on 1H or 4H, (3) explicit 4H BOS or CHoCH proving trend reversal. Any one missing → SKIP.
 - Dexter will show a '4H Macro Trend Context' block at the top of every market brief. Read it before assessing individual S/R levels.
 
-### MARKET STRUCTURE RULES
-- Stocks gap at open. A gap fill setup (price opens above/below previous close and reverts) is a reliable intraday pattern — the gap is a vacuum with no traded price, so price often fills it.
-- Pre-market and after-hours moves define the opening range. The first 15-30 minutes after open establish direction — the opening range simply doesn't exist as a level before then, not a reason to hesitate once it does.
-- Volume at key levels is the differentiator in stocks. A breakout above resistance on double average volume is real. The same breakout on low volume is likely a false break.
+- High-confidence patterns like EMA and fast anchor combinations are more likely to reach TP in trending markets.
+- Patterns that break out from strong support or resistance levels have a higher chance of success.
 
-### ENTRY QUALITY STANDARDS
-- Stocks SL minimum: 1.0× ATR scalp | 1.5× ATR day | 2.5× ATR swing. Stocks gap more than forex but less than crypto — use daily ATR for day trades, not intraday ATR.
-- The best stock entries align intraday structure (15m / 1H) with daily chart direction. Against the daily trend, even technically perfect intraday setups underperform.
-- Stocks have lower leverage than forex/crypto. Typical leverage: 2–4× for intraday, 1–2× for swing. Scale position size up vs forex to compensate for lower leverage and smaller % moves.
+#### ENTRY QUALITY STANDARDS
+- High-conviction entries often involve multiple indicators confirming the same trend direction, such as RSI divergence with GP SR Combo.
+- Winners typically show clear structural support (e.g., 4H SR) and momentum indicators like EMA crossovers.
+- Marginal setups lack strong confluence or have conflicting signals from different time frames.
 
-### TRADE MANAGEMENT PATTERNS
+#### TRADE MANAGEMENT PATTERNS
 - Insufficient data — revisit next session.
 
-### REASONING QUALITY
+#### REASONING QUALITY
+- Validated reasoning occurs in about 67% of cases (2/3), while partial validation is seen in one case.
+- Invalidated reasoning often stems from misreading market structure or timeframe, particularly when ignoring higher time frame signals.
+- A+ setups show better reasoning validation than B setups.
+
+#### ASSET NOTES
+- Cryptos tend to follow strong trend patterns more consistently compared to forex and stocks.
+- Forex pairs are more volatile and less predictable in trending markets without clear structural support.
+
+#### JANE'S PATTERNS
 - Insufficient data — revisit next session.
 
-### ASSET NOTES
-- US stock market hours: 09:30–16:00 EST. Pre-market 04:00–09:30, after-hours 16:00–20:00. Liquidity is highest in the first and last hour of the main session.
-- AMZN, NVDA, and mega-caps tend to respect daily/weekly levels cleanly. Small caps are more volatile with thinner orderbooks — levels break more easily.
-- Dividends and stock splits affect historical price levels on charts. If a level looks unusual, check for a corporate action before trusting it.
+#### SHADOW COMBO INTELLIGENCE
+- BB Squeeze with EMA13, EMA21, EMA55, fast anchor conditions have a shadow win rate of +2.50 (n=5), but no real-trade confirmation yet.
+- Patterns like BB Burst and Fast Anchor or High show promising shadow results (+2.62) but lack real-trade validation.
 
-### JANE'S PATTERNS
+### Window: 2026-07-01 -> 2026-07-06, n=5, regime: trending
+
+#### CONFLUENCE CONDITIONS
+- High win-rate shadow combos include BB Squeeze with EMA and fast anchor conditions (shadow_total_R=+2.50).
+- RSI divergence signals are more reliable in trending markets, especially when combined with other indicators like GP SR Combo.
+- 4H SR levels tend to be more significant than 1H for confirming support or resistance.
+
+#### MARKET STRUCTURE RULES
+- Trending market conditions improve setup quality, particularly when setups align with higher time frame (e.g., 4H) support/resistance.
+- High-confidence patterns like EMA and fast anchor combinations are more likely to reach TP in trending markets.
+- Patterns that break out from strong support or resistance levels have a higher chance of success.
+
+#### ENTRY QUALITY STANDARDS
+- High-conviction entries often involve multiple indicators confirming the same trend direction, such as RSI divergence with GP SR Combo.
+- Winners typically show clear structural support (e.g., 4H SR) and momentum indicators like EMA crossovers.
+- Marginal setups lack strong confluence or have conflicting signals from different time frames.
+
+#### TRADE MANAGEMENT PATTERNS
 - Insufficient data — revisit next session.
+
+#### REASONING QUALITY
+- Validated reasoning occurs in about 67% of cases (2/3), while partial validation is seen in one case.
+- Invalidated reasoning often stems from misreading market structure or timeframe, particularly when ignoring higher time frame signals.
+- A+ setups show better reasoning validation than B setups.
+
+#### ASSET NOTES
+- Cryptos tend to follow strong trend patterns more consistently compared to forex and stocks.
+- Forex pairs are more volatile and less predictable in trending markets without clear structural support.
+
+#### JANE'S PATTERNS
+- Insufficient data — revisit next session.
+
+#### SHADOW COMBO INTELLIGENCE
+- BB Squeeze with EMA13, EMA21, EMA55, fast anchor conditions have a shadow win rate of +2.50 (n=5), but no real-trade confirmation yet.
+- Patterns like BB Burst and Fast Anchor or High show promising shadow results (+2.62) but lack real-trade validation.

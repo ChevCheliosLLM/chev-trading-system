@@ -42,7 +42,7 @@
 <link rel="stylesheet" href="css/components/hypothesis-tracker.css?v=20260718-1">
 <link rel="stylesheet" href="css/components/command-palette.css">
 <link rel="stylesheet" href="css/components/shortcuts-panel.css?v=20260720-1">
-<link rel="stylesheet" href="css/components/strategy.css?v=20260716-4">
+<link rel="stylesheet" href="css/components/strategy.css?v=20260716-7">
 <link rel="stylesheet" href="css/components/weight-lab.css?v=20260716-2">
 <link rel="stylesheet" href="css/animations.css">
 <!-- ============================================================
@@ -507,68 +507,101 @@
              deep-linked from every (i) icon); the Concept/Tag Glossary below it is PHASE 17's
              content, moved here unchanged. -->
         <div class="stratPane" data-spane="learn">
-          <!-- PHASE 6D LEARN TAB REDESIGN: sticky quick-nav rail, grouped by who actually
-               produces each section (read straight from the existing SECTION_STORY prose
-               in drawing.js -- never invented). Plain anchor links to the SAME
-               #learnEntry-<key> ids the (i) deep-link icons already jump to; the
-               scroll-margin-top already set on .learnEntry makes native anchor scrolling
-               land correctly inside #stratBody's own scroll container. Maintenance note:
-               if a new key is ever added to SECTION_ORDER in drawing.js, add its matching
-               link here too -- this list is static, not generated from that array. -->
-          <div class="learnQuickNav">
-            <div class="lqnGroup">
-              <div class="lqnGroupLabel" data-owner="elliot">Elliot</div>
-              <a href="#learnEntry-elliot_suggestions">Elliot's Suggestions</a>
-            </div>
-            <div class="lqnGroup">
-              <div class="lqnGroupLabel" data-owner="dexter">Dexter</div>
-              <a href="#learnEntry-setup_volume_heatmap">Setup Volume</a>
-              <a href="#learnEntry-funnel">The Funnel</a>
-              <a href="#learnEntry-win_rate_by_grade">Win Rate by Grade</a>
-              <a href="#learnEntry-indicator_scoreboard">Indicator Scoreboard</a>
-              <a href="#learnEntry-weight_lab">Weight Lab</a>
-            </div>
-            <div class="lqnGroup">
-              <div class="lqnGroupLabel" data-owner="jax">Jax</div>
-              <a href="#learnEntry-scorecard">Scorecard</a>
-              <a href="#learnEntry-equity_curve">Equity Curve</a>
-              <a href="#learnEntry-tag_leaderboard">Tag Leaderboard</a>
-              <a href="#learnEntry-combo_leaderboard">Combo Leaderboard</a>
-            </div>
-            <div class="lqnGroup">
-              <div class="lqnGroupLabel" data-owner="mikeross">Mike Ross</div>
-              <a href="#learnEntry-shadow_outcomes">Shadow Outcomes</a>
-              <a href="#learnEntry-gate_scoreboard">Gate Scoreboard</a>
-              <a href="#learnEntry-shadow_tag_leaderboard">Shadow Tags</a>
-              <a href="#learnEntry-shadow_combo_leaderboard">Shadow Combos</a>
-              <a href="#learnEntry-weekly_regret_trend">Weekly Regret</a>
-            </div>
-            <div class="lqnGroup">
-              <div class="lqnGroupLabel" data-owner="george">George</div>
-              <a href="#learnEntry-planned_rr_distribution">Planned R:R</a>
-              <a href="#learnEntry-system_over_time">System Over Time</a>
-            </div>
-            <div class="lqnGroup">
-              <div class="lqnGroupLabel" data-owner="chev">Chev</div>
-              <a href="#learnEntry-skip_reject_reasons">Why Setups Skip</a>
-              <a href="#learnEntry-self_check_rate">Self-Check Rate</a>
-            </div>
-            <div class="lqnGroup">
-              <div class="lqnGroupLabel">Jump to</div>
-              <a href="#stratConceptGlossary">Glossary</a>
-              <a href="#stratTagGlossary">Confluence Tags</a>
+          <!-- PHASE 6D LEARN TAB v2 ("The Trading Floor"): hub navigation instead of one
+               flat scroll. Landing screen (4 big cards) -> Team / Strategy / Dashboard /
+               Indicators. #stratLearnSections, #stratConceptGlossary, #stratTagGlossary,
+               #glossarySearch, #learnModeDef, #learnModeStory all keep their exact original
+               ids -- only relocated, never renamed. See _switchLearnView() in drawing.js. -->
+
+          <!-- Landing screen -->
+          <div class="learnHub active" data-lview="hub">
+            <div class="learnHubIntro">📚 Learn the Strategy — what do you want to understand today?</div>
+            <div class="learnHubGrid">
+              <button class="learnHubCard" data-goto="team">
+                <span class="lhcEmoji">🏛</span><span class="lhcTitle">The Team</span><small>Who does what</small>
+              </button>
+              <button class="learnHubCard" data-goto="strategy">
+                <span class="lhcEmoji">📈</span><span class="lhcTitle">The Strategy</span><small>How a trade actually happens</small>
+              </button>
+              <button class="learnHubCard" data-goto="dashboard">
+                <span class="lhcEmoji">📊</span><span class="lhcTitle">The Dashboard</span><small>What every chart means</small>
+              </button>
+              <button class="learnHubCard" data-goto="indicators">
+                <span class="lhcEmoji">🧩</span><span class="lhcTitle">Indicators</span><small>Every confluence tag</small>
+              </button>
             </div>
           </div>
 
-          <div class="learnMainCol">
+          <!-- Meet the Team -->
+          <div class="learnHub" data-lview="team">
+            <button class="learnBackBtn" data-goto="hub">← Back</button>
+            <div id="learnTeamGrid"></div>
+            <div id="learnTeamDetail"></div>
+          </div>
+
+          <!-- The Strategy (Trade Life Cycle narrative arrives Phase 4) -->
+          <div class="learnHub" data-lview="strategy">
+            <button class="learnBackBtn" data-goto="hub">← Back</button>
+            <div class="learnComingSoon">📈 The Trade Life Cycle — the story of how a trade actually happens, start to finish — is coming in the next pass.</div>
+          </div>
+
+          <!-- The Dashboard: existing Sections list, moved as-is -->
+          <div class="learnHub" data-lview="dashboard">
+            <button class="learnBackBtn" data-goto="hub">← Back</button>
+            <div class="learnQuickNav">
+              <div class="lqnGroup">
+                <div class="lqnGroupLabel" data-owner="elliot">Elliot</div>
+                <a href="#learnEntry-elliot_suggestions">Elliot's Suggestions</a>
+              </div>
+              <div class="lqnGroup">
+                <div class="lqnGroupLabel" data-owner="dexter">Dexter</div>
+                <a href="#learnEntry-setup_volume_heatmap">Setup Volume</a>
+                <a href="#learnEntry-funnel">The Funnel</a>
+                <a href="#learnEntry-win_rate_by_grade">Win Rate by Grade</a>
+                <a href="#learnEntry-indicator_scoreboard">Indicator Scoreboard</a>
+                <a href="#learnEntry-weight_lab">Weight Lab</a>
+              </div>
+              <div class="lqnGroup">
+                <div class="lqnGroupLabel" data-owner="jax">Jax</div>
+                <a href="#learnEntry-scorecard">Scorecard</a>
+                <a href="#learnEntry-equity_curve">Equity Curve</a>
+                <a href="#learnEntry-tag_leaderboard">Tag Leaderboard</a>
+                <a href="#learnEntry-combo_leaderboard">Combo Leaderboard</a>
+              </div>
+              <div class="lqnGroup">
+                <div class="lqnGroupLabel" data-owner="mikeross">Mike Ross</div>
+                <a href="#learnEntry-shadow_outcomes">Shadow Outcomes</a>
+                <a href="#learnEntry-gate_scoreboard">Gate Scoreboard</a>
+                <a href="#learnEntry-shadow_tag_leaderboard">Shadow Tags</a>
+                <a href="#learnEntry-shadow_combo_leaderboard">Shadow Combos</a>
+                <a href="#learnEntry-weekly_regret_trend">Weekly Regret</a>
+              </div>
+              <div class="lqnGroup">
+                <div class="lqnGroupLabel" data-owner="george">George</div>
+                <a href="#learnEntry-planned_rr_distribution">Planned R:R</a>
+                <a href="#learnEntry-system_over_time">System Over Time</a>
+              </div>
+              <div class="lqnGroup">
+                <div class="lqnGroupLabel" data-owner="chev">Chev</div>
+                <a href="#learnEntry-skip_reject_reasons">Why Setups Skip</a>
+                <a href="#learnEntry-self_check_rate">Self-Check Rate</a>
+              </div>
+            </div>
+            <div class="learnMainCol">
+              <div class="stratSectionLabel">🗺️ Sections</div>
+              <div id="stratLearnSections"></div>
+            </div>
+          </div>
+
+          <!-- Indicators: existing Concept + Tag glossary, moved as-is -->
+          <div class="learnHub" data-lview="indicators">
+            <button class="learnBackBtn" data-goto="hub">← Back</button>
             <!-- PHASE 27: Definition / Story Time toggle -- reuses the existing .pill
                  component, default Definition, remembered per device via localStorage. -->
             <div class="learnModeToggleRow">
               <button class="pill active" id="learnModeDef" type="button">Definition</button>
               <button class="pill" id="learnModeStory" type="button">📖 Story Time</button>
             </div>
-            <div class="stratSectionLabel">🗺️ Sections</div>
-            <div id="stratLearnSections"></div>
             <div class="stratSectionLabel">📖 Glossary</div>
             <input id="glossarySearch" type="text" placeholder="Search the glossary…" autocomplete="off" spellcheck="false">
             <div id="stratConceptGlossary"></div>
@@ -1403,9 +1436,9 @@
 <script src="js/charts/rsi-canvas.js?v=20260709-2"></script>
 <script src="js/ui/chat.js?v=20260717-1"></script>
 <script src="js/charts/timeframe-load.js?v=20260709-2"></script>
-<script src="js/charts/drawing.js?v=20260721-3"></script>
+<script src="js/charts/drawing.js?v=20260721-6"></script>
 <script src="js/charts/engine.js?v=20260718-1"></script>
-<script src="js/ui/weight-lab.js?v=20260713-1"></script>
+<script src="js/ui/weight-lab.js?v=20260713-2"></script>
 <script src="js/ui/sparklines.js?v=20260709-2"></script>
 <script src="js/ui/radar.js?v=20260709-2"></script>
 <script src="js/ui/trade-dna.js?v=20260709-2"></script>

@@ -1081,14 +1081,16 @@
       const el = document.getElementById('stratGlanceStrip');
       if (!el) return;
       try {
-        const [vitalsR, perfR, wpR] = await Promise.allSettled([
+        const [vitalsR, perfR, wpR, ovR] = await Promise.allSettled([
           _apiFetch('/api/vitals').then(r => r.json()),
           _apiFetch('/api/strategy/performance').then(r => r.json()),
           _apiFetch('/api/weight_proposal').then(r => r.json()),
+          _apiFetch('/api/weight_overrides').then(r => r.json()),
         ]);
         const vitals = vitalsR.status === 'fulfilled' ? vitalsR.value : {};
         const perf   = perfR.status === 'fulfilled' ? perfR.value : {};
         const wp     = wpR.status === 'fulfilled' ? wpR.value : {};
+        const ov     = ovR.status === 'fulfilled' ? ovR.value : {};
 
         // Card 1: win rate -- same >=50 threshold loadPerformance() itself uses for
         // scWinRate's good/bad class, not a second one invented here.
@@ -1103,13 +1105,23 @@
         // Card 3: Weight Lab state -- same "actionable" gate weight-lab.js's own
         // loadWeightLab() uses (significant + verified + real delta/current_weight),
         // not a second definition of "waiting on you."
+        // FOUND BUG (2026-07-13, same root cause fixed in weight-lab.js's own
+        // loadWeightLab() moments earlier): /api/weight_proposal has a 300s server
+        // cache, so right after Kev approves a suggestion, this card could still count
+        // it as "waiting" for up to 5 minutes -- this computation was a SEPARATE,
+        // duplicated copy of the actionable filter that never got the same fix.
+        // /api/weight_overrides is never cached and always accurate, so cross-
+        // referencing it here excludes any tag that already has an entry (pending or
+        // applied) the exact same way loadWeightLab() now does.
         let wlText = 'unavailable', wlCls = '';
         if (wp.ok) {
           if (wp.frozen) {
             wlText = 'frozen — collecting data';
           } else {
+            const overriddenTags = new Set(((ov && ov.entries) || []).map(e => e.tag));
             const actionable = (wp.proposals || []).filter(p =>
-              p.significant && (p.mapping || 'unmapped') === 'verified' && p.proposed_delta != null && p.current_weight != null);
+              p.significant && (p.mapping || 'unmapped') === 'verified' && p.proposed_delta != null
+              && p.current_weight != null && !overriddenTags.has(p.tag));
             wlText = actionable.length ? `${actionable.length} suggestion${actionable.length === 1 ? '' : 's'} waiting` : 'nothing new';
             wlCls  = actionable.length ? 'good' : '';
           }
@@ -2174,18 +2186,40 @@
     };
 
     const CONCEPT_GLOSSARY = [
-      { name: "Confluence Score", owner: "dexter", def: "A plain number Dexter computes for every setup by adding up points from whichever indicators lined up — support/resistance, Fibonacci levels, RSI divergence, EMAs, chart patterns, and more. Nothing subjective here; it's arithmetic. A setup must clear a minimum score before Dexter will even show it to Chev.", how: "Each matched indicator contributes its own fixed point value (see Confluence Tags below); the score is their sum. The minimum required score depends on the asset (crypto/forex/stock) and whether EXPLORATION_MODE is active.",
-        story: "This is Dexter's own arithmetic, and it really is just addition — a point for a support test, a point for a confirmed divergence, on down the list. Nothing subjective ever enters into it. A setup has to clear his line before he'll even walk it over to Chev's desk." },
-      { name: "Risk:Reward (R:R)", owner: "dexter", def: "The ratio between how much a trade risks (entry to stop-loss) and how much it targets (entry to take-profit). A 2:1 R:R means the target is twice as far as the stop — if it wins, the reward is twice the risk.", how: "Computed as the target distance divided by the stop distance, both measured from the entry price.",
-        story: "Every setup in the building carries this ratio the moment its numbers are set, whether or not anyone's paying attention to it yet. It's the plainest measure in the whole operation — how far to the target, divided by how far to the stop. George will ask a much harsher version of this same question later." },
-      { name: "Net R:R", owner: "george", def: "The same Risk:Reward ratio, but adjusted for the real cost of trading — fees and slippage on both the entry and exit. A setup can look like a good R:R on paper and still fail Net R:R once those costs are subtracted, especially on tight stops. This is the number George (the risk gauntlet) actually enforces, not the raw R:R.", how: "Net R:R = (reward% − round-trip cost%) ÷ (risk% + round-trip cost%). Costs reduce the effective reward and increase the effective risk at the same time.",
-        story: "This is George's own number, and it's the harsher one — the same ratio, but with real fees and slippage subtracted first. A setup can look fine on Dexter's raw math and still fail George's version once the true cost of getting in and out is counted." },
-      { name: "Shadow Outcomes", owner: "mikeross", def: "Hypothetical results for setups Chev skipped or a gate rejected — what would have happened if the trade had been taken, using the same win/loss labelling method as real trades, with realistic costs modelled in. These numbers never touch the real P&L or real stats; they exist purely to show whether the system is skipping good setups or correctly avoiding bad ones.", how: "Computed by the Examiner (labeller.py) using the same triple-barrier method (does price hit target, stop, or time out first) applied to every setup Dexter evaluates, whether or not it was ever escalated to Chev.",
-        story: "Mike Ross keeps this file on setups nobody actually took — what would have happened, hypothetically, using the exact same win/loss test as a real trade. None of it ever touches the real ledger. It exists purely so someone, eventually, can ask whether good setups are being let go for no good reason." },
-      { name: "Setup Grades (B / A / A+)", owner: "dexter", def: "A quality tier Dexter assigns to a setup based on how far its confluence score clears the minimum bar, boosted for a trending regime or a peak trading session, and reduced for forex during a low-quality session. There is no \"C\" grade — the floor is B.", how: "Starts from the ratio of the setup's score to the minimum required score (2x+ = A+, 1.5x+ = A, otherwise B), then adjusted up for a trending 4H regime or a peak session, and down for forex in a low-quality session.",
-        story: "Dexter hands out this grade the moment he first sees a setup — B is the floor, there's no grade below it. It gets a bump for a trending market or a peak session, and a small penalty for forex during a quiet one." },
-      { name: "The Funnel Stages", owner: "dexter", def: "The path every setup takes from \"Dexter noticed it\" to \"a real trade opened,\" in the last 24 hours: setups seen → filtered out before Chev ever sees them (score too low, too far from the level, on cooldown, etc.) → escalated to Chev → Chev's verdict (posted / skipped) → George's gate and gauntlet checks → actually opened. Each stage shows where setups are lost.", how: "Pre-escalation filters come from the Examiner's shadow log; Chev's decisions and George's gate/gauntlet rejections come from the decision log; the opened count comes from the live trade list.",
-        story: "This is Dexter's own accounting of one night, start to finish — everything he saw, everything filtered out before Chev ever looked at it, what reached Chev, what he decided, and what survived George's checklist to actually open. The early filtering numbers come straight from Mike Ross's shadow files, since he's the one watching setups even before Chev does." },
+      { name: "Confluence Score", owner: "dexter",
+        quick: "A plain sum of points from every indicator that lined up on a setup — pure arithmetic, nothing subjective.",
+        def: "A plain number Dexter computes for every setup by adding up points from whichever indicators lined up — support/resistance, Fibonacci levels, RSI divergence, EMAs, chart patterns, and more. Nothing subjective here; it's arithmetic. A setup must clear a minimum score before Dexter will even show it to Chev.", how: "Each matched indicator contributes its own fixed point value (see Confluence Tags below); the score is their sum. The minimum required score depends on the asset (crypto/forex/stock) and whether EXPLORATION_MODE is active.",
+        story: "This is Dexter's own arithmetic, and it really is just addition — a point for a support test, a point for a confirmed divergence, on down the list. Nothing subjective ever enters into it. A setup has to clear his line before he'll even walk it over to Chev's desk.",
+        mistake: "Clearing the minimum score doesn't mean the setup gets posted — it only means Chev gets to SEE it. He can still skip a high-scoring setup for reasons the score never captures.",
+        related: ["Risk:Reward (R:R)", "The Funnel Stages"] },
+      { name: "Risk:Reward (R:R)", owner: "dexter",
+        quick: "How far the target is compared to the stop — a 2:1 R:R means double the reward for the risk.",
+        def: "The ratio between how much a trade risks (entry to stop-loss) and how much it targets (entry to take-profit). A 2:1 R:R means the target is twice as far as the stop — if it wins, the reward is twice the risk.", how: "Computed as the target distance divided by the stop distance, both measured from the entry price.",
+        story: "Every setup in the building carries this ratio the moment its numbers are set, whether or not anyone's paying attention to it yet. It's the plainest measure in the whole operation — how far to the target, divided by how far to the stop. George will ask a much harsher version of this same question later.",
+        related: ["Net R:R", "Confluence Score"] },
+      { name: "Net R:R", owner: "george",
+        quick: "The same ratio, but after subtracting real fees and slippage — the number actually enforced.",
+        def: "The same Risk:Reward ratio, but adjusted for the real cost of trading — fees and slippage on both the entry and exit. A setup can look like a good R:R on paper and still fail Net R:R once those costs are subtracted, especially on tight stops. This is the number George (the risk gauntlet) actually enforces, not the raw R:R.", how: "Net R:R = (reward% − round-trip cost%) ÷ (risk% + round-trip cost%). Costs reduce the effective reward and increase the effective risk at the same time.",
+        story: "This is George's own number, and it's the harsher one — the same ratio, but with real fees and slippage subtracted first. A setup can look fine on Dexter's raw math and still fail George's version once the true cost of getting in and out is counted.",
+        mistake: "A setup can look great on Dexter's raw R:R and still fail Net R:R once real trading costs are subtracted — especially on tight stops. Raw R:R alone never tells you whether George will actually let it through.",
+        related: ["Risk:Reward (R:R)"] },
+      { name: "Shadow Outcomes", owner: "mikeross",
+        quick: "What would have happened on trades we skipped, tested the same way as real trades — leads, not proof.",
+        def: "Hypothetical results for setups Chev skipped or a gate rejected — what would have happened if the trade had been taken, using the same win/loss labelling method as real trades, with realistic costs modelled in. These numbers never touch the real P&L or real stats; they exist purely to show whether the system is skipping good setups or correctly avoiding bad ones.", how: "Computed by the Examiner (labeller.py) using the same triple-barrier method (does price hit target, stop, or time out first) applied to every setup Dexter evaluates, whether or not it was ever escalated to Chev.",
+        story: "Mike Ross keeps this file on setups nobody actually took — what would have happened, hypothetically, using the exact same win/loss test as a real trade. None of it ever touches the real ledger. It exists purely so someone, eventually, can ask whether good setups are being let go for no good reason.",
+        mistake: "These numbers never touch the real P&L — a great-looking shadow result doesn't mean money was actually made or lost. Treat it as a lead worth reviewing, never as a result.",
+        related: ["The Funnel Stages"] },
+      { name: "Setup Grades (B / A / A+)", owner: "dexter",
+        quick: "A quality tier Dexter assigns the moment he sees a setup — B is the floor, there's no grade below it.",
+        def: "A quality tier Dexter assigns to a setup based on how far its confluence score clears the minimum bar, boosted for a trending regime or a peak trading session, and reduced for forex during a low-quality session. There is no \"C\" grade — the floor is B.", how: "Starts from the ratio of the setup's score to the minimum required score (2x+ = A+, 1.5x+ = A, otherwise B), then adjusted up for a trending 4H regime or a peak session, and down for forex in a low-quality session.",
+        story: "Dexter hands out this grade the moment he first sees a setup — B is the floor, there's no grade below it. It gets a bump for a trending market or a peak session, and a small penalty for forex during a quiet one.",
+        mistake: "The grade is fixed at the moment Dexter first sees the setup — it never gets updated if conditions change before Chev actually decides.",
+        related: ["Confluence Score"] },
+      { name: "The Funnel Stages", owner: "dexter",
+        quick: "The path a setup takes from \"Dexter noticed it\" to \"a real trade opened\" — and where most setups get lost.",
+        def: "The path every setup takes from \"Dexter noticed it\" to \"a real trade opened,\" in the last 24 hours: setups seen → filtered out before Chev ever sees them (score too low, too far from the level, on cooldown, etc.) → escalated to Chev → Chev's verdict (posted / skipped) → George's gate and gauntlet checks → actually opened. Each stage shows where setups are lost.", how: "Pre-escalation filters come from the Examiner's shadow log; Chev's decisions and George's gate/gauntlet rejections come from the decision log; the opened count comes from the live trade list.",
+        story: "This is Dexter's own accounting of one night, start to finish — everything he saw, everything filtered out before Chev ever looked at it, what reached Chev, what he decided, and what survived George's checklist to actually open. The early filtering numbers come straight from Mike Ross's shadow files, since he's the one watching setups even before Chev does.",
+        related: ["Confluence Score", "Shadow Outcomes"] },
     ];
 
     // PHASE 6D LEARN TAB REDESIGN: human-readable titles + "who owns this" tag for the
@@ -2228,6 +2262,100 @@
       'self_check_rate', 'weight_lab',
     ];
 
+    // ===== PHASE 6D LEARN TAB v2 PART 2: progressive disclosure content =====
+    // Quick Answer (1-2 sentences, trimmed from SECTION_TOOLTIPS above, never a new
+    // technical claim) shown for every section. Mistakes and Related are intentionally
+    // NOT filled in for every key -- only where a real, grounded misconception or
+    // cross-reference exists; an empty/missing entry just means that layer doesn't
+    // render for that section (better than padding for the sake of six full layers).
+    const SECTION_QUICK = {
+      elliot_suggestions: "One card that rolls up everything else on this page worth your attention right now.",
+      scorecard: "Your real, all-time paper track record: win rate, profit factor, expectancy, net P&L.",
+      equity_curve: "Your paper account balance over time — every closed trade moves this line.",
+      setup_volume_heatmap: "Which days and hours actually produce setups worth watching, over the last 14 days.",
+      funnel: "How many setups Dexter saw today, and where most of them got filtered out before ever becoming a trade.",
+      skip_reject_reasons: "The exact reasons setups didn't become trades in the last 24 hours.",
+      shadow_outcomes: "Hypothetical results for trades we didn't take — so you can tell if good setups are being skipped.",
+      gate_scoreboard: "Which specific risk-gate rule is actually helping vs. quietly costing you money.",
+      shadow_tag_leaderboard: "Hypothetical win rate per confluence tag, from setups that were never actually taken.",
+      shadow_combo_leaderboard: "The same idea as the Shadow Tag Leaderboard, but grouped by exact tag combination.",
+      weekly_regret_trend: "How much profit skipped setups would have earned, added up week by week. Falling is good.",
+      win_rate_by_grade: "Does a higher setup grade (B / A / A+) actually win more often in real trades?",
+      tag_leaderboard: "Real win rate on closed trades, one row per confluence tag Chev actually cited.",
+      combo_leaderboard: "The same real win-rate idea, grouped by the exact set of tags cited together.",
+      planned_rr_distribution: "The real Risk:Reward Dexter calculated for every closed trade the moment it opened.",
+      system_over_time: "How the system's own rules — required R:R, escalation bar, stop placement — have shifted over time.",
+      indicator_scoreboard: "Every confluence tool in one table: its points, its real win rate, its trend, its shadow win rate.",
+      self_check_rate: "How often Chev's own post-trade grading of his reasoning actually held up.",
+      weight_lab: "The one place a confluence tag's points can actually change.",
+    };
+    const SECTION_MISTAKES = {
+      scorecard: "This is all-time, not recent — a rough early stretch can still weigh on the numbers long after the system improved. Check Equity Curve for the recent shape.",
+      shadow_outcomes: "These numbers never merge into real performance stats, and assume a perfect fill with no real-world friction — treat them as leads, never as proof.",
+      win_rate_by_grade: "A grade is assigned the moment Dexter first sees the setup — it's never revised, even if conditions change before the trade actually opens.",
+      tag_leaderboard: "A tag only counts if Chev actually cited it on a closed trade, and each row needs at least 3 closed trades before it shows at all — a thin edge is simply absent, not zero.",
+      weight_lab: "Approving a proposal doesn't take effect instantly — it's live within one scan cycle, and the freeze window then pauses new proposals until ~200 fresh records accumulate.",
+      self_check_rate: "This is Chev grading his OWN reasoning, not an independent check — the absolute percentage is soft for that reason. The trend between playbook versions is what actually means something.",
+      funnel: "A large \"filtered out\" number isn't a failure — most setups SHOULD get filtered before reaching Chev; that's the system working as intended.",
+      indicator_scoreboard: "A high win rate on fewer than 3 closed trades is dimmed for a reason — don't read it as a validated edge yet.",
+      gate_scoreboard: "A gate rejecting a lot of setups isn't automatically bad — check its shadow win rate first; it might be correctly filtering out losers.",
+    };
+    const SECTION_RELATED = {
+      elliot_suggestions: ['weight_lab', 'self_check_rate'],
+      scorecard: ['equity_curve', 'tag_leaderboard'],
+      equity_curve: ['scorecard'],
+      setup_volume_heatmap: ['funnel'],
+      funnel: ['skip_reject_reasons', 'setup_volume_heatmap'],
+      skip_reject_reasons: ['funnel', 'gate_scoreboard'],
+      shadow_outcomes: ['gate_scoreboard', 'shadow_tag_leaderboard'],
+      gate_scoreboard: ['shadow_outcomes', 'skip_reject_reasons'],
+      shadow_tag_leaderboard: ['shadow_combo_leaderboard', 'tag_leaderboard'],
+      shadow_combo_leaderboard: ['shadow_tag_leaderboard', 'combo_leaderboard'],
+      weekly_regret_trend: ['shadow_outcomes'],
+      win_rate_by_grade: ['tag_leaderboard', 'indicator_scoreboard'],
+      tag_leaderboard: ['combo_leaderboard', 'shadow_tag_leaderboard', 'indicator_scoreboard'],
+      combo_leaderboard: ['tag_leaderboard', 'shadow_combo_leaderboard'],
+      planned_rr_distribution: ['system_over_time'],
+      system_over_time: ['planned_rr_distribution', 'weight_lab'],
+      indicator_scoreboard: ['tag_leaderboard', 'weight_lab'],
+      self_check_rate: ['elliot_suggestions'],
+      weight_lab: ['indicator_scoreboard', 'elliot_suggestions'],
+    };
+
+    // Real Example: wired ONLY where an already-cached, already-fetched real record
+    // exists client-side (_lastFeedData from /api/strategy/feed, _shadowResolvedItemsCache
+    // from /api/strategy/counterfactual -- both populated by loadAll(), no new fetch here).
+    // Sections without a natural real-record match (weight_lab, self_check_rate,
+    // indicator_scoreboard, system_over_time, elliot_suggestions, setup_volume_heatmap,
+    // equity_curve, scorecard, tag_leaderboard, combo_leaderboard, win_rate_by_grade,
+    // planned_rr_distribution) simply don't render this layer in this pass -- getting a
+    // real individual CLOSED-TRADE record (not just aggregates) onto the client would need
+    // a new backend field, out of scope for a frontend-only phase.
+    function _realExampleHTML(key) {
+      if (key === 'funnel' || key === 'skip_reject_reasons') {
+        const pred = key === 'funnel' ? (d => true) : (d => d.decision !== 'POST');
+        const rec = (_lastFeedData || []).find(pred);
+        if (rec) {
+          return `<div class="learnExample">
+            <div class="leSymbol">${esc(rec.symbol || '')} <span class="leTf">${esc(rec.tf || '')}</span> <span class="leScore">${rec.dexter_score != null ? rec.dexter_score + ' pts' : ''}</span></div>
+            <div class="leOutcome"><span class="stratDecPill ${esc(rec.decision || '')}">${esc(rec.decision || '')}</span> ${esc(rec.reason || '')}</div>
+            ${rec.detail ? `<div class="leDetail">${esc(rec.detail)}</div>` : ''}
+          </div>`;
+        }
+      }
+      const SHADOW_KEYS = ['shadow_outcomes', 'gate_scoreboard', 'shadow_tag_leaderboard', 'shadow_combo_leaderboard', 'weekly_regret_trend'];
+      if (SHADOW_KEYS.includes(key)) {
+        const rec = (_shadowResolvedItemsCache || [])[0];
+        if (rec) {
+          return `<div class="learnExample">
+            <div class="leSymbol">${esc(rec.symbol || '')} <span class="leTf">${esc(rec.tf || '')}</span></div>
+            <div class="leOutcome">${esc(rec.decision || '')} — shadow ${rec.shadow_r != null ? (rec.shadow_r >= 0 ? '+' : '') + rec.shadow_r.toFixed(2) + 'R' : 'n/a'}, verdict: ${esc(rec.verdict || '')}</div>
+          </div>`;
+        }
+      }
+      return '';
+    }
+
     // PHASE 27: light-touch Story Time voice for the 123-tag glossary. Every real
     // confluence tag belongs to either Dexter (indicators/levels he counts) or Elliot
     // (shape/pattern/structure -- his six-step geometry process), matching the actual
@@ -2266,6 +2394,112 @@
       return "Dexter logs this one the same way he logs everything — quietly, and without an opinion of his own.";
     }
 
+    // ===== PHASE 6D LEARN TAB v2: hub navigation ("The Trading Floor") =====
+    // Landing screen (4 big cards) -> Team / Strategy / Dashboard / Indicators, instead of
+    // one flat scroll. Same show/hide convention .stratPane.active already uses (.learnHub /
+    // .learnHub.active), just one level deeper -- no new framework, no new animation.
+    function _switchLearnView(view) {
+      document.querySelectorAll('.learnHub').forEach(h => h.classList.remove('active'));
+      const target = document.querySelector(`.learnHub[data-lview="${view}"]`);
+      if (target) target.classList.add('active');
+    }
+
+    // Mission/strengths/weaknesses/works-with are new short copy describing each role's
+    // REAL job as already established in SECTION_STORY's prose above -- nothing invented.
+    const TEAM_BIOS = [
+      { key: 'dexter', label: 'Dexter', emoji: '🧠',
+        mission: 'Scan every pair, every timeframe, and surface the setups worth a second look.',
+        strengths: ['Fast', 'Objective', 'Never emotional'],
+        weaknesses: ["Doesn't make the final call", "Doesn't manage risk"],
+        worksWith: ['elliot', 'george', 'chev'] },
+      { key: 'elliot', label: 'Elliot', emoji: '🧩',
+        mission: 'Read market structure and geometry, and roll everything else up into one digest.',
+        strengths: ['Sees the whole picture', 'Never repeats work already done elsewhere'],
+        weaknesses: ['Builds nothing new — only reports'],
+        worksWith: ['dexter', 'chev'] },
+      { key: 'george', label: 'George', emoji: '⚖️',
+        mission: 'Enforce risk — real cost, real R:R, real position limits — before anything can open.',
+        strengths: ['Never bends the rules', 'Catches what looks fine on paper but fails on true cost'],
+        weaknesses: ["Doesn't find opportunities, only gates them"],
+        worksWith: ['dexter', 'chev'] },
+      { key: 'chev', label: 'Chev', emoji: '🎯',
+        mission: 'Weigh everything Dexter and Elliot found and make the final call: post or skip.',
+        strengths: ['The only one who decides', 'Grades his own reasoning after the fact'],
+        weaknesses: ['Only as good as the evidence handed to him'],
+        worksWith: ['dexter', 'elliot', 'george'] },
+      { key: 'jax', label: 'Jax', emoji: '📒',
+        mission: 'Keep the one honest ledger — real fills, real costs, real outcomes.',
+        strengths: ['Never estimates', 'The only real-money record on the site'],
+        weaknesses: ['Only ever sees trades that actually happened'],
+        worksWith: ['chev'] },
+      { key: 'mikeross', label: 'Mike Ross', emoji: '🔍',
+        mission: 'Track every setup nobody took, and work out what would have happened.',
+        strengths: ['Remembers everything', 'The largest sample size on the site'],
+        weaknesses: ['Hypothetical only — never touches the real ledger'],
+        worksWith: ['dexter'] },
+    ];
+    const TEAM_BY_KEY = Object.fromEntries(TEAM_BIOS.map(t => [t.key, t]));
+
+    function _renderTeamGrid() {
+      document.getElementById('learnTeamGrid').innerHTML = TEAM_BIOS.map(t => `
+        <button class="learnTeamCard" data-owner="${t.key}" data-team-bio="${t.key}">
+          <div class="ltcEmoji">${t.emoji}</div>
+          <div class="ltcName">${esc(t.label)}</div>
+          <div class="ltcMission">${esc(t.mission)}</div>
+        </button>`).join('');
+      document.querySelectorAll('#learnTeamGrid .learnTeamCard').forEach(card => {
+        card.addEventListener('click', () => _renderTeamDetail(card.dataset.teamBio));
+      });
+    }
+
+    function _renderTeamDetail(key) {
+      const t = TEAM_BY_KEY[key];
+      const detail = document.getElementById('learnTeamDetail');
+      if (!t) { detail.innerHTML = ''; return; }
+      const owns = SECTION_ORDER.filter(k => SECTION_OWNER[k] === key);
+      const ownsHTML = owns.length
+        ? owns.map(k => `<a href="#learnEntry-${esc(k)}" class="ltdOwnsLink" data-goto-section="${esc(k)}">${esc(SECTION_TITLES[k] || k)}</a>`).join('')
+        : '<span class="ltdNone">Nothing in the Dashboard is credited to this role yet.</span>';
+      const worksWithHTML = (t.worksWith || []).map(k =>
+        `<button class="ltdWorksWith" data-team-bio="${esc(k)}" data-owner="${esc(k)}">${esc((TEAM_BY_KEY[k] || {}).label || k)}</button>`).join('');
+      detail.innerHTML = `
+        <div class="learnTeamDetailCard" data-owner="${t.key}">
+          <div class="ltdHeader"><span class="ltdEmoji">${t.emoji}</span><span class="ltdName">${esc(t.label)}</span></div>
+          <div class="ltdMission">${esc(t.mission)}</div>
+          <div class="ltdRow"><div class="ltdLabel">Strengths</div>${t.strengths.map(s => `<div class="ltdGood">✓ ${esc(s)}</div>`).join('')}</div>
+          <div class="ltdRow"><div class="ltdLabel">Weaknesses</div>${t.weaknesses.map(s => `<div class="ltdBad">✕ ${esc(s)}</div>`).join('')}</div>
+          <div class="ltdRow"><div class="ltdLabel">Works with</div><div class="ltdChips">${worksWithHTML}</div></div>
+          <div class="ltdRow"><div class="ltdLabel">Everything ${esc(t.label)} owns on the Dashboard</div><div class="ltdOwns">${ownsHTML}</div></div>
+        </div>`;
+      // Jumping to a Dashboard section from here means switching hub views first --
+      // same fix as the (i) deep-link handler below needs, same reason.
+      detail.querySelectorAll('[data-goto-section]').forEach(a => {
+        a.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          const k = a.dataset.gotoSection;
+          _switchLearnView('dashboard');
+          const entry = document.getElementById('learnEntry-' + k);
+          if (entry) {
+            entry.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            document.querySelectorAll('#stratLearnSections .learnEntry.learnPinned').forEach(el => el.classList.remove('learnPinned'));
+            entry.classList.add('learnPinned');
+            _pinnedLearnKey = k;
+          }
+        });
+      });
+      detail.querySelectorAll('.ltdWorksWith').forEach(btn => {
+        btn.addEventListener('click', () => _renderTeamDetail(btn.dataset.teamBio));
+      });
+    }
+
+    document.querySelectorAll('#stratBody [data-goto]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const view = btn.dataset.goto;
+        _switchLearnView(view);
+        if (view === 'team' && !document.getElementById('learnTeamGrid').innerHTML) _renderTeamGrid();
+      });
+    });
+
     // PHASE 27: Definition (default) vs Story Time, remembered per device.
     let _learnMode = localStorage.getItem('chevLearnMode') === 'story' ? 'story' : 'definition';
     let _tagRegistryCache = null;
@@ -2274,19 +2508,51 @@
     // Sections list's HTML on every Definition/Story Time toggle.
     let _pinnedLearnKey = null;
 
+    function _slugifyConceptName(name) {
+      return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    }
+
     async function _renderLearnContent() {
       const isStory = _learnMode === 'story';
-      document.getElementById('stratLearnSections').innerHTML = SECTION_ORDER.map(key => `
+      // PHASE 6D LEARN TAB v2 PART 2: progressive disclosure. Quick Answer is always
+      // visible; the Definition/Story Time toggle still picks which text renders as the
+      // primary explanation right below it (exact same behavior as before), but the OTHER
+      // one is no longer thrown away -- it becomes a collapsed layer alongside Real
+      // Example / Common Mistake / Related, so nothing that used to be reachable is lost.
+      document.getElementById('stratLearnSections').innerHTML = SECTION_ORDER.map(key => {
+        const primaryText = isStory ? (SECTION_STORY[key] || SECTION_TOOLTIPS[key]) : SECTION_TOOLTIPS[key];
+        const altLabel = isStory ? '🔍 Deep Dive' : '🎬 Story Time';
+        const altText = isStory ? SECTION_TOOLTIPS[key] : (SECTION_STORY[key] || SECTION_TOOLTIPS[key]);
+        const mistake = SECTION_MISTAKES[key];
+        const related = SECTION_RELATED[key] || [];
+        const example = _realExampleHTML(key);
+        return `
         <div class="learnEntry${key === _pinnedLearnKey ? ' learnPinned' : ''}" id="learnEntry-${esc(key)}" data-owner="${esc(SECTION_OWNER[key] || '')}">
           <div class="gName">${esc(SECTION_TITLES[key] || key)}<span class="gOwner">${esc(OWNER_LABEL[SECTION_OWNER[key]] || '')}</span></div>
-          <div class="gDef">${esc(_applyCharacterNames(isStory ? (SECTION_STORY[key] || SECTION_TOOLTIPS[key]) : SECTION_TOOLTIPS[key]) || '')}</div>
-        </div>`).join('');
-      document.getElementById('stratConceptGlossary').innerHTML = CONCEPT_GLOSSARY.map(c => `
-        <div class="learnEntry" data-owner="${esc(c.owner || '')}">
+          <div class="gQuick">${esc(SECTION_QUICK[key] || '')}</div>
+          <div class="gDef">${esc(_applyCharacterNames(primaryText) || '')}</div>
+          <details class="learnLayer"><summary>${altLabel}</summary><div class="gLayerBody">${esc(_applyCharacterNames(altText) || '')}</div></details>
+          ${example ? `<details class="learnLayer"><summary>🧪 Real Example</summary><div class="gLayerBody">${example}</div></details>` : ''}
+          ${mistake ? `<details class="learnLayer"><summary>⚠️ Common Mistake</summary><div class="gLayerBody">${esc(mistake)}</div></details>` : ''}
+          ${related.length ? `<details class="learnLayer"><summary>🔗 Related</summary><div class="gLayerBody gRelated">${related.map(k => `<a href="#learnEntry-${esc(k)}" class="gRelatedLink" data-goto-related="${esc(k)}">${esc(SECTION_TITLES[k] || k)}</a>`).join('')}</div></details>` : ''}
+        </div>`;
+      }).join('');
+      document.getElementById('stratConceptGlossary').innerHTML = CONCEPT_GLOSSARY.map(c => {
+        const primaryText = isStory ? (c.story || c.def) : c.def;
+        const altLabel = isStory ? '🔍 Deep Dive' : '🎬 Story Time';
+        const altText = isStory ? c.def : (c.story || c.def);
+        const related = c.related || [];
+        return `
+        <div class="learnEntry" id="conceptEntry-${_slugifyConceptName(c.name)}" data-owner="${esc(c.owner || '')}">
           <div class="gName">${esc(c.name)}<span class="gOwner">${esc(OWNER_LABEL[c.owner] || '')}</span></div>
-          <div class="gDef">${esc(_applyCharacterNames(isStory ? (c.story || c.def) : c.def))}</div>
-          <div class="gHow">${esc(_applyCharacterNames(c.how))}</div>
-        </div>`).join('');
+          <div class="gQuick">${esc(c.quick || '')}</div>
+          <div class="gDef">${esc(_applyCharacterNames(primaryText))}</div>
+          <details class="learnLayer"><summary>${altLabel}</summary><div class="gLayerBody">${esc(_applyCharacterNames(altText))}</div></details>
+          <details class="learnLayer"><summary>🔬 How It's Calculated</summary><div class="gLayerBody">${esc(_applyCharacterNames(c.how))}</div></details>
+          ${c.mistake ? `<details class="learnLayer"><summary>⚠️ Common Mistake</summary><div class="gLayerBody">${esc(c.mistake)}</div></details>` : ''}
+          ${related.length ? `<details class="learnLayer"><summary>🔗 Related</summary><div class="gLayerBody gRelated">${related.map(n => `<a href="#conceptEntry-${_slugifyConceptName(n)}" class="gRelatedLink">${esc(n)}</a>`).join('')}</div></details>` : ''}
+        </div>`;
+      }).join('');
       if (!_tagRegistryCache) _tagRegistryCache = await _loadTagRegistry();
       const registry = _tagRegistryCache;
       const codes = Object.keys(registry).sort((a, b) => registry[a].name.localeCompare(registry[b].name));
@@ -2343,12 +2609,33 @@
     // Definition/Story Time toggle since _renderLearnContent re-applies it from
     // _pinnedLearnKey on every render) -- click the highlighted entry itself to clear it.
     document.getElementById('strategyPanel').addEventListener('click', (e) => {
+      // PHASE 6D LEARN TAB v2 PART 2: "Related" links inside a section's collapsed
+      // layer -- same scroll+pin as the (i) deep-link below, but no hub switch needed
+      // since every section lives in the same "dashboard" view already.
+      const relatedLink = e.target.closest('[data-goto-related]');
+      if (relatedLink) {
+        e.preventDefault();
+        const key = relatedLink.dataset.gotoRelated;
+        const entry = document.getElementById('learnEntry-' + key);
+        if (entry) {
+          entry.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          document.querySelectorAll('#stratLearnSections .learnEntry.learnPinned').forEach(el => el.classList.remove('learnPinned'));
+          entry.classList.add('learnPinned');
+          _pinnedLearnKey = key;
+        }
+        return;
+      }
       const icon = e.target.closest('.stratLearnIcon');
       if (icon) {
         const key = icon.dataset.learn;
         const entry = document.getElementById('learnEntry-' + key);
         if (!entry) return;
         _switchStratTab('learn');
+        // PHASE 6D LEARN TAB v2: entry now lives inside the "dashboard" hub view (hidden
+        // by default under the new hub navigation) -- every (i) icon on the dashboard only
+        // ever points at a SECTION key (never a concept/tag, which have no learnEntry-* id
+        // at all), so this is always 'dashboard', no lookup needed.
+        _switchLearnView('dashboard');
         entry.scrollIntoView({ behavior: 'smooth', block: 'start' });
         document.querySelectorAll('#stratLearnSections .learnEntry.learnPinned').forEach(el => el.classList.remove('learnPinned'));
         entry.classList.add('learnPinned');

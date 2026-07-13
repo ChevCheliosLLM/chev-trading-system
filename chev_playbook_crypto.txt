@@ -1,23 +1,27 @@
 CHEV TRADING PLAYBOOK — CRYPTO
-Last updated: 2026-07-11 16:42:19 | Based on 77 CRYPTO trades
+Last updated: 2026-07-13 18:28:54 | Based on 87 CRYPTO trades
 ========================================
 
 ### CONFLUENCE CONDITIONS
-- **fib_1h+sr_4h** shows 2W/0L (n=2), indicating strong performance when Fibonacci levels and 4H support/resistance align.
-- **sr_4h** alone has a perfect win rate of 2W/0L (n=2) but with limited data, suggesting robust structural support at higher timeframes.
-- RSI divergence (**dv**) combined with multiple EMAs and Fibonacci levels shows mixed results; only one winning trade out of two attempts.
+- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
+  - BB Squeeze with EMA13/EMA21/EMA55 and Fast Anchor or High/Low consistently shows strong results (shadow_total_R=+2.58, shadow_wr=100%).
+  - RSI divergence signals are reliable when combined with other technical indicators like Fib_50 and pattern mid-confidence (shadow_total_R=+2.37, shadow_wr=100%).
 
 ### MARKET STRUCTURE RULES
-- Trend context improves setup quality when setups align with 4H SR levels, as seen in **fib_1h+sr_4h** combinations.
-- Price reaches TP more often when there is a clear inverse head and shoulders breakout or strong EMA support/resistance confluence.
+- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
+  - Trending markets with strong EMA and BB Squeeze signals tend to reach TP more often than reversing early (shadow_total_R=+2.47, shadow_wr=78%).
+  - SR levels need to be confirmed on the 4H timeframe for better reliability in trending conditions.
 
 ### ENTRY QUALITY STANDARDS
-- High-conviction entries have multiple structural supports like 4H SR levels, Fibonacci golden pockets, and RSI divergence.
-- Winners typically had well-defined invalidation levels and clear momentum indicators, unlike marginal setups with tight risk management.
+- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
+  - High-conviction entries are characterized by strong BB Squeeze signals and multiple EMA confirmations (shadow_total_R=+2.37, shadow_wr=100%).
+  - Winners typically have a combination of RSI divergence and pattern mid-confidence, while losers lack these key indicators.
 
 ### TRADE MANAGEMENT PATTERNS
-- Raised TP often resulted in price hitting the SIP floor instead of the raised TP (3 out of 4 times), suggesting overconfidence in momentum continuation.
-- Moving SL early did not protect profit effectively; trades still closed at loss when moved too early, indicating cautious SL adjustments are needed.
+- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
+  - Raised TP often results in price reversing to the floor (n=3), suggesting overconfidence.
+  - Moving SL early did not protect profit and resulted in stops before hitting TP (n=0).
+  - Leaving trades alone with no management shows a higher win rate (shadow_total_R=+1.82, shadow_wr=100%).
 
 ### TRENDING MARKET BEHAVIOUR — CRITICAL
 - In a confirmed uptrend (4H making HH/HL, net move > +5%), resistance levels are CONTINUATION ZONES. The market is expected to break them, not reverse from them. Shorting resistance in an uptrend is the single lowest-probability trade in crypto — historical win rate < 15%.
@@ -31,26 +35,38 @@ Last updated: 2026-07-11 16:42:19 | Based on 77 CRYPTO trades
 - Winners typically have well-defined invalidation levels, allowing for better risk management (n=3)
 
 ### REASONING QUALITY
-- Only 10% of reasoning was validated by price action (n=3), with partial validation being more common (50%, n=15).
-- Invalidated reasoning often misread the market structure or timeframe, leading to incorrect bias assumptions.
-- A+ setups showed slightly better validation rates compared to B setups but still had mixed results.
+- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
+  - Reasoning is validated by price action in 67% of trades (n=18).
+  - Invalidated reasoning often stems from misreading trend context and timeframe.
+  - A+ setups show better validation than B setups, with a 25% win rate vs. 44%.
 
 ### ASSET NOTES
-- Cryptos like BTCUSDT and ETHUSDT show strong performance when setups align with 4H SR levels and Fibonacci confluences.
-- No significant patterns noted for forex or stocks as the data is primarily crypto-focused.
+- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
+  - Cryptos show stronger performance in trending conditions compared to forex and stocks.
+  - Forex and stocks require more robust confluence signals for reliable setups.
+
+### SHADOW COMBO INTELLIGENCE
+- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
+  - BB Squeeze with EMA13/EMA21/EMA55 and Fast Anchor or High/Low has been confirmed by real trades (shadow_total_R=+2.58, shadow_wr=100%).
+  - RSI divergence signals combined with pattern mid-confidence have shown consistent results in real trades (n=5).
 
 ### JANE'S PATTERNS
-- Jane's instincts outperform models on **BTCUSDT LONG** trades, suggesting she has a better feel for market momentum in this asset.
-- Her setups tend to be more profitable when aligned with clear structural support and resistance levels at higher timeframes.
+- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
+  - Jane is consistently profitable on setups with strong BB Squeeze and RSI divergence (shadow_total_R=+2.37, shadow_wr=100%).
+  - Her instincts diverge from models when she over-relies on single indicators without confluence.
+
+### INSUFFICIENT DATA
+- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
+  - Insufficient data to draw conclusions on setups with fewer than 5 supporting trades (tentative).
 
 ### STRUCTURAL RISK FACTORS
-- **Proximity to Invalidation Level**: Treat setups where entry levels are very close to invalidation levels as high-risk — require a wider buffer or an additional confluence from a different timeframe or indicator.
+- **Ranging Market Structure**: A market in a ranging structure can lead to choppy price action and increased risk of false breakouts. The presence of multiple timeframes showing range-bound conditions (e.g., low ADX values or narrow Bollinger Bands) would have flagged the risk in advance.
   
-- **Marginal Confluences Near Structural Levels**: Entries near structural levels that lack decisively aligned indicators (e.g., EMAs, RSI divergences) should be treated with caution and require more robust confirmation before entry.
-  
-- **Overextension at Upper Bollinger Bands**: Entries near the upper Bollinger Band (%B > 0.94) in a ranging market structure are prone to mean reversion — require additional bullish signals or structural support beyond the band itself.
+- **Proximity to Invalidation Level**: Entries very close to defined invalidation levels leave little room for normal price fluctuation, increasing the likelihood of premature stop-outs. A larger buffer between entry and invalidation level (e.g., at least 1.5x ATR) would have flagged this risk.
+
+- **Hidden Divergence Without Confirmatory Indicators**: Hidden divergences can be less reliable without additional confirmatory signals such as a clear breakout or support/resistance confirmation from other indicators (e.g., EMA crossovers, VWAP confluence). The absence of these confirmations would have flagged the risk in advance.
 
 ### WIN/LOSS INSIGHT
 WIN/LOSS INSIGHT:
-- The winning trades consistently featured multiple EMAs providing support (e.g., EMA55, EMA21, EMA13) and clear Fibonacci levels, whereas losing trades had fewer or less robust structural supports.
-- Winning trades often included a breakout pattern like H&S breakout or Bollinger Bands lower burst with well-defined invalidation levels, while losing trades frequently involved setups near the upper Bollinger Band or close to the invalidation level, suggesting overextension or tight risk management.
+- The winning trades consistently featured Fibonacci levels combined with volume profile POC or EMA resistance/support, providing clearer structural invalidation points compared to losing trades.
+- Winning trades often had a golden pocket confluence, which was absent in most losing trades, suggesting this tag adds significant predictive value when present.

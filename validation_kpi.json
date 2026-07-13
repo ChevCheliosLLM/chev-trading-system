@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-13 12:49:28",
+  "generated_at": "2026-07-13 20:32:13",
   "note": "Self-graded by Chev's own post-mortem QUALITY verdict \u2014 not an independent price-action check.",
   "min_n": 5,
   "assets": {
@@ -14,10 +14,10 @@
         },
         "crypto-20260711-1649": {
           "validated": 1,
-          "total": 3,
-          "rate": 0.333,
+          "total": 4,
+          "rate": 0.25,
           "window_start": "2026-07-12 15:24:16",
-          "window_end": "2026-07-13 07:38:23"
+          "window_end": "2026-07-13 18:22:40"
         }
       },
       "trailing_50": {
@@ -45,12 +45,19 @@
           "rate": 0.13,
           "window_start": "2026-07-01 12:53:13",
           "window_end": "2026-07-11 04:14:43"
+        },
+        "forex-20260713-1217": {
+          "validated": 0,
+          "total": 1,
+          "rate": 0.0,
+          "window_start": "2026-07-13 20:32:13",
+          "window_end": "2026-07-13 20:32:13"
         }
       },
       "trailing_50": {
         "validated": 3,
-        "total": 23,
-        "rate": 0.13
+        "total": 24,
+        "rate": 0.125
       },
       "latest_version": {
         "version": "pre-stamp",

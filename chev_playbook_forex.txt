@@ -1,38 +1,62 @@
 CHEV TRADING PLAYBOOK — FOREX
-Last updated: 2026-07-11 16:40:54 | Based on 38 FOREX trades
+Last updated: 2026-07-13 18:27:14 | Based on 38 FOREX trades
 ========================================
 
 ### CONFLUENCE CONDITIONS
-- **fib_1h+rsi_1h+sr_4h** has a 25% win rate (n=4), indicating marginal reliability.
-- **dv+ema_13+ema_21+fib_1h+sr_4h** shows no wins (n=2), suggesting overfitting or noise in the setup.
-- RSI divergence signals are more reliable on 1H and 4H timeframes, as seen in winning setups like **dv+ema_13+ema_21+fib_1h+sr_4h**.
+- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
+  - Combinations involving `fast_anchor_or_high`, `fast_anchor_or_low`, and `pattern_mid_conf` show strong results with a win rate of 80% (n=9).
+  - RSI divergence (`rsi_div_hidden`) provides real signals in trending markets, contributing to high win rates like +2.58 (n=13).
 
 ### MARKET STRUCTURE RULES
-- High-quality entries often occur at 4H SR levels with multiple confluences, as seen in winners like NZD/USD LONG.
-- Ranging markets can lead to choppy price action, making setups less reliable (e.g., USD/CAD LONG).
-- Trending conditions improve setup quality when combined with strong structural support/resistance.
+- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
+  - Trending markets improve setup quality when combined with `fast_anchor_or_high` and `fast_anchor_or_low`, as seen in +2.58 (n=13) win rate.
+  - Price reaches TP more often when setups include `fib_50` and `rsi_div_hidden`, indicating strong trend continuation.
 
 ### ENTRY QUALITY STANDARDS
-- Winners typically have multiple confluences at well-defined SR levels and within Bollinger Bands squeeze zones.
-- Marginal entries often fail due to tight stop-loss placement or weak market directional bias (e.g., GBP/USD LONG).
-- High-conviction entries are supported by strong technical indicators like EMA crossovers, Fibonacci retracements, and RSI divergences.
+- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
+  - High-conviction entries have multiple confirmations like `fast_anchor_or_high`, `fast_anchor_or_low`, and `pattern_mid_conf`.
+  - Winners typically had strong trend indicators (`ema13`, `ema21`) and clear support/resistance levels.
 
 ### TRADE MANAGEMENT PATTERNS
-- Insufficient data — revisit next session.
+- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
+  - Insufficient data — revisit next session.
+
+### REASONING QUALITY
+- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
 **TRENDING MARKET BEHAVIOUR — CRITICAL**
 - In a confirmed uptrend (4H HH/HL, net move > +2%), resistance levels are CONTINUATION ZONES, not reversal points. Shorting resistance in an uptrend is the lowest-probability trade in forex. The pair will walk through resistance, not bounce from it.
 - In a confirmed downtrend (4H LH/LL, net move < -2%), support levels are CONTINUATION ZONES. Longing support in a downtrend is similarly low probability.
 - Counter-trend trades require ALL of: (1) A+ score ≥ 1.5× the normal threshold (forex = 12), (2) confirmed RSI divergence on 1H or 4H, (3) explicit 4H BOS or CHoCH proving trend reversal. Any one missing → SKIP.
 - Dexter will show a '4H Macro Trend Context' block at the top of every market brief. Read it before assessing individual S/R levels.
 
+  - 3 validated (n=3) and 15 partial (n=15) reasoning outcomes indicate moderate validation.
+  - A+ setups show better validation with a win rate of 0% (n=1), while B setups have a win rate of 22% (n=9).
+
+### ASSET NOTES
+- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
+  - Cryptos show stronger performance with `fast_anchor_or_high` and `fast_anchor_or_low`, while forex benefits from `rsi_div_hidden`.
+
+### JANE'S PATTERNS
+- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
+  - Insufficient data — revisit next session.
+
+### SHADOW COMBO INTELLIGENCE
+- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
+  - Shadow combo `bb_squeeze,ema13,ema21,fast_anchor_or_high,fast_anchor_or_low,pattern_mid_conf` has a shadow win rate of +2.58 (n=13) but no real-trade confirmation yet.
+  - Shadow combo `bb_near,fast_anchor_or_low,fast_anchor_pdl,pattern_high_conf` shows a tentative win rate of +1.86 (shadow only).
+
+### INSUFFICIENT DATA
+- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
+  - Insufficient data — revisit next session.
+
 ### STRUCTURAL RISK FACTORS
-- **Ranging Market Conditions**: In ranging markets, setups with tight stop-loss placements and multiple confluences near marginal structural levels (e.g., EMA crossovers without clear support/resistance) are at higher risk of being whipsawed. A quantitative factor that would have flagged this risk is the presence of a Bollinger Bands squeeze (BBS), indicating high volatility risk.
+- **Ranging Market Conditions**: High volatility and lack of directional bias in ranging markets can lead to choppy price action, making setups with tight stop-loss placements more prone to being hit. Require a broader structural support/resistance band or an extended timeframe confirmation before entering.
+  
+- **Bollinger Bands Squeeze (BBS)**: Presence of BBS indicates high volatility risk, which may cause rapid price movements that can quickly trigger stop losses. Look for additional confluences like strong SR levels or clear momentum indicators to mitigate this risk.
 
-- **Marginal Entry Levels**: Entries near the edges of well-defined structural zones, such as Fibonacci levels and EMAs, but not directly at key support or resistance areas, are more susceptible to price reversals. The absence of clear confluence with a primary SR level (e.g., 4H SR) would have flagged this risk.
-
-- **High Volatility Indicators**: Setups in environments where volatility indicators like Bollinger Bands Squeeze (BBS) and RSI overbought/oversold conditions are present, indicate potential for rapid price movements that can quickly invalidate tight stop-loss levels. The presence of a BBS would have flagged the risk of high volatility leading to quick SL hits.
+- **Marginal Entry Levels**: Entries near the edges of structural support/resistance zones without a clear confirmation from other indicators (e.g., RSI divergence, EMA crossovers) are more susceptible to being invalidated by minor price fluctuations. Require at least two additional confluences or a broader SR level for higher confidence.
 
 ### WIN/LOSS INSIGHT
 WIN/LOSS INSIGHT:
-- Winning trades often included non-RSI divergence (dv) and forming RSI divergence (rsi_form_Xtf), which provided an additional layer of confirmation beyond structural levels.
-- Losing trades frequently involved tight stop-loss placements in ranging markets, leading to premature exits due to normal price fluctuations within the range.
+- Winning trades often included Fibonacci confluence (`fib_1h`) and non-RSI divergence (`dv`), which were notably absent in losing trades.
+- Winning setups frequently had support from multiple EMAs (EMA55, EMA21, EMA13) and were within a Bollinger Bands squeeze zone, indicating strong structural support that was less prevalent in the losing trades.

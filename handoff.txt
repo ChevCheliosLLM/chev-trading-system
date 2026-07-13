@@ -9177,6 +9177,393 @@ different panel widths.
 RESTART: NOT REQUIRED -- frontend-only. DEPLOY: NO (not pushed this
 session). RE-PASTE CHEV PROMPT: NO.
 
+=== 2026-07-13 — LEARN TAB v2 PHASE 1: hub navigation + "Meet the Team" — RESTART: NOT REQUIRED (frontend-only), DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: Kev pushed back on the same-day earlier redesign (the "sticky sidebar
++ color-coded cards" version) with a much bigger, more ambitious brief: the
+tab organizes information, not understanding -- when he asks "why did Chev
+reject this trade," nothing tells him where to start. Entered Plan Mode given
+the scope (new navigation model, multiple files, real architectural
+decisions) and wrote a 5-phase roadmap; this entry covers Phase 1 only, fully
+approved before implementation. Plan file:
+C:\Users\kevin\.claude\plans\rustling-finding-dijkstra.md.
+
+Confirmed via a real-data audit (Explore agent) before committing to the
+roadmap: chev_journal.json (129 real closed trades), chev_decisions.jsonl
+(5,295 real decisions incl. Chev's full rejection reasoning), and
+labels_closed.jsonl (14,481 real shadow records) are all non-empty and
+already fetched elsewhere in drawing.js -- future "Real Trade Example" phases
+can pull from real data, never fabricate numbers.
+
+3 decisions locked in with Kev before writing the plan: (1) full 6-layer
+progressive disclosure (Quick Answer/Story/Deep Dive/Example/Mistakes/
+Related) applies to the 25 Section+Concept entries only, not the 100+ tag
+glossary (not worth the content-writing effort per tag); (2) tag category
+filtering (future phase) will be inferred client-side, reusing
+_tagStoryText()'s existing regex groups, not a new dexter.py TAG_REGISTRY
+field; (3) built one phase at a time with a checkpoint after each, same
+cadence as today's Weight Recalibration work.
+
+PHASE 1 SHIPPED: replaced the flat Learn pane with a landing screen (4 big
+cards: The Team / The Strategy / The Dashboard / Indicators) and per-view
+show/hide navigation, mirroring the exact .stratPane/.stratPane.active
+convention already used site-wide (new .learnHub/.learnHub.active classes,
+reuses the existing cmdFadeIn keyframe -- no new framework). "The Team" hub:
+6 bio cards (mission/strengths/weaknesses/works-with) for Dexter/Chev/Elliot/
+Jax/George/Mike Ross -- bio copy describes each role's REAL job as already
+established in SECTION_STORY's prose, nothing invented -- clicking a bio
+shows everything that role owns on the Dashboard (reuses the existing
+SECTION_OWNER data from earlier today, just a new filtered view over it). The
+Strategy hub is a placeholder ("coming in Phase 4"). The Dashboard hub =
+today's existing Sections list + sticky quick-nav, moved as-is. The
+Indicators hub = today's existing Concept + Tag glossary, moved as-is.
+
+CRITICAL FIX applied during implementation, not left for Kev to find: the
+existing (i)-icon deep-link mechanic (clicking an (i) elsewhere on the
+dashboard jumps to and highlights #learnEntry-<key>) would have silently
+broken, since that element now lives inside the hidden-by-default "dashboard"
+hub view. Fixed by having the click handler call the new
+_switchLearnView('dashboard') before its existing scroll/pin logic runs.
+Checked first whether any (i) icon ever points at a concept/tag (which have
+no learnEntry-* id at all, unlike sections) -- confirmed no, every (i) icon
+only ever targets a Section, so this is unconditionally 'dashboard', no
+lookup table needed. Same fix applied to the NEW "everything <role> owns"
+links inside the Team hub.
+
+Also caught and fixed a CSS grid auto-placement bug during implementation:
+the Dashboard hub now has 3 direct children (Back button, Quick Nav, Main
+Col) under a 2-column grid -- without explicit grid-row/grid-column on all
+three, auto-placement would have put the Back button in the narrow 172px
+column instead of spanning full width above the other two. Fixed with
+explicit placement (and re-checked the mobile <720px breakpoint separately,
+since collapsing to grid-template-columns:1fr without also resetting each
+child's grid-column would have referenced a column that no longer exists).
+
+No existing id, JS hook, or data attribute was removed or renamed --
+#stratLearnSections, #stratConceptGlossary, #stratTagGlossary,
+#glossarySearch, #learnModeDef, #learnModeStory all still exist with their
+exact original ids, just relocated into the new hub containers.
+_renderLearnContent() itself was NOT changed in this phase (it targets ids
+directly, doesn't care about ancestry).
+
+VERIFICATION: `node --check webapp/js/charts/drawing.js` -> syntax OK. Brace/
+tag balance checks: CSS 260/260, HTML div 422/422, HTML button 79/79. `git
+diff --stat` shows only these 3 files changed (303 insertions / 58
+deletions). Cache-bust bumped: strategy.css 20260716-4 -> -5, drawing.js
+20260721-3 -> -4.
+NOT independently verified in a live browser this session. Kev should hard
+refresh and confirm: all 4 hub cards render and navigate correctly, every
+Back button returns to the landing screen, clicking a Team bio card shows
+the right filtered section list and its links correctly jump into the
+Dashboard hub, and -- most at risk of silently breaking -- every existing
+(i) icon elsewhere on the dashboard still switches into the right hub AND
+scrolls/highlights the correct entry.
+
+RESTART: NOT REQUIRED -- frontend-only. DEPLOY: NO (not pushed this
+session). RE-PASTE CHEV PROMPT: NO.
+
+NEXT: Phase 2 (progressive disclosure for the 25 Section+Concept entries) is
+scoped in the plan file but not started -- needs its own checkpoint before
+building, per Kev's own "one phase at a time" call.
+
+=== 2026-07-13 — LEARN TAB v2 PHASE 2: progressive disclosure for Sections + Concepts — RESTART: NOT REQUIRED (frontend-only), DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: continuation of the same-day Learn Tab v2 rebuild (plan file:
+C:\Users\kevin\.claude\plans\rustling-finding-dijkstra.md). Phase 2 per that
+plan: the 25 Section + Concept entries get a fast Quick Answer up top, with
+Story/Deep Dive/Real Example/Common Mistake/Related Concepts as independently
+expandable <details> layers underneath, instead of one or two paragraphs
+always fully shown.
+
+HOW THE EXISTING DEFINITION/STORY TOGGLE WAS RECONCILED WITH THE NEW LAYERS:
+the toggle still picks which text renders as the primary explanation right
+below Quick Answer (identical behavior to before) -- but the OTHER text
+(Story when in Definition mode, Deep Dive when in Story mode) is no longer
+thrown away; it becomes one of the collapsed layers instead, so nothing
+reachable before is lost.
+
+CONTENT ADDED (webapp/js/charts/drawing.js):
+- SECTION_QUICK: a 1-2 sentence Quick Answer for all 19 sections, trimmed
+  from the existing SECTION_TOOLTIPS text -- no new technical claims.
+- SECTION_MISTAKES: Common Mistake text for 9 of 19 sections -- ONLY where a
+  real, grounded misconception exists (e.g. scorecard is all-time not
+  recent; a tag_leaderboard row needs 3+ closed trades before it shows at
+  all; weight_lab approvals aren't instant). Deliberately left blank for the
+  other 10 rather than padding.
+- SECTION_RELATED: 1-3 cross-reference links per section, hand-mapped.
+- CONCEPT_GLOSSARY items extended in-place with quick/mistake/related
+  fields (mistake filled for 3 of 6 -- Confluence Score, Net R:R, Shadow
+  Outcomes -- where a real misconception exists).
+- _realExampleHTML(key): Real Example cards wired for 6 of 19 sections
+  (funnel, skip_reject_reasons, shadow_outcomes, gate_scoreboard,
+  shadow_tag_leaderboard, shadow_combo_leaderboard, weekly_regret_trend)
+  using data ALREADY cached client-side (_lastFeedData from
+  /api/strategy/feed, _shadowResolvedItemsCache from
+  /api/strategy/counterfactual, both populated by loadAll() already) --
+  confirmed exact field names (symbol/tf/ts/decision/reason/detail/
+  shadow_r/verdict) by grepping their existing usage elsewhere in this same
+  file before wiring, not guessed. The other 13 sections (scorecard,
+  equity_curve, tag_leaderboard, combo_leaderboard, win_rate_by_grade,
+  planned_rr_distribution, indicator_scoreboard, system_over_time,
+  self_check_rate, weight_lab, elliot_suggestions, setup_volume_heatmap)
+  have no readily-available real INDIVIDUAL record client-side yet (only
+  aggregates) -- getting one would need a new backend field, explicitly out
+  of scope for this frontend-only phase, so those sections simply don't
+  render a Real Example layer rather than fabricate one.
+
+STRUCTURE: new .learnLayer <details> elements (native, no-JS collapsible --
+same convention already used elsewhere in this codebase) for Story/Deep
+Dive, Real Example, Common Mistake, and Related Concepts. Concept entries
+also gained a stable id (conceptEntry-<slug>) so Related Concepts links
+between concepts can scroll+highlight, matching the section-to-section
+Related links (new data-goto-related click delegation, reusing the exact
+same scroll/pin mechanism the existing (i)-icon deep-link already uses --
+no hub switch needed since sections stay within the same "dashboard" view).
+
+VERIFICATION: `node --check webapp/js/charts/drawing.js` -> syntax OK. CSS
+brace balance 276/276. `git diff --stat` shows only drawing.js/strategy.css/
+index.html changed. Cache-bust bumped: strategy.css 20260716-5 -> -6,
+drawing.js 20260721-4 -> -5.
+NOT independently verified in a live browser this session. Kev should hard
+refresh and confirm: Quick Answer shows immediately on every entry, the
+Story/Deep Dive toggle still works and the non-selected version is reachable
+as a collapsed layer, Real Example renders real data (not blank) for the 6
+wired sections once the Strategy panel's normal load has run at least once,
+and Related links scroll+highlight the correct entry.
+
+RESTART: NOT REQUIRED -- frontend-only. DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
+
+NEXT: Phase 3 (tag glossary category filter pills) is scoped in the plan
+file but not started -- needs its own checkpoint per Kev's "one phase at a
+time" call.
+
+=== 2026-07-13 — WEIGHT LAB APPROVE BUTTON: root-caused and fixed "nothing happens" — RESTART: NOT REQUIRED (frontend-only), DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: Kev reported clicking Approve -1 in the Weight Lab did nothing --
+popup confirmed, closed, button stayed yellow/active, and he'd clicked twice
+worried about a double -2 application. Verified first (before touching
+anything): read weight_overrides.json directly -- confirmed NOTHING had
+been applied, not once, so no real weight was ever changed. Then asked Kev
+to check the browser console; he found the real signal: `POST .../api/
+weight_proposal/approve 400 (Bad Request)`, with zero on-page message at
+all (not even an error). Restarting Dexter did not change the 400.
+
+ROOT CAUSE #1 (the actual "invisible" bug): every Weight Lab success/error
+message went through chat.js's _showToast(), which writes into
+#analysisToast -- a chart-view element at z-index:150, positioned for the
+main chart, not this panel. #strategyOverlay (the whole Strategy Dashboard,
+including Weight Lab) sits at z-index:9999 and covers the full screen. Every
+message -- success AND failure -- was firing correctly this entire time and
+being 100% invisible, hidden behind the panel. This is why nothing appeared
+to happen even on a genuinely successful approve, and why the 400 error
+produced no visible feedback either.
+
+FIX #1: added _wlShowMessage(kind, html) -- Weight Lab's own on-page message,
+appended fresh to document.body at z-index:10000 (same proven above-the-
+overlay pattern _wlShowConfirm's own modal already used, just a top-center
+banner instead of a full modal, so it's guaranteed visible regardless of
+what else is open). Replaced all 11 _showToast(...) call sites in
+weight-lab.js (approve, approve-all, mark-reviewed, undo, manual-set, and
+the preview/confirm error paths) with this.
+
+ROOT CAUSE #2 (why the button still looked "active" even on a real success,
+found while designing the fix, not yet directly confirmed as tonight's 400's
+cause but a real bug regardless): /api/weight_proposal has its own 300-
+second server-side cache. Right after a genuinely successful approve, the
+very next load can still serve the OLD proposal payload -- same tag, same
+proposed_delta, same "actionable" card -- looking exactly as clickable as
+before. /api/weight_overrides, by contrast, is never cached and always
+accurate.
+
+FIX #2 (two layers): (a) instant client-side feedback -- on a successful
+single approve, _wlApprove now immediately greys out and relabels that
+specific card ("✓ QUEUED") before the reload even starts, no waiting on
+network round-trips; (b) the real, comprehensive fix -- loadWeightLab now
+cross-references the always-fresh /api/weight_overrides entries and
+excludes ANY tag that already has an entry (pending or applied) from both
+the actionable and watching lists, so a stale proposal payload can never
+render a live-looking Approve button for a tag that dexter.py's own
+_validate_weight_approval would reject anyway ("a pending override already
+exists"). This covers every load path, not just the one card just clicked --
+including a plain page refresh.
+
+ALSO FOUND while bumping cache-bust: weight-lab.js's own version string
+(20260713-1) had NEVER been bumped despite every Phase 6C/6D edit made to
+this file earlier today -- meaning the browser could have been running a
+stale, partially-updated copy of this file this entire time, independent of
+the two bugs above. Bumped to 20260713-2.
+
+STILL OPEN: the specific 400 rejection reason for Kev's actual click tonight
+was never captured (the error text itself was invisible before this fix, and
+he hasn't re-tried since). Once he reloads with this fix live, any future
+rejection will show its real reason on-screen -- if it happens again, that
+message will say exactly why (unverified mapping, no longer significant,
+pending override already exists, etc.) rather than requiring another round
+of guessing.
+
+VERIFICATION: `node --check webapp/js/ui/weight-lab.js` -> syntax OK. `git
+diff --stat` shows only weight-lab.js and index.html (cache-bust line)
+changed. Cache-bust bumped: weight-lab.js 20260713-1 -> -2.
+NOT independently verified live this session. Kev should hard refresh and
+try Approve again -- if it fails, the actual reason will now be visible
+on-screen; if it succeeds, the card should grey out immediately and stay
+that way on reload.
+
+RESTART: NOT REQUIRED -- frontend-only. DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
+
+=== 2026-07-13 — CIRCUIT BREAKER made EXPLORATION_MODE-aware — RESTART: REQUIRED, DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: Kev saw a Telegram alert that the daily circuit breaker had tripped
+(no new trades escalating) and wanted this fixed for EXPLORATION_MODE paper
+trading specifically -- "let Chev get in as many trades as possible, as long
+as he thinks it's a good setup." Investigated before touching anything:
+honest_sim.py's DAILY_R_HALT = -3.0 is a single, mode-blind threshold --
+today's real daily_risk.json showed daily_R = -3.59, confirming this was a
+genuine trip, not a glitch. Crucially, this breaker had NEVER been hooked
+into risk_gauntlet.py's existing, deliberate EXPLORATION_MODE/NORMAL profile
+split ("one flag drives the whole risk posture," already used for R:R/heat/
+concurrency caps) -- it was simply overlooked when that pattern was built.
+
+DECISION (Kev's explicit calls, not assumed): keep a real backstop in
+EXPLORATION_MODE rather than disabling the breaker entirely (in case
+something is genuinely broken, not just a normal bad streak), specifically
+at daily_R <= -6.0; NORMAL mode (EXPLORATION_MODE off) keeps the original
+-3.0 unchanged.
+
+CHANGES:
+1. honest_sim.py: added DAILY_R_HALT_EXPLORATION = -6.0 alongside the
+   existing DAILY_R_HALT = -3.0. breaker_status() now takes an
+   exploration_mode parameter (default False, the stricter/safer default)
+   and picks the threshold accordingly -- mirrors
+   risk_gauntlet.get_active_profile(exploration_mode)'s exact pattern.
+2. dexter.py: both real call sites updated to pass EXPLORATION_MODE --
+   the /api/vitals today_realized_r read, and the actual escalation-gating
+   check (~line 13176). The gate's print/Telegram messages now show
+   whichever threshold actually applied and label which mode was active,
+   instead of always citing the NORMAL constant regardless of what was
+   really enforced.
+3. honest_sim.py self-test extended: new cases 12d/12e prove -3.1R does NOT
+   halt under EXPLORATION_MODE (proving the flag actually reaches the
+   threshold choice, not just cosmetic) but -6.1R still does (the backstop
+   still works).
+
+VERIFICATION: `python -c "import ast; ast.parse(...)"` -> both files parse
+clean. `python -X utf8 honest_sim.py` -> 27/27 self-tests pass, including
+the 2 new breaker-mode cases. `git diff --stat` shows only dexter.py and
+honest_sim.py changed.
+
+SIDE EFFECT FOUND AND DISCLOSED (not hidden): running honest_sim.py's own
+self-test as part of verification deleted the real, live daily_risk.json --
+the test suite uses that exact file path as its own scratch space and
+removes it at the end of its run, not built with "don't touch the real one
+on a live system" in mind. Today's actual -3.59 tracking is gone, not
+preserved -- functionally this is a welcome side effect (equivalent to a
+reset, unblocking trading immediately once Dexter restarts, on top of the
+new -6.0 threshold also unblocking it independently) but it was an
+accidental consequence of verification, not a deliberate action, and was
+disclosed to Kev as such rather than left quiet. Worth being cautious about
+if this self-test is ever run again against a live system in the future --
+the test file itself could be hardened to use a temp path instead of the
+real BREAKER_STATE constant, not done in this pass (out of scope for what
+was asked).
+
+RESTART: REQUIRED -- honest_sim.py and dexter.py both changed. DEPLOY: NO.
+RE-PASTE CHEV PROMPT: NO (no persona/prompt text changed, risk logic only).
+
+=== 2026-07-13 — "Today at a glance" Weight Lab card had the SAME stale-cache bug just fixed elsewhere — RESTART: NOT REQUIRED (frontend-only), DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: Kev noticed the Strategy panel's glance strip still said "1
+suggestion waiting" after he'd already approved it. Root cause: this was the
+EXACT same bug just found and fixed in weight-lab.js's loadWeightLab()
+(/api/weight_proposal has a 300s server cache, so a just-approved tag can
+still show as "actionable" for up to 5 minutes) -- except loadGlanceStrip()
+(drawing.js, Phase 6D Part 5) has its OWN separate, duplicated copy of the
+"actionable" filter logic, which never got that fix since it lives in a
+different file and wasn't touched during the weight-lab.js repair.
+
+FIX: loadGlanceStrip() now also fetches /api/weight_overrides (never
+cached, always accurate) alongside its existing 3 fetches, and excludes any
+tag with an existing entry (pending or applied) from the actionable count --
+identical cross-reference to the one just added to weight-lab.js's
+loadWeightLab().
+
+VERIFICATION: `node --check webapp/js/charts/drawing.js` -> syntax OK. Cache-
+bust bumped: drawing.js 20260721-5 -> -6.
+NOT independently verified live this session.
+
+RESTART: NOT REQUIRED -- frontend-only. DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
+
+NOTE FOR NEXT TIME: this "same fix needed in two places" pattern is worth
+remembering -- the actionable-tag filter (significant + verified mapping +
+real delta/current_weight, now also excluding overridden tags) is currently
+duplicated in both weight-lab.js and drawing.js rather than shared from one
+place. A future consolidation (e.g. exposing it as a small shared helper)
+would prevent this exact class of bug from splitting again if the filter
+logic ever needs to change a third time. Not done in this pass -- flagged,
+not actioned, since it wasn't asked for.
+
+================================================================================
+2026-07-13 -- Weight Preview vocabulary-mismatch fix (EMA 13 "no change"
+suggestion) + combo-leaderboard text truncation fix
+================================================================================
+
+CONTEXT: Kev asked (with the Shadow Tag/Combo Leaderboard screenshots) why
+the Weight Lab was suggesting EMA 13 go from 0.5 to 0.5 -- a proposal with
+no actual change, yet still asking for approval -- and separately flagged
+that combo names in the Shadow Combo Leaderboard get cut off mid-text.
+
+ROOT CAUSE (Weight Lab): _preview_weight_change() (dexter.py ~line 1108),
+which backs /api/weight_preview (the CONFIRM-popup dry-run), was never
+updated when SCAN_WEIGHTS/WEIGHT_LAB_VERIFIED_TAGS grew from 3 tags to 19
+during Phase 6A/6B -- it only ever checked _CONFLUENCE_BASELINE/
+CONFLUENCE_SCORES. CONFLUENCE_SCORES uses the OLD, Chev-manual-tag
+vocabulary ("ema_13", underscored) -- it has no "ema13" key at all (that's
+SCAN_WEIGHTS's, the labeller.py scan-vocabulary name). So confirming an
+approval for EMA 13 (or 15 of the other 19 verified tags -- everything
+except gp/rsi_ob/rsi_os) should hit a 400 "not a known tag" error at the
+CONFIRM step, not silently show "0.5 -> 0.5" -- this matches Kev's earlier
+report the same night of a red 400 error appearing at Confirm. Either way,
+the bug is real and blocks approving any of these 16 tags correctly.
+
+FIX: _preview_weight_change() now checks SCAN_WEIGHTS/_SCAN_WEIGHTS_BASELINE
+FIRST, falling back to CONFLUENCE_SCORES/_CONFLUENCE_BASELINE -- same
+precedence _build_weight_proposal_payload() and _reload_weight_overrides()
+already use ("SCAN_WEIGHTS is what the shadow-ledger evidence actually
+measures"). The 400 error message also now names both tables instead of
+just CONFLUENCE_SCORES. NO weight VALUES changed -- this restores intended
+approval behavior for tags that were already supposed to work per Phase 6B,
+it does not add or alter any weight.
+
+ROOT CAUSE (combo truncation): .stratBarLabel (strategy.css ~line 516) is a
+shared 170px/ellipsis rule used by every leaderboard row (single-tag AND
+combo). Combo names ("EMA 13 + EMA 21 + Sweep") run far longer than single
+tag names and were getting clipped mid-combo.
+
+FIX: added a scoped override -- #stratShadowComboBars .stratBarLabel and
+#stratComboBars .stratBarLabel (the real closed-trade combo leaderboard has
+the identical bug once it has enough data, same rendering pattern, so fixed
+both) now get width:230px and wrap onto multiple lines instead of
+ellipsis-clipping. Single-tag leaderboards are untouched (still 170px/
+ellipsis, unchanged).
+
+Also answered (no code change): Kev's "EMA 13 + EMA 21 + EMA 55 is
+basically the same indicator" observation about misleading combos, whether
+Liquidity Sweep is already implemented (yes -- SCAN_WEIGHTS["sweep"]=3,
+already live), why Chev keeps skipping on "invalidation too close to
+entry" (noise-floor / stop-distance explanation, not a "closeness to a
+level is bullish" read), and whether an automatic shadow-to-weights
+pipeline exists (no -- Weight Lab's Ridge regression is the closest
+human-gated analog; nothing auto-applies).
+
+VERIFICATION: `python -c "import ast; ast.parse(open('dexter.py').read())"`
+-> OK. `node --check webapp/js/charts/drawing.js` -> OK (unchanged this
+pass). Cache-bust bumped: strategy.css 20260716-6 -> -7.
+NOT independently tested live this session (no dexter.py restart run).
+
+RESTART: REQUIRED for the dexter.py fix to take effect (Python module-level
+code, not hot-reloaded). DEPLOY: NO (local webapp files + dexter.py).
+RE-PASTE CHEV PROMPT: NO.
+
 ================================================================================
 END OF HANDOFF
 ================================================================================

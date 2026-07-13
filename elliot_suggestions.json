@@ -1,0 +1,149 @@
+{
+  "generated_at": "2026-07-13 18:33:58",
+  "items": [
+    {
+      "id": "weight_lab-bb_near",
+      "type": "weight_lab_proposal",
+      "plain_english": "Elliot suggests raising bb_near from 0.5 to 1.5 \u2014 over 122 shadow trades it earned +0.27R more than its score assumes (confidence: med).",
+      "evidence": {
+        "tag": "bb_near",
+        "n": 122,
+        "coef": 0.2347,
+        "ci": [
+          0.0567,
+          0.4316
+        ],
+        "current_weight": 0.5,
+        "proposed_weight": 1.5,
+        "avg_netR_diff": 0.26839999999999997,
+        "confidence": "med"
+      },
+      "action": "weight_lab_approve"
+    },
+    {
+      "id": "underperformer-ema13",
+      "type": "underperformer",
+      "plain_english": "Elliot notes ema13 is underperforming its current weight (311 shadow trades, coefficient -0.1509) \u2014 consider lowering it (not yet statistically significant enough to approve \u2014 worth watching).",
+      "evidence": {
+        "tag": "ema13",
+        "n": 311,
+        "coef": -0.1509,
+        "ci": [
+          -0.4439,
+          0.1382
+        ],
+        "significant": false
+      },
+      "action": "manual"
+    },
+    {
+      "id": "underperformer-ema21",
+      "type": "underperformer",
+      "plain_english": "Elliot notes ema21 is underperforming its current weight (256 shadow trades, coefficient -0.1532) \u2014 consider lowering it (not yet statistically significant enough to approve \u2014 worth watching).",
+      "evidence": {
+        "tag": "ema21",
+        "n": 256,
+        "coef": -0.1532,
+        "ci": [
+          -0.4036,
+          0.1126
+        ],
+        "significant": false
+      },
+      "action": "manual"
+    },
+    {
+      "id": "underperformer-ema55",
+      "type": "underperformer",
+      "plain_english": "Elliot notes ema55 is underperforming its current weight (181 shadow trades, coefficient -0.1625) \u2014 consider lowering it (not yet statistically significant enough to approve \u2014 worth watching).",
+      "evidence": {
+        "tag": "ema55",
+        "n": 181,
+        "coef": -0.1625,
+        "ci": [
+          -0.3935,
+          0.081
+        ],
+        "significant": false
+      },
+      "action": "manual"
+    },
+    {
+      "id": "underperformer-pattern_breakout_vol",
+      "type": "underperformer",
+      "plain_english": "Elliot notes pattern_breakout_vol is underperforming its current weight (44 shadow trades, coefficient -0.1334) \u2014 consider lowering it (not yet statistically significant enough to approve \u2014 worth watching).",
+      "evidence": {
+        "tag": "pattern_breakout_vol",
+        "n": 44,
+        "coef": -0.1334,
+        "ci": [
+          -0.465,
+          0.2475
+        ],
+        "significant": false
+      },
+      "action": "manual"
+    },
+    {
+      "id": "underperformer-rsi_os",
+      "type": "underperformer",
+      "plain_english": "Elliot notes rsi_os is underperforming its current weight (36 shadow trades, coefficient -0.0363) \u2014 consider lowering it (not yet statistically significant enough to approve \u2014 worth watching).",
+      "evidence": {
+        "tag": "rsi_os",
+        "n": 36,
+        "coef": -0.0363,
+        "ci": [
+          -0.2551,
+          0.1443
+        ],
+        "significant": false
+      },
+      "action": "manual"
+    },
+    {
+      "id": "idle-gate-crypto",
+      "type": "threshold_nudge",
+      "plain_english": "Crypto: the score gate rejected only 7 of 3838 setups in the last 14 days \u2014 the threshold isn't doing any filtering work right now. If that's intentional (exploration mode), ignore this; otherwise consider whether the gate should be tighter, via the tuning panel.",
+      "evidence": {
+        "asset_type": "crypto",
+        "gate_rejects": 7,
+        "total_decisions": 3838,
+        "pct": 0.18,
+        "window_days": 14,
+        "window_start": "2026-06-29",
+        "window_end": "2026-07-13"
+      },
+      "action": "manual"
+    },
+    {
+      "id": "idle-gate-forex",
+      "type": "threshold_nudge",
+      "plain_english": "Forex: the score gate rejected only 3 of 1221 setups in the last 14 days \u2014 the threshold isn't doing any filtering work right now. If that's intentional (exploration mode), ignore this; otherwise consider whether the gate should be tighter, via the tuning panel.",
+      "evidence": {
+        "asset_type": "forex",
+        "gate_rejects": 3,
+        "total_decisions": 1221,
+        "pct": 0.25,
+        "window_days": 14,
+        "window_start": "2026-06-29",
+        "window_end": "2026-07-13"
+      },
+      "action": "manual"
+    },
+    {
+      "id": "idle-gate-stock",
+      "type": "threshold_nudge",
+      "plain_english": "Stocks: the score gate rejected only 6 of 357 setups in the last 14 days \u2014 the threshold isn't doing any filtering work right now. If that's intentional (exploration mode), ignore this; otherwise consider whether the gate should be tighter, via the tuning panel.",
+      "evidence": {
+        "asset_type": "stock",
+        "gate_rejects": 6,
+        "total_decisions": 357,
+        "pct": 1.68,
+        "window_days": 14,
+        "window_start": "2026-06-29",
+        "window_end": "2026-07-13"
+      },
+      "action": "manual"
+    }
+  ]
+}

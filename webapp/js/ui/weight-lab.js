@@ -86,6 +86,35 @@
       margin-bottom:10px;line-height:1.5">${html}</div>`;
   }
 
+  // FOUND BUG (2026-07-13): every success/error message in this file used to go through
+  // chat.js's _showToast(), which targets #analysisToast -- a chart-view element at
+  // z-index:150, positioned bottom-left of the chart. #strategyOverlay (this whole panel)
+  // sits at z-index:9999 and covers the full screen, so every one of those messages was
+  // firing correctly and being 100% invisible the entire time, success AND failure alike --
+  // the actual root cause behind "the Approve button looks like it does nothing." Fixed by
+  // giving Weight Lab its own on-page message, appended fresh to document.body (same
+  // proven pattern _wlShowConfirm's own modal already uses to render above the overlay,
+  // just centered at the top instead of a full modal) so it's never hidden regardless of
+  // what else is open.
+  function _wlShowMessage(kind, html, durationMs) {
+    const old = document.getElementById('wlMessageBar');
+    if (old) old.remove();
+    const colors = {
+      error:   { bg: 'rgba(242,54,69,0.16)',  border: 'rgba(242,54,69,0.55)',  fg: '#ff8a95' },
+      success: { bg: 'rgba(8,153,129,0.16)',   border: 'rgba(8,153,129,0.5)',   fg: '#5ee6a0' },
+    };
+    const c = colors[kind] || colors.success;
+    const el = document.createElement('div');
+    el.id = 'wlMessageBar';
+    el.style.cssText = `position:fixed;top:22px;left:50%;transform:translateX(-50%);z-index:10000;
+      background:${c.bg};border:1px solid ${c.border};color:${c.fg};padding:11px 20px;border-radius:8px;
+      font-family:'Inter',sans-serif;font-size:12.5px;max-width:480px;text-align:center;
+      box-shadow:0 8px 32px rgba(0,0,0,0.5);backdrop-filter:blur(6px)`;
+    el.innerHTML = html;
+    document.body.appendChild(el);
+    setTimeout(() => { if (el.parentNode) el.remove(); }, durationMs || (kind === 'error' ? 8000 : 5000));
+  }
+
   // PHASE 6D PART 2: freeze-progress rate estimate. In-memory only (no
   // localStorage, resets on page reload -- fine, this is a rough "how's it
   // going" read, never a persisted fact). This panel has no auto-polling
@@ -169,7 +198,7 @@
       try {
         preview = await _wlPreview(items);
       } catch (e) {
-        _showToast(`<span class="tBear">Weight Lab — ${esc(e.message)}</span>`, 6000);
+        _wlShowMessage('error', esc(e.message));
         resolve(false);
         return;
       }
@@ -222,7 +251,7 @@
           await onConfirm();
           finish(true);
         } catch (e) {
-          _showToast(`<span class="tBear">Weight Lab — ${esc(e.message)}</span>`, 6000);
+          _wlShowMessage('error', esc(e.message));
           finish(false);
         }
       });
@@ -238,7 +267,20 @@
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || 'approve failed');
-      _showToast(`<span>Weight Lab — ${esc(friendlyTag(tag))} queued (${delta > 0 ? '+' : ''}${delta}pt) — live within one scan cycle, no restart needed.</span>`, 6000);
+      _wlShowMessage('success', `${esc(friendlyTag(tag))} queued (${delta > 0 ? '+' : ''}${delta}pt) — live within one scan cycle, no restart needed.`);
+      // Instant visual feedback on THIS card, before the reload below even starts --
+      // /api/weight_proposal has its own 300s server cache, so the upcoming
+      // loadWeightLab(true) can legitimately still see the tag as "actionable" for a
+      // little while; that's handled separately (loadWeightLab now cross-references
+      // /api/weight_overrides, which is never cached, to hide any tag with a pending
+      // entry regardless of what the proposal payload says). This just means the
+      // button doesn't have to wait even that long to stop looking clickable.
+      const card = btn.closest('.wlProposalCard');
+      if (card) {
+        card.style.opacity = '0.55';
+        btn.textContent = '✓ QUEUED';
+        btn.title = 'Live within one scan cycle -- see the pending changes banner above.';
+      }
       loadWeightLab(true);
     });
     if (!confirmed) btn.disabled = false;
@@ -256,9 +298,9 @@
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || 'batch approve failed');
-      let msg = `Weight Lab — ${d.approved.length} tag(s) queued, live within one scan cycle.`;
+      let msg = `${d.approved.length} tag(s) queued, live within one scan cycle.`;
       if (d.rejected.length) msg += ` ${d.rejected.length} skipped: ${d.rejected.map(x => x.tag).join(', ')}.`;
-      _showToast(`<span>${esc(msg)}</span>`, 7000);
+      _wlShowMessage('success', esc(msg));
       loadWeightLab(true);
     });
     if (!confirmed) btn.disabled = false;
@@ -270,10 +312,10 @@
       const r = await _apiFetch('/api/weight_proposal/mark_reviewed', { method: 'POST' });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || 'failed');
-      _showToast(`<span>Weight Lab — marked reviewed.</span>`, 3000);
+      _wlShowMessage('success', 'marked reviewed.');
       loadWeightLab(true);
     } catch (e) {
-      _showToast(`<span class="tBear">Weight Lab — ${esc(e.message)}</span>`, 6000);
+      _wlShowMessage('error', esc(e.message));
       btn.disabled = false;
     }
   }
@@ -287,10 +329,10 @@
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || 'revert failed');
-      _showToast(`<span>Weight Lab — change reverted, reverts to baseline within one scan cycle.</span>`, 4000);
+      _wlShowMessage('success', 'change reverted, back to baseline within one scan cycle.');
       loadWeightLab(true);
     } catch (e) {
-      _showToast(`<span class="tBear">Weight Lab — ${esc(e.message)}</span>`, 6000);
+      _wlShowMessage('error', esc(e.message));
       btn.disabled = false;
     }
   }
@@ -542,7 +584,7 @@
          APPROVE ${deltaLabel}</button>`;
 
     return `
-      <div style="border:1px solid rgba(147,112,219,0.25);border-radius:6px;padding:10px 12px;
+      <div class="wlProposalCard" data-tag="${esc(p.tag)}" style="border:1px solid rgba(147,112,219,0.25);border-radius:6px;padding:10px 12px;
         margin-bottom:8px;background:rgba(255,255,255,0.02)">
         <div style="font-family:'Inter',sans-serif;font-size:12.5px;font-weight:600;color:var(--txt1)">${oneLiner}</div>
         <div style="font-family:'Share Tech Mono',monospace;font-size:9.5px;color:var(--txt3);margin-top:1px">${esc(p.tag)}</div>
@@ -805,11 +847,11 @@
     const valueInput = document.getElementById('wlManualValue');
     const newValue = parseFloat(valueInput.value);
     if (isNaN(newValue)) {
-      _showToast(`<span class="tBear">Weight Lab — enter a number.</span>`, 4000);
+      _wlShowMessage('error', 'enter a number.');
       return;
     }
     if (newValue < _wlManualSelected.min || newValue > _wlManualSelected.max) {
-      _showToast(`<span class="tBear">Weight Lab — allowed range for ${esc(_wlManualSelected.name)} is ${fmtNum(_wlManualSelected.min)}–${fmtNum(_wlManualSelected.max)}.</span>`, 5000);
+      _wlShowMessage('error', `allowed range for ${esc(_wlManualSelected.name)} is ${fmtNum(_wlManualSelected.min)}–${fmtNum(_wlManualSelected.max)}.`);
       return;
     }
     btn.disabled = true;
@@ -822,9 +864,9 @@
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || 'manual set failed');
       const msg = d.removed
-        ? `Weight Lab — ${esc(name)} reverted to baseline — live within one scan cycle.`
-        : `Weight Lab — ${esc(name)} set to ${fmtNum(newValue)}pt — live within one scan cycle.`;
-      _showToast(`<span>${msg}</span>`, 6000);
+        ? `${esc(name)} reverted to baseline — live within one scan cycle.`
+        : `${esc(name)} set to ${fmtNum(newValue)}pt — live within one scan cycle.`;
+      _wlShowMessage('success', msg);
       loadWeightLab(true);
     });
     if (!confirmed) btn.disabled = false;
@@ -986,15 +1028,32 @@
       }
 
       const proposals = prop.proposals || [];
+      // FOUND BUG (2026-07-13): /api/weight_proposal has its own 300s server-side cache
+      // (WEIGHT_PROPOSAL_CACHE_SECS), so right after a successful approve, the very next
+      // load can still see the OLD proposal payload -- same tag, same proposed_delta,
+      // same "actionable" card, looking exactly as clickable as before even though the
+      // approval genuinely went through. /api/weight_overrides is NEVER cached, so it's
+      // always accurate -- cross-referencing it here means a tag with ANY existing entry
+      // (pending or already-applied; dexter.py's own _validate_weight_approval rejects a
+      // second approval either way, "a pending override already exists") can never render
+      // a live-looking Approve button again, regardless of how stale the proposal payload
+      // itself is. This is the real fix, not just the instant client-side grey-out in
+      // _wlApprove (which only covers the single card just clicked, in the current DOM,
+      // until the next reload -- this covers every tag, every load, including a plain
+      // page refresh).
+      const overriddenTags = new Set((ov.entries || []).map(e => e.tag));
+
       // PHASE 6C: "actionable" = the exact gate _wlProposalCard/approve-all
       // require -- significant, verified mapping, and a real delta/current_weight
       // to act on. Everything else (not significant yet, OR significant but
-      // unverified/unmapped) goes into the single "watching, not yet
-      // approvable" drawer instead of a full card. This answers "what can I
-      // actually do right now," not "what cleared the stats bar."
+      // unverified/unmapped, OR already has a pending/applied override) goes
+      // into the single "watching, not yet approvable" drawer instead of a
+      // full card. This answers "what can I actually do right now," not
+      // "what cleared the stats bar."
       const actionable = proposals.filter(p =>
-        p.significant && (p.mapping || 'unmapped') === 'verified' && p.proposed_delta != null && p.current_weight != null);
-      const watching = proposals.filter(p => !actionable.includes(p));
+        p.significant && (p.mapping || 'unmapped') === 'verified' && p.proposed_delta != null
+        && p.current_weight != null && !overriddenTags.has(p.tag));
+      const watching = proposals.filter(p => !actionable.includes(p) && !overriddenTags.has(p.tag));
 
       html += _wlDigestHeader(actionable);
 

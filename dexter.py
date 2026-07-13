@@ -202,7 +202,7 @@ def api_vitals():
     # Today's realized R -- reuses honest_sim's own circuit-breaker tracker (the same
     # number the daily-halt check itself reads), never re-derived from the journal here.
     try:
-        today_r = honest_sim.breaker_status().get("daily_R", 0.0)
+        today_r = honest_sim.breaker_status(EXPLORATION_MODE).get("daily_R", 0.0)
     except Exception:
         today_r = None
 
@@ -1110,15 +1110,29 @@ def _preview_weight_change(tag, delta=None, new_value=None):
     new_value (manual-style, Phase 3), returns exactly the clamped effective
     value _reload_weight_overrides would compute once this goes live -- same
     baseline-relative clamp, nothing written. Returns None if tag isn't a real
-    CONFLUENCE_SCORES key."""
-    if tag not in _CONFLUENCE_BASELINE:
+    SCAN_WEIGHTS or CONFLUENCE_SCORES key.
+
+    PHASE 6B FOLLOW-UP FIX: this was never updated when SCAN_WEIGHTS/
+    WEIGHT_LAB_VERIFIED_TAGS grew from 3 tags to 19 -- it only ever checked
+    _CONFLUENCE_BASELINE, so previewing any of the 16 verified tags whose name
+    lives in SCAN_WEIGHTS but not CONFLUENCE_SCORES (ema13, sweep, sr_multi,
+    etc.) returned None, and the /api/weight_preview route turned that into a
+    400 at the CONFIRM step. Mirrors the SCAN_WEIGHTS-first precedence
+    _build_weight_proposal_payload() and _reload_weight_overrides() already
+    use: SCAN_WEIGHTS is what the shadow-ledger evidence actually measures."""
+    if tag in _SCAN_WEIGHTS_BASELINE:
+        baseline = _SCAN_WEIGHTS_BASELINE[tag]
+        current_effective = SCAN_WEIGHTS.get(tag)
+    elif tag in _CONFLUENCE_BASELINE:
+        baseline = _CONFLUENCE_BASELINE[tag]
+        current_effective = CONFLUENCE_SCORES.get(tag)
+    else:
         return None
-    baseline = _CONFLUENCE_BASELINE[tag]
     requested = float(new_value) if new_value is not None else baseline + float(delta or 0)
     clamped = max(0, min(2 * baseline + 2, requested))
     return {
         "tag": tag,
-        "current_effective": CONFLUENCE_SCORES.get(tag),
+        "current_effective": current_effective,
         "baseline": baseline,
         "requested": requested,
         "new_effective": clamped,
@@ -1154,7 +1168,7 @@ def api_weight_preview():
             return jsonify({"ok": False, "error": f"'{tag}': need delta or new_value"}), 400
         preview = _preview_weight_change(tag, delta=delta, new_value=new_value)
         if preview is None:
-            return jsonify({"ok": False, "error": f"'{tag}' is not a known CONFLUENCE_SCORES tag"}), 400
+            return jsonify({"ok": False, "error": f"'{tag}' is not a known SCAN_WEIGHTS/CONFLUENCE_SCORES tag"}), 400
         results.append(preview)
 
     return jsonify({"ok": True, "items": results, "freeze_min_records": FREEZE_MIN_RECORDS})
@@ -13173,10 +13187,17 @@ while True:
         if result and result["count"] >= min_conf:
             # Circuit breaker: halts NEW escalations only for the rest of the UTC day.
             # Open trades keep managing normally — see monitor_open_trades, untouched.
-            _breaker = honest_sim.breaker_status()
+            # Threshold follows EXPLORATION_MODE (2026-07-13, Kev's explicit call) --
+            # mirrors risk_gauntlet.get_active_profile(EXPLORATION_MODE)'s existing
+            # "one flag drives the whole risk posture" pattern: -6.0R while exploring
+            # (paper account, data-collection priority -- a losing streak is data, not
+            # danger), -3.0R once EXPLORATION_MODE is off and real money is on the line.
+            _breaker = honest_sim.breaker_status(EXPLORATION_MODE)
             if _breaker["halted"]:
+                _halt_threshold = honest_sim.DAILY_R_HALT_EXPLORATION if EXPLORATION_MODE else honest_sim.DAILY_R_HALT
                 print(f"[{datetime.now()}] CIRCUIT BREAKER — {result['symbol']}/{primary_tf}: "
-                      f"daily R={_breaker['daily_R']:+.2f} <= {honest_sim.DAILY_R_HALT} — not escalating.")
+                      f"daily R={_breaker['daily_R']:+.2f} <= {_halt_threshold} "
+                      f"({'EXPLORATION' if EXPLORATION_MODE else 'NORMAL'}) — not escalating.")
                 try:
                     labeller.record_setup(result, asset_type, "NOT_ESCALATED",
                                          chev_meta={"reason": "circuit_breaker"})
@@ -13187,8 +13208,9 @@ while True:
                     try:
                         send_telegram_alert(
                             f"🛑 CIRCUIT BREAKER TRIPPED: daily R = {_breaker['daily_R']:+.2f} "
-                            f"(halt threshold {honest_sim.DAILY_R_HALT}). No new trades will be escalated "
-                            f"for the rest of the UTC day. Open positions continue to be managed normally."
+                            f"(halt threshold {_halt_threshold}, {'EXPLORATION' if EXPLORATION_MODE else 'NORMAL'} mode). "
+                            f"No new trades will be escalated for the rest of the UTC day. "
+                            f"Open positions continue to be managed normally."
                         )
                     except Exception as _te:
                         print(f"[Circuit Breaker] Telegram alert failed: {_te}")

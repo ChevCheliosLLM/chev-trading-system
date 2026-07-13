@@ -37,7 +37,15 @@ EXIT_TF_SECONDS = {"1m": 60, "15m": 900}
 MAX_EXIT_LIMIT   = {"crypto": 120, "forex": 30, "stock": 30}
 FIXED_FETCH_SIZE = {"forex": 500, "stock": 500}
 
-DAILY_R_HALT  = -3.0
+DAILY_R_HALT             = -3.0   # NORMAL mode: halt after -3.0R realized today
+# EXPLORATION_MODE: looser backstop, not disabled entirely -- Kev's explicit call
+# (2026-07-13): the paper account can afford a real losing streak in order to collect
+# more data faster (that's the whole point of exploration), but a distant tripwire still
+# catches something genuinely broken (a bug causing repeated nonsensical losses), not
+# just an ordinary bad day. Mirrors risk_gauntlet.py's existing _EXPLORATION/_NORMAL
+# profile split -- "one flag drives the whole risk posture" -- applied to the daily
+# breaker specifically, which never had that split before this.
+DAILY_R_HALT_EXPLORATION = -6.0
 BREAKER_STATE = r"C:\ChevTools\daily_risk.json"
 
 _breaker_lock = threading.Lock()
@@ -298,15 +306,21 @@ def record_close_R(trade, net_pnl):
     return r_multiple
 
 
-def breaker_status():
-    """{"halted": bool, "daily_R": float, "date": "YYYY-MM-DD"}. A new UTC day auto-un-halts."""
+def breaker_status(exploration_mode=False):
+    """{"halted": bool, "daily_R": float, "date": "YYYY-MM-DD"}. A new UTC day auto-un-halts.
+    exploration_mode selects which halt threshold applies (DAILY_R_HALT_EXPLORATION vs
+    DAILY_R_HALT) -- mirrors risk_gauntlet.get_active_profile(exploration_mode)'s existing
+    "one flag drives the whole risk posture" pattern, applied here to the daily breaker.
+    Defaults to False (the stricter, real-money-safe threshold) if a caller ever omits it.
+    """
     with _breaker_lock:
         state = _read_breaker_state()
     today = _today_utc_str()
     if state.get("date") != today:
         return {"halted": False, "daily_R": 0.0, "date": today}
     daily_R = state.get("daily_R", 0.0)
-    return {"halted": daily_R <= DAILY_R_HALT, "daily_R": daily_R, "date": today}
+    halt_threshold = DAILY_R_HALT_EXPLORATION if exploration_mode else DAILY_R_HALT
+    return {"halted": daily_R <= halt_threshold, "daily_R": daily_R, "date": today}
 
 
 # ---------------------------------------------------------------------------
@@ -460,18 +474,29 @@ if __name__ == "__main__":
     _check("14 swing cost includes funding vs day (20.00 != 14.00)", cost_s == cost_d + 10000.0 * FUNDING_SWING, (cost_s, cost_d))
     _check("14b day trade cost has zero funding component", cost_d == 10000.0 * 2 * (FEE_SIDE["crypto"] + SLIPPAGE_SIDE["crypto"]), cost_d)
 
-    # 12. Breaker: -3.1R on one UTC date -> halted True; state file survives reload; next day -> halted False
+    # 12. Breaker: -3.1R on one UTC date -> halted True (NORMAL); state file survives
+    # reload; next day -> halted False
     if os.path.exists(BREAKER_STATE):
         os.remove(BREAKER_STATE)
     bt = {"symbol": "TESTUSDT", "risk_amount_usd": 100.0}
     record_close_R(bt, -150.0)   # -1.5R
     record_close_R(bt, -160.0)   # -1.6R  => running total -3.1R
     status_today = breaker_status()
-    _check("12a -3.1R halts trading today", status_today["halted"] is True and status_today["daily_R"] == -3.1, status_today)
+    _check("12a -3.1R halts trading today (NORMAL)", status_today["halted"] is True and status_today["daily_R"] == -3.1, status_today)
+
+    # 12d/12e: same -3.1R does NOT halt under EXPLORATION_MODE (threshold -6.0), proving
+    # the mode flag actually reaches the threshold choice, not just cosmetic.
+    status_today_exploration = breaker_status(exploration_mode=True)
+    _check("12d -3.1R does NOT halt under EXPLORATION_MODE (threshold -6.0)",
+           status_today_exploration["halted"] is False and status_today_exploration["daily_R"] == -3.1, status_today_exploration)
+    record_close_R(bt, -300.0)   # -3.0R more => running total -6.1R
+    status_deep_loss_exploration = breaker_status(exploration_mode=True)
+    _check("12e -6.1R DOES halt under EXPLORATION_MODE too (past -6.0 backstop)",
+           status_deep_loss_exploration["halted"] is True and status_deep_loss_exploration["daily_R"] == -6.1, status_deep_loss_exploration)
 
     # simulate reload (fresh read from disk only, no in-process state)
     reread = breaker_status()
-    _check("12b state survives reload", reread == status_today, reread)
+    _check("12b state survives reload", reread["daily_R"] == status_deep_loss_exploration["daily_R"], reread)
 
     # simulate next UTC day by writing a stale date directly
     stale_state = {"date": "2000-01-01", "daily_R": -9.0}
