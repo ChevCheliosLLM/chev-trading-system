@@ -212,6 +212,24 @@ def api_vitals():
         except Exception:
             return None
 
+    # PHASE 6D PART 5: trades_today -- closed-today (by journal ts) plus opened-and-
+    # still-open-today (by open_trades' open_ts). Reuses the exact "today" UTC-date
+    # concept honest_sim.breaker_status() already tracks for today_realized_r above,
+    # just counted instead of summed. Read-only, never raises.
+    try:
+        _today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _closed_today = sum(1 for t in _load_journal() if (t.get("ts") or "").startswith(_today_str))
+        _open_today = sum(1 for t in open_trades if (t.get("open_ts") or "").startswith(_today_str))
+        trades_today = _closed_today + _open_today
+    except Exception:
+        trades_today = None
+
+    # PHASE 6D PART 5: playbook_age_secs -- freshest of the 3 asset playbooks' file
+    # mtimes, via the SAME _age() helper already used below for decisions_log_age_secs/
+    # journal_age_secs -- not a new mechanism, one more call to existing machinery.
+    _playbook_ages = [a for a in (_age(p) for p in PLAYBOOK_PATHS.values()) if a is not None]
+    playbook_age_secs = min(_playbook_ages) if _playbook_ages else None
+
     payload = {
         "last_scan_ts": (
             datetime.fromtimestamp(_last_scan_completed_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -222,6 +240,8 @@ def api_vitals():
         "slots":                       slots,
         "exploration_mode":             EXPLORATION_MODE,
         "today_realized_r":             today_r,
+        "trades_today":                 trades_today,
+        "playbook_age_secs":            playbook_age_secs,
         "median_deliberation_secs_24h": median_deliberation,
         "decisions_log_age_secs":       _age(_CHEV_DECISIONS_LOG),
         "journal_age_secs":             _age(JOURNAL_PATH),
@@ -776,6 +796,10 @@ def api_strategy_counterfactual():
 WEIGHT_PROPOSAL_CACHE_SECS = 300
 FREEZE_MIN_RECORDS = 200
 _weight_proposal_cache = {"ts": 0.0, "payload": None}
+# PHASE 6D PART 3: /api/weight_history's own cache -- same 300s pattern, kept
+# as a separate dict since it caches a different payload shape (a timeline,
+# not a regression run).
+_weight_history_cache = {"ts": 0.0, "payload": None}
 _weight_proposal_significant_tags = set()   # last-served proposal set with significant=true;
                                              # /approve checks against this, never the client's claim
 
@@ -903,7 +927,14 @@ def _build_weight_proposal_payload():
             mapping = "unverified"
         else:
             mapping = "unmapped"
-        current_weight = CONFLUENCE_SCORES.get(tag) if mapping == "verified" else None
+        # PHASE 6B: SCAN_WEIGHTS first, then CONFLUENCE_SCORES -- the scan table is what
+        # the shadow-ledger evidence actually measures (labels_closed.jsonl features come
+        # from scan_pair_tf()'s own reason strings, never from Chev's manually-typed tags),
+        # so for any tag present in both it is the truthful "current weight" to display.
+        if mapping == "verified":
+            current_weight = SCAN_WEIGHTS.get(tag, CONFLUENCE_SCORES.get(tag))
+        else:
+            current_weight = None
         row = {
             "tag": tag, "n": tag_counts[tag], "coef": round(coef, 4),
             "ci": [round(lo, 4), round(hi, 4)], "significant": significant,
@@ -985,8 +1016,8 @@ def _validate_weight_approval(tag, delta, entries):
         return False, "delta must be an integer", None
     if abs(delta) != 1:
         return False, "delta must be exactly +1 or -1", None
-    if tag not in CONFLUENCE_SCORES:
-        return False, f"'{tag}' is not a known CONFLUENCE_SCORES tag (unmapped)", None
+    if tag not in SCAN_WEIGHTS and tag not in CONFLUENCE_SCORES:
+        return False, f"'{tag}' is not a known SCAN_WEIGHTS/CONFLUENCE_SCORES tag (unmapped)", None
     if tag not in WEIGHT_LAB_VERIFIED_TAGS:
         return False, f"'{tag}' shares a name with a CONFLUENCE_SCORES key but its mechanic has not been verified (unverified) — see handoff PHASE 16 no-aliasing rule", None
     if tag not in _weight_proposal_significant_tags:
@@ -1281,6 +1312,116 @@ def api_weight_overrides():
     entries = data.get("entries", [])
     annotated = [{**e, "active": e.get("tag") in _WEIGHT_OVERRIDES_LIVE_APPLIED_TAGS} for e in entries]
     return jsonify({"ok": True, "version": data.get("version", 1), "entries": annotated})
+
+
+def _build_weight_history_payload():
+    """Pure computation, no Flask objects. Turns weight_overrides.json into a
+    plain-English timeline with an honest before/after verdict per entry,
+    computed fresh from labels_closed.jsonl every cache cycle -- never a
+    stale/cached stat. Read-only: writes nothing, imports nothing new (reuses
+    weight_proposal's own load/filter/cost functions -- the SAME ones the
+    Ridge regression itself uses -- rather than a second methodology).
+
+    NOTE ON REMOVALS: /api/weight_proposal/revert does entries.pop(idx) with
+    no tombstone left behind -- a reverted override simply disappears from
+    weight_overrides.json with no trace of it ever existing. There is
+    nothing to reconstruct a removal history from, so this payload only ever
+    reflects entries currently present in the file (see removals_note below).
+    """
+    data = _read_weight_overrides_file()
+    raw_entries = data.get("entries", [])
+
+    records_raw, malformed_lines = weight_proposal.load_records(weight_proposal.LABELS_CLOSED_FILE)
+    kept, _n_post, _n_incomplete = weight_proposal.prepare_sample(records_raw)
+
+    def _stats(records):
+        n = len(records)
+        if n == 0:
+            return {"n": 0, "winrate": None, "avg_netR": None}
+        # win = label==1, denominator = numeric outcomes only -- same definition
+        # labeller.py's _base_rate() uses, not a second one invented here.
+        wins  = sum(1 for r in records if r.get("label") == 1)
+        n_bin = sum(1 for r in records if r.get("label") in (1, -1, 0))
+        winrate = round(wins / n_bin * 100, 1) if n_bin else None
+        avg_netr = round(sum(weight_proposal.net_r(r) for r in records) / n, 4)
+        return {"n": n, "winrate": winrate, "avg_netR": avg_netr}
+
+    timeline = []
+    malformed_entries = 0
+    for e in raw_entries:
+        tag = e.get("tag")
+        delta = e.get("delta")
+        ts_str = e.get("applied_at") or e.get("approved_at")
+        if not isinstance(tag, str) or not tag or not isinstance(delta, (int, float)) or not ts_str:
+            malformed_entries += 1
+            continue
+        try:
+            cutoff_epoch = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+        except Exception:
+            malformed_entries += 1
+            continue
+
+        tag_records = [r for r in kept if tag in (r.get("features") or [])]
+        before_sorted = sorted(
+            [r for r in tag_records if (r.get("ts_epoch") or 0) <= cutoff_epoch],
+            key=lambda r: r.get("ts_epoch", 0))
+        before = before_sorted[-2000:]  # up to 2000 most recent prior
+        after  = [r for r in tag_records if (r.get("ts_epoch") or 0) > cutoff_epoch]
+
+        before_stats = _stats(before)
+        after_stats  = _stats(after)
+        verdict_status = "ready" if after_stats["n"] >= FREEZE_MIN_RECORDS else "too_early"
+
+        timeline.append({
+            "tag": tag,
+            "delta": delta,
+            "source": e.get("source"),
+            "approved_at": e.get("approved_at"),
+            "applied_at": e.get("applied_at"),
+            "evidence": e.get("evidence"),
+            "verdict": {
+                "n_before": before_stats["n"],
+                "winrate_before": before_stats["winrate"],
+                "avg_netR_before": before_stats["avg_netR"],
+                "n_after": after_stats["n"],
+                "winrate_after": after_stats["winrate"],
+                "avg_netR_after": after_stats["avg_netR"],
+                "verdict_status": verdict_status,
+                "needed": FREEZE_MIN_RECORDS,
+            },
+        })
+
+    # Newest first. applied_at/approved_at strings are "%Y-%m-%d %H:%M:%S" --
+    # zero-padded and lexicographically sortable, no need to re-parse to epoch.
+    timeline.sort(key=lambda e: e.get("applied_at") or e.get("approved_at") or "", reverse=True)
+
+    return {
+        "ok": True,
+        "timeline": timeline,
+        "malformed_entries": malformed_entries,
+        "malformed_shadow_lines": malformed_lines,
+        "removals_note": "weight_overrides.json does not record removals (revert deletes the entry with no tombstone) -- reverted changes cannot appear in this history.",
+    }
+
+
+@flask_app.route("/api/weight_history")
+def api_weight_history():
+    """Read-only. Plain-English timeline of every weight_overrides.json entry
+    with an honest before/after verdict per tag, computed fresh from
+    labels_closed.jsonl. 300s cache, same pattern as /api/weight_proposal.
+    Writes nothing, never raises on a malformed entry (skipped + counted in
+    malformed_entries)."""
+    now = time.time()
+    cache_age = now - _weight_history_cache["ts"]
+    if _weight_history_cache["payload"] is None or cache_age >= WEIGHT_PROPOSAL_CACHE_SECS:
+        payload = _build_weight_history_payload()
+        _weight_history_cache["ts"] = now
+        _weight_history_cache["payload"] = payload
+        cache_age = 0.0
+
+    payload = dict(_weight_history_cache["payload"])
+    payload["cache_age_secs"] = round(cache_age, 1)
+    return jsonify(payload)
 
 
 @flask_app.route("/api/validation_kpi")
@@ -2684,12 +2825,121 @@ CONFLUENCE_SCORES = {
     "ms_1d": 5, "ms_4h": 4, "ms_1h": 3, "ms_30m": 2, "ms_15m": 1, "ms": 3,
 }
 
-# Labeller `features` codes confirmed by Kev to be the same mechanic as the
-# identically-named CONFLUENCE_SCORES key. Never add entries without that
-# confirmation — see handoff PHASE 16 no-aliasing rule. (Confirmed 2026-07-11:
-# labeller's REASON_MAP tokenizes dexter's own emitted reason strings for all
-# three, so these are the same computation quoted twice, not a name collision.)
-WEIGHT_LAB_VERIFIED_TAGS = {"gp", "rsi_ob", "rsi_os"}
+# PHASE 6A: scan-path confluence point values, hot-reloadable through the SAME
+# override machinery as CONFLUENCE_SCORES (see _reload_weight_overrides below).
+# Every key is a labeller feature name produced by labeller.normalize_reasons()
+# (REASON_MAP_ORDERED or the S/R-touch-count regex). Day-one values are EXACTLY
+# what scan_pair_tf() + derivs.classify_derivs() award today -- INCLUDING the
+# Phase-3 ratifications (gp=2, fib_50=3, pattern_breakout=1, bb_mid=0.0,
+# oi_confirm=0.0, oi_divergence=2.5). Behaviour is therefore identical on day
+# one; the benefit (website Approve button moving any of them) arrives in 6B.
+# NOT MIGRATED here (left hardcoded, see handoff PHASE 6A): RSI divergence
+# strength (dynamic via _div_strength_score), BB burst / VP POC+VAH+VAL
+# (timeframe-dependent), funding tiers (one token, two values), the GP×SR ×1.15
+# and TF-quality multipliers, and the EMA contribution cap (3.0). Context-only
+# 0pt tokens (rsi_50_cross, bb_squeeze, fast_anchor_*) are listed for
+# completeness but are NOT read by scan code yet (no score literal to swap).
+#
+# ALSO NOT MIGRATED (found during Lead-Architect review of the first pass,
+# 2026-07-13 -- these two look like simple constants but are not):
+#   pattern_high_conf, pattern_mid_conf -- scan_pair_tf's pattern branch has a
+#     THIRD, separate "elif top.get('volume_confirmed'): pattern_score = 1.5"
+#     path that labeller.normalize_reasons() cannot distinguish from either of
+#     these two labels (both tokenize the same way once "+vol" is appended
+#     without "BREAKOUT" text). pattern_mid_conf's two real paths already
+#     disagree today (1.0 forming vs 1.5 volume-confirmed) -- this is the
+#     exact ambiguity Phase 1's CURRENT_WEIGHTS audit excluded it for.
+#     pattern_high_conf's two paths merely happen to agree today (1.5 == 1.5),
+#     which masks the same flaw -- the first time either is moved via a
+#     Weight Lab override, the label would silently represent two different
+#     real scores again. Properly separating this needs a new labeller.py
+#     token for the volume-confirmed-alone case, which is out of scope for a
+#     dexter.py/derivs.py-only phase. Left hardcoded at their original values.
+#   fib_382, fib_236 -- REMOVED entirely (not just left hardcoded): dexter's
+#     fib engine (_ca_fib_from_real_impulse) only ever computes 50%, 61.8%,
+#     65%, and 78.6% -- these two ratios are never emitted under current code
+#     (already established in Phase 1). Kilo's first pass had included them
+#     in the table as if real; they were dead keys nothing ever read.
+SCAN_WEIGHTS = {
+    # ── S/R multi-touch validation (scan_pair_tf 8904) ───────────────────
+    "sr_multi":  3,        # scan_pair_tf: pts = 3 if instances >= 3
+    "sr_single": 2,        # scan_pair_tf: pts = 2 otherwise
+    # ── Fibonacci (scan_pair_tf 8916-8930) ───────────────────────────────
+    "fib_50":   3,        # scan_pair_tf 8920: _fib_pts = 3 if name == "50%"
+    "fib_618":  2,        # scan_pair_tf 8920: else 2 (61.8% golden-pocket level)
+    # fib_786: NOT independently wired -- "Fib 78.6%" and "Fib 65%" (which
+    # tokenizes to fib_other, no dedicated REASON_MAP entry) share the exact
+    # same else-branch below (fib_other's key). Kept in the table as a
+    # documented placeholder only; changing it alone has no code effect until
+    # that branch is split (would need its own phase, same shape as the
+    # fib_50/fib_618 split already done in Phase 3).
+    "fib_786":  1,        # NOT READ -- see comment above; real driver is fib_other
+    "fib_other": 1,        # scan_pair_tf 8928: other fib levels (78.6%, 65%) += 1
+    # ── Golden Pocket (scan_pair_tf 8938) ────────────────────────────────
+    "gp":        2,        # scan_pair_tf 8938: fib_score = 2 when in_golden_pocket
+    # ── RSI extremes (scan_pair_tf 9017/9020) ───────────────────────────
+    "rsi_ob":   0.5,      # scan_pair_tf 9017: rsi_current >= 80
+    "rsi_os":   0.5,      # scan_pair_tf 9020: rsi_current <= 20
+    # ── RSI 50-cross (context, 0pt; scan_pair_tf 9022-9027, not read yet) ─
+    "rsi_50_cross": 0.0,  # in table for future weighting; no swap this phase
+    # ── EMA proximity (scan_pair_tf 9033 tuple) ──────────────────────────
+    "ema55":    2.0,       # scan_pair_tf 9033: ("EMA55", 2.0, ...)
+    "ema21":    1.0,       # scan_pair_tf 9033: ("EMA21", 1.0, ...)
+    "ema13":    0.5,       # scan_pair_tf 9033: ("EMA13", 0.5, ...)
+    # ── EMA crossover (scan_pair_tf 9045) ────────────────────────────────
+    "ema_cross": 1,        # scan_pair_tf 9045: ema_score += 1
+    # ── Liquidity sweep (scan_pair_tf 9058) ──────────────────────────────
+    "sweep":     3,        # scan_pair_tf 9058: sweep_score += 3
+    # ── Chart patterns (scan_pair_tf 9074-9083) ─────────────────────────
+    # pattern_high_conf / pattern_mid_conf deliberately excluded -- see the
+    # "ALSO NOT MIGRATED" note above the table.
+    "pattern_breakout_vol": 3.0,  # scan_pair_tf 9075: breakout + volume_confirmed
+    "pattern_breakout":    1.0,    # scan_pair_tf 9077: breakout, no volume
+    # ── Bollinger (scan_pair_tf 9122-9129) ──────────────────────────────
+    "bb_near":   0.5,     # scan_pair_tf 9122/9125: top/bottom 15% of band
+    "bb_mid":    0.0,      # scan_pair_tf 9129: recalibrated 2026-07-13 -> 0
+    # ── Bollinger squeeze (context, 0pt; scan_pair_tf 9133-9136, not read yet)
+    "bb_squeeze": 0.0,    # in table for future weighting; no swap this phase
+    # ── Derivatives (derivs.classify_derivs) ────────────────────────────
+    "oi_divergence": 2.5, # derivs 107/112: recalibrated 2026-07-13 (1.5->2.5)
+    "oi_confirm":    0.0,  # derivs 117/122: recalibrated 2026-07-13 (1.0->0.0)
+    # ── Fast intraday anchors (context, 0pt; scan_pair_tf 9219-9226, not read yet)
+    "fast_anchor_pdh":    0.0,
+    "fast_anchor_pdl":    0.0,
+    "fast_anchor_or_high": 0.0,
+    "fast_anchor_or_low":  0.0,
+}
+
+# Labeller `features` codes confirmed to be the same mechanic as the
+# identically-named CONFLUENCE_SCORES/SCAN_WEIGHTS key -- Approve buttons only
+# ever appear for tags in this set. Never add a tag without that proof.
+# (Confirmed 2026-07-11 for gp/rsi_ob/rsi_os: labeller's REASON_MAP tokenizes
+# dexter's own emitted reason strings for all three, so these are the same
+# computation quoted twice, not a name collision.)
+#
+# PHASE 6B (2026-07-13): expanded to every SCAN_WEIGHTS key that Phase 6A
+# proved reads from exactly one live code path -- that migration IS the
+# verification basis for this batch, same standard as the original three.
+#
+# Deliberately EXCLUDED even though present in SCAN_WEIGHTS (do not add until
+# each is actually wired to a real code path -- adding them now would put a
+# working-looking Approve button in front of a change that silently does
+# nothing, exactly the class of bug Phase 6A's review found and fixed for
+# "gp"): rsi_50_cross, bb_squeeze, fast_anchor_pdh, fast_anchor_pdl,
+# fast_anchor_or_high, fast_anchor_or_low (all explicit 0pt context/gate
+# signals, never read by scan code), and fib_786 (real reason string, but not
+# independently wired -- shares fib_other's branch; a change to fib_786 alone
+# would have zero effect until that branch is split).
+WEIGHT_LAB_VERIFIED_TAGS = {
+    "gp", "rsi_ob", "rsi_os",                                    # original verified set
+    "sr_multi", "sr_single",                                      # Phase 6A: scan_pair_tf S/R
+    "fib_50", "fib_618", "fib_other",                             # Phase 6A: scan_pair_tf fib
+    "ema55", "ema21", "ema13", "ema_cross",                       # Phase 6A: scan_pair_tf EMA
+    "sweep",                                                       # Phase 6A: scan_pair_tf sweep
+    "pattern_breakout_vol", "pattern_breakout",                   # Phase 6A: pattern engine (single-path only)
+    "bb_near", "bb_mid",                                          # Phase 6A: scan_pair_tf Bollinger
+    "oi_divergence", "oi_confirm",                                # Phase 6A: derivs.classify_derivs
+}
 
 # Pristine snapshot of CONFLUENCE_SCORES taken BEFORE any override has ever
 # applied. Hot-reload (below) recomputes every tag's effective weight as
@@ -2698,6 +2948,16 @@ WEIGHT_LAB_VERIFIED_TAGS = {"gp", "rsi_ob", "rsi_os"}
 # silently become +2, +3, ... every reload) since CONFLUENCE_SCORES itself gets
 # mutated in place. This dict must stay untouched forever after this line runs.
 _CONFLUENCE_BASELINE = dict(CONFLUENCE_SCORES)
+
+# PHASE 6A: pristine snapshot of SCAN_WEIGHTS (same role as
+# _CONFLUENCE_BASELINE above) — every reload recomputes the live scan
+# point values from THIS, never by compounding on the live dict. Never mutate.
+_SCAN_WEIGHTS_BASELINE = dict(SCAN_WEIGHTS)
+
+# Least-invasive wiring so derivs.classify_derivs() can read the SAME table
+# (avoids a circular import; derivs keeps its own `SCAN_WEIGHTS = {}`
+# default so its standalone self-test still runs with no Dexter present).
+derivs.SCAN_WEIGHTS = SCAN_WEIGHTS
 
 # =============================================================================
 # WEIGHT LAB — override loader
@@ -2759,6 +3019,12 @@ def _reload_weight_overrides():
     CONFLUENCE_SCORES IN PLACE (updates values on the existing dict object) --
     never rebinds it to a new dict, since other modules/routes hold references
     to this exact object.
+
+    PHASE 6A: this SAME machinery also drives SCAN_WEIGHTS (the scan-path
+    confluence point values), keyed by the identical tag vocabulary. A tag
+    present in BOTH tables (the shared labeller feature names) is applied to
+    both; a tag present only in one is applied only to that table. The same
+    baseline-relative [0, 2*baseline+2] clamp is used for every table.
     """
     global _weight_overrides_warned_once, _WEIGHT_OVERRIDES_LIVE_APPLIED_TAGS
 
@@ -2787,28 +3053,43 @@ def _reload_weight_overrides():
             continue
         deltas[tag] = deltas.get(tag, 0.0) + delta
 
+    # PHASE 6A: an override applies to EITHER table (CONFLUENCE_SCORES or
+    # SCAN_WEIGHTS) using the SAME baseline-relative clamp math. A tag present
+    # in BOTH tables is applied to both. A tag in neither baseline is ignored.
+    _WEIGHT_TABLES = ((CONFLUENCE_SCORES, _CONFLUENCE_BASELINE),
+                       (SCAN_WEIGHTS, _SCAN_WEIGHTS_BASELINE))
+
     changed = []
     applied_tags = set()
     for tag, total_delta in deltas.items():
-        if tag not in _CONFLUENCE_BASELINE:
-            print(f"[WEIGHT OVERRIDES] tag '{tag}' not in CONFLUENCE_SCORES -- ignored (never added as a new key)")
+        _baseline_for_tag = None
+        for _t, _b in _WEIGHT_TABLES:
+            if tag in _b:
+                _baseline_for_tag = _b
+                break
+        if _baseline_for_tag is None:
+            print(f"[WEIGHT OVERRIDES] tag '{tag}' not in CONFLUENCE_SCORES/SCAN_WEIGHTS -- ignored (never added as a new key)")
             continue
         applied_tags.add(tag)
-        baseline = _CONFLUENCE_BASELINE[tag]
-        clamped = max(0, min(2 * baseline + 2, baseline + total_delta))
-        if CONFLUENCE_SCORES.get(tag) != clamped:
-            changed.append((tag, CONFLUENCE_SCORES.get(tag), clamped))
-            CONFLUENCE_SCORES[tag] = clamped
+        for _t, _b in _WEIGHT_TABLES:
+            if tag not in _b:
+                continue
+            baseline = _b[tag]
+            clamped = max(0, min(2 * baseline + 2, baseline + total_delta))
+            if _t.get(tag) != clamped:
+                changed.append((tag, _t.get(tag), clamped))
+                _t[tag] = clamped
 
     # Every baseline tag NOT covered by a valid entry this cycle must be
     # restored to baseline -- this is what makes "remove the entry" (or delete
     # the whole file) a clean revert rather than a stuck value.
-    for tag, baseline in _CONFLUENCE_BASELINE.items():
-        if tag in applied_tags:
-            continue
-        if CONFLUENCE_SCORES.get(tag) != baseline:
-            changed.append((tag, CONFLUENCE_SCORES.get(tag), baseline))
-            CONFLUENCE_SCORES[tag] = baseline
+    for _t, _b in _WEIGHT_TABLES:
+        for tag, baseline in _b.items():
+            if tag in applied_tags:
+                continue
+            if _t.get(tag) != baseline:
+                changed.append((tag, _t.get(tag), baseline))
+                _t[tag] = baseline
 
     if changed:
         summary = ", ".join(f"{t} {o:g}->{c:g}" for t, o, c in changed)
@@ -4602,9 +4883,12 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
         if _rm is not None:
             combo_stats[combo]["r_sum"]   += float(_rm)
             combo_stats[combo]["r_count"] += 1
+    MIN_COMBO_N = 5  # combos below this sample size are noise, not evidence
     combo_lines = []
     for combo, st in sorted(combo_stats.items(), key=lambda x: -(x[1]["w"] + x[1]["l"])):
         total = st["w"] + st["l"]
+        if total < MIN_COMBO_N:
+            continue
         wr    = round(st["w"] / total * 100) if total else 0
         avg_r = round(st["r_sum"] / st["r_count"], 2) if st["r_count"] > 0 else None
         r_str = f" | avg {avg_r:+.2f}R" if avg_r is not None else ""
@@ -8898,7 +9182,7 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         if _sr_candidates:
             _, zone, label = min(_sr_candidates, key=lambda c: c[0])
             instances = zone.get("instances", 1)
-            pts = 3 if instances >= 3 else 2
+            pts = SCAN_WEIGHTS["sr_multi"] if instances >= 3 else SCAN_WEIGHTS["sr_single"]
             sr_score += pts
             sr_reasons.append(f"{label}({instances}x,{pts}pt)")
 
@@ -8912,18 +9196,29 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         for name, price in fib_levels.items():
             if abs(current_price - price) / current_price * 100 <= 1.0:
                 if name in ("50%", "61.8% (golden pocket)"):
-                    fib_score += 2
-                    fib_reasons.append(f"Fib {name} (2pt)")
+                    # fib_50 recalibrated 2026-07-13, shadow-ledger Ridge proposal, ratified by
+                    # Kev (2->3); fib_618 left at its ratified/unchanged 2.
+                    _fib_pts = SCAN_WEIGHTS["fib_50"] if name == "50%" else SCAN_WEIGHTS["fib_618"]
+                    fib_score += _fib_pts
+                    fib_reasons.append(f"Fib {name} ({_fib_pts}pt)")
                     if fib50 and fib618:
                         lo, hi = min(fib50, fib618), max(fib50, fib618)
                         if lo * 0.999 <= current_price <= hi * 1.001:
                             in_golden_pocket = True
                 else:
-                    fib_score += 1
+                    fib_score += SCAN_WEIGHTS["fib_other"]
                     fib_reasons.append(f"Fib {name}")
                 break
-        if in_golden_pocket and fib_score < 3:
-            fib_score = 3
+        if in_golden_pocket:
+            # gp recalibrated 2026-07-13, shadow-ledger Ridge proposal, ratified by Kev (3->2).
+            # Guard changed from "fib_score < 3" to unconditional: now that the 50% branch above
+            # can independently reach fib_score==3, a golden-pocket touch reached via the 50%
+            # level would sit at 3 already and silently skip the old guard, never collapsing to
+            # the GP tag the way a 61.8%-reached touch still would. The golden-pocket signal is
+            # meant to supersede whichever individual fib level triggered it either way.
+            # PHASE 6A fix: this was still a hardcoded "= 2" literal despite SCAN_WEIGHTS["gp"]
+            # existing -- the flagship recalibrated tag was silently NOT hot-reloadable. Wired now.
+            fib_score = SCAN_WEIGHTS["gp"]
             fib_reasons = [r for r in fib_reasons if "Fib" in r]
             fib_reasons.insert(0, "★ GOLDEN POCKET")
 
@@ -9002,11 +9297,11 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         rsi_level_reasons = []
         if rsi_current is not None:
             if rsi_current >= 80:
-                rsi_level_score += 0.5
-                rsi_level_reasons.append(f"RSI OVERBOUGHT ({rsi_current:.1f}, 0.5pt)")
+                rsi_level_score += SCAN_WEIGHTS["rsi_ob"]
+                rsi_level_reasons.append(f"RSI OVERBOUGHT ({rsi_current:.1f}, {SCAN_WEIGHTS['rsi_ob']:g}pt)")
             elif rsi_current <= 20:
-                rsi_level_score += 0.5
-                rsi_level_reasons.append(f"RSI OVERSOLD ({rsi_current:.1f}, 0.5pt)")
+                rsi_level_score += SCAN_WEIGHTS["rsi_os"]
+                rsi_level_reasons.append(f"RSI OVERSOLD ({rsi_current:.1f}, {SCAN_WEIGHTS['rsi_os']:g}pt)")
             cross = _rsi_50_cross(primary_df)
             if cross:
                 # RSI 50-cross is context for Chev, not a scored confluence — too noisy alone
@@ -9018,7 +9313,7 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         ema_score   = 0
         ema_reasons = []
         last = primary_df.iloc[-1]
-        for ema_col, ema_weight, ema_label in [("EMA55", 2.0, "EMA55"), ("EMA21", 1.0, "EMA21"), ("EMA13", 0.5, "EMA13")]:
+        for ema_col, ema_weight, ema_label in [("EMA55", SCAN_WEIGHTS["ema55"], "EMA55"), ("EMA21", SCAN_WEIGHTS["ema21"], "EMA21"), ("EMA13", SCAN_WEIGHTS["ema13"], "EMA13")]:
             val = last.get(ema_col)
             if val is None or pd.isna(val):
                 continue
@@ -9030,7 +9325,7 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
 
         crossover = _detect_ema_crossover(primary_df)
         if crossover and crossover["candles_ago"] <= 3:
-            ema_score += 1
+            ema_score += SCAN_WEIGHTS["ema_cross"]
             ema_reasons.append(f"EMA crossover {crossover['type']} {crossover['candles_ago']}c ago")
 
         # Cap total EMA contribution — prevents stacking all three EMAs + crossover from
@@ -9043,8 +9338,8 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         sweep_score   = 0
         sweep_reasons = []
         for s in sweeps[:1]:
-            sweep_score += 3
-            sweep_reasons.append(f"Sweep:{s['type']} (3pt)")
+            sweep_score += SCAN_WEIGHTS["sweep"]
+            sweep_reasons.append(f"Sweep:{s['type']} ({SCAN_WEIGHTS['sweep']:g}pt)")
 
         # ── Chart pattern engine ──────────────────────────────────────────────
         # Geometry-based scoring: breakout + volume = highest conviction.
@@ -9060,14 +9355,21 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                 pattern_result = top
                 # Score by strongest signal in the top pattern
                 if top.get("breakout") and top.get("volume_confirmed"):
-                    pattern_score = 3.0   # breakout confirmed + volume = high conviction
+                    pattern_score = SCAN_WEIGHTS["pattern_breakout_vol"]   # breakout confirmed + volume = high conviction
                 elif top.get("breakout"):
-                    pattern_score = 2.0   # breakout, no volume yet
+                    pattern_score = SCAN_WEIGHTS["pattern_breakout"]   # breakout, no volume yet — recalibrated 2026-07-13, shadow-ledger Ridge proposal, ratified by Kev
                 elif top.get("volume_confirmed"):
                     pattern_score = 1.5   # volume contraction confirmed, approaching breakout
                 elif top["confidence"] >= 0.70:
+                    # NOT migrated to SCAN_WEIGHTS -- see "ALSO NOT MIGRATED" note above the
+                    # table. This branch and the volume_confirmed branch above both tokenize to
+                    # the same labeller feature and currently agree (1.5 == 1.5) only by
+                    # coincidence; wiring just this one would silently break that the first time
+                    # either value is overridden.
                     pattern_score = 1.5   # forming high-confidence pattern
                 elif top["confidence"] >= 0.55:
+                    # NOT migrated -- same reason as above (this one's two real paths already
+                    # disagree: 1.0 here vs 1.5 in the volume_confirmed branch).
                     pattern_score = 1.0   # forming moderate-confidence pattern
 
                 is_meaningful = (top.get("breakout") or top.get("volume_confirmed")
@@ -9107,16 +9409,16 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                 bb_score += _bb_base
                 bb_reasons.append(f"BB lower BURST (%B={_pct_b:.2f}, {_overshoot}% of band outside, {_bb_base}pt)")
             elif _pct_b >= 0.85:
-                bb_score += 0.5
-                bb_reasons.append(f"BB near upper (%B={_pct_b:.2f}, top 15% of band, 0.5pt)")
+                bb_score += SCAN_WEIGHTS["bb_near"]
+                bb_reasons.append(f"BB near upper (%B={_pct_b:.2f}, top 15% of band, {SCAN_WEIGHTS['bb_near']:g}pt)")
             elif _pct_b <= 0.15:
-                bb_score += 0.5
-                bb_reasons.append(f"BB near lower (%B={_pct_b:.2f}, bottom 15% of band, 0.5pt)")
+                bb_score += SCAN_WEIGHTS["bb_near"]
+                bb_reasons.append(f"BB near lower (%B={_pct_b:.2f}, bottom 15% of band, {SCAN_WEIGHTS['bb_near']:g}pt)")
 
             if 0.48 <= _pct_b <= 0.52:
-                bb_score += 1.0
+                bb_score += SCAN_WEIGHTS["bb_mid"]  # recalibrated 2026-07-13, shadow-ledger Ridge proposal, ratified by Kev
                 _side = "support" if current_price >= _bbm else "resistance"
-                bb_reasons.append(f"BB mid {_side} (%B={_pct_b:.2f}, 1pt)")
+                bb_reasons.append(f"BB mid {_side} (%B={_pct_b:.2f}, {SCAN_WEIGHTS['bb_mid']:g}pt)")
 
             if _bbw < 1.5:
                 # Context only, like RSI 50-cross — the playbooks all say do NOT enter

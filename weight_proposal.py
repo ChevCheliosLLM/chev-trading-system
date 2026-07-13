@@ -81,10 +81,98 @@ MAX_STEP = 1  # a single run may propose moving a tag's weight by AT MOST this
 # change will ever be proposed for it — deliberately: this script cannot know
 # what's "current" unless told, and guessing would defeat the point of the
 # human-approval guardrail.
+#
+# UNMAPPED — needs Kev's decision (found in dexter.py/derivs.py, but not a
+# single unambiguous point value, so deliberately left out of CURRENT_WEIGHTS):
+#   gp_sr_combo    — dexter.py scan_pair_tf(): "★★ GP×SR DEADLY COMBO" is a
+#                     ×1.15 MULTIPLIER on total_score, not an additive point
+#                     value. Nothing to put in a per-tag weight table.
+#   bb_burst       — _bb_base = {"4h":3,"1h":2,"30m":2,"15m":1}.get(primary_tf,2)
+#                     — depends on which TF is primary when it fires, not fixed.
+#   vp_poc/vp_vah/vp_val — _vp_base is 3(4h)/2(1h), VAH/VAL = _vp_base-1, AND
+#                     halved again if the VP anchor is unconfirmed. Two
+#                     independent dimensions of variation, no single value.
+#   rsi_div_regular, rsi_div_hidden, rsi_div, rsi_div_forming — all four route
+#                     through _div_strength_score(d, primary_tf, confirmed=?),
+#                     a dynamic function of divergence magnitude/TF — not a
+#                     fixed point table entry anywhere in dexter.py.
+#   pattern_mid_conf — genuinely ambiguous: the labeller token fires for BOTH
+#                     a forming pattern with confidence 0.55-0.69 (dexter
+#                     awards 1.0pt) AND a volume-confirmed pattern with no
+#                     breakout at any confidence (dexter awards 1.5pt) —
+#                     normalize_reasons() can't tell these apart from the
+#                     string alone, so the token covers two different real
+#                     weights. (pattern_high_conf was checked the same way and
+#                     turned out safe — both of its trigger paths score 1.5 —
+#                     which is why it IS included below.)
+#   funding_extreme — derivs.py classify_derivs(): 2.0pt at the "notable"
+#                     threshold, 3.0pt at the "extreme" threshold — tiered,
+#                     not one number.
+#   fib_382, fib_236 — dexter's fib engine (_ca_fib_from_real_impulse) only
+#                     ever computes 50%, 61.8%, 65%, and 78.6% — it never
+#                     emits a 38.2% or 23.6% level under current code, so
+#                     there is no live point value to record for these two
+#                     labeller.py REASON_MAP entries at all (they appear to be
+#                     dead/legacy tokens).
+#   other           — catch-all for any unmatched reason string by definition;
+#                     not one feature, so not weight-eligible.
 CURRENT_WEIGHTS = {
-    # "ema13": 0.5,
-    # "gp_sr_combo": 2.0,
-    # ...
+    # ── Support / Resistance (scan_pair_tf(): "Resistance/Support(Nx,Npt)") ──
+    "sr_multi":  3,    # instances >= 3 -> pts = 3
+    "sr_single": 2,    # instances < 3 (1-2 touches) -> pts = 2
+
+    # ── Golden Pocket ─────────────────────────────────────────────────────
+    # No explicit "(Npt)" text in the "★ GOLDEN POCKET" reason string itself
+    # (dexter internally bumps fib_score to 3 as the *mechanism*, not a
+    # separate gp_score var) — falls back to CONFLUENCE_SCORES["gp"] per this
+    # phase's own precedence rule. Already Kev-confirmed as the same
+    # computation, not a name collision (see WEIGHT_LAB_VERIFIED_TAGS above).
+    "gp": 4,
+
+    # ── Fibonacci (scan_pair_tf() fib branch) ────────────────────────────
+    "fib_618":  2,     # "Fib 61.8% (golden pocket) (2pt)"
+    "fib_50":   2,     # "Fib 50% (2pt)"
+    "fib_786":  1,     # else-branch: fib_score += 1 (string has no inline "(Npt)", but the literal is unambiguous)
+    "fib_other": 1,    # same else-branch; in practice only ever catches the "65%" ratio (the one computed level with no dedicated REASON_MAP entry)
+
+    # ── EMA (scan_pair_tf() EMA branch) ──────────────────────────────────
+    "ema55":     2.0,  # "EMA55 support/resistance (2.0pt)"
+    "ema21":     1.0,  # "EMA21 support/resistance (1.0pt)"
+    "ema13":     0.5,  # "EMA13 support/resistance (0.5pt)"
+    "ema_cross": 1,    # "EMA crossover ... Xc ago" -> ema_score += 1 flat
+
+    # ── Bollinger Bands ───────────────────────────────────────────────────
+    "bb_near":    0.5, # "BB near upper/lower (...0.5pt)"
+    "bb_mid":     1.0, # "BB mid support/resistance (...1pt)"
+    "bb_squeeze": 0,   # "BB squeeze (..., context, 0pt)" -- explicitly unscored
+
+    # ── RSI level signals ─────────────────────────────────────────────────
+    "rsi_ob":       0.5, # "RSI OVERBOUGHT (X, 0.5pt)"; = CONFLUENCE_SCORES["rsi_ob"], WEIGHT_LAB_VERIFIED_TAGS confirmed
+    "rsi_os":       0.5, # "RSI OVERSOLD (X, 0.5pt)"; = CONFLUENCE_SCORES["rsi_os"], WEIGHT_LAB_VERIFIED_TAGS confirmed
+    "rsi_50_cross": 0,   # explicitly commented "context for Chev, not a scored confluence" -- never added to rsi_level_score
+
+    # ── Liquidity sweep ───────────────────────────────────────────────────
+    "sweep": 3,        # "Sweep:buy_side/sell_side (3pt)"
+
+    # ── Chart patterns (only the two branches verified unambiguous) ──────
+    "pattern_breakout":     2.0, # breakout, no volume -> pattern_score = 2.0
+    "pattern_breakout_vol": 3.0, # breakout + volume_confirmed -> pattern_score = 3.0
+    "pattern_high_conf":    1.5, # both trigger paths (conf>=0.70 forming, OR volume-confirmed alone) score 1.5 -- verified safe despite covering two dexter branches
+
+    # ── Derivatives (Binance futures, derivs.py classify_derivs()) ───────
+    "oi_divergence": 1.5, # both OI-divergence branches (px up/oi down, px down/oi down) score 1.5
+    "oi_confirm":    1.0, # both OI-confirmation branches (px up/oi up, px down/oi up) score 1.0
+
+    # ── Fast intraday structural anchors ──────────────────────────────────
+    # All four explicitly "(X% away, 0pt, context)" -- gate a struct pre-check,
+    # never added to sr_score/vp_score/total_score.
+    "fast_anchor_pdh":     0,
+    "fast_anchor_pdl":     0,
+    "fast_anchor_or_high": 0,
+    "fast_anchor_or_low":  0,
+
+    # ── Watch-only signals ────────────────────────────────────────────────
+    "watch_signal": 0, # GP-approach reasons; explicitly commented "Weight: 0pt -- preparation signal only, never an entry trigger"
 }
 
 

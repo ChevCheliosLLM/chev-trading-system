@@ -26,6 +26,11 @@ FUNDING_EXTREME = 0.0010 # 0.10% — very crowded
 OI_MOVE_PCT     = 2.0    # 6h OI change (%) considered meaningful
 PRICE_MOVE_PCT  = 1.0    # 6h price change (%) considered meaningful
 
+# PHASE 6A: Dexter overwrites this with its SCAN_WEIGHTS dict at import
+# time (derivs.SCAN_WEIGHTS = SCAN_WEIGHTS). The {} default keeps this
+# module's standalone self-test working with no Dexter present.
+SCAN_WEIGHTS = {}
+
 
 def get_derivs(symbol):
     """Fetch funding + OI context for a Binance USDT-M perp.
@@ -101,21 +106,29 @@ def classify_derivs(funding_rate, oi_chg_6h_pct, price_chg_6h_pct):
         px_up   = price_chg_6h_pct >=  PRICE_MOVE_PCT
         px_down = price_chg_6h_pct <= -PRICE_MOVE_PCT
         if px_up and oi_down:
+            # recalibrated 2026-07-13, shadow-ledger Ridge proposal, ratified by Kev (1.5->2.5)
+            _oi_div_pts = SCAN_WEIGHTS.get("oi_divergence", 2.5)
             reasons.append(f"OI divergence — price {price_chg_6h_pct:+.1f}% on OI "
-                           f"{oi_chg_6h_pct:+.1f}% — weak rally, bearish (1.5pt)")
-            score += 1.5
+                           f"{oi_chg_6h_pct:+.1f}% — weak rally, bearish ({_oi_div_pts:g}pt)")
+            score += _oi_div_pts
         elif px_down and oi_down:
+            # recalibrated 2026-07-13, shadow-ledger Ridge proposal, ratified by Kev (1.5->2.5)
+            _oi_div_pts = SCAN_WEIGHTS.get("oi_divergence", 2.5)
             reasons.append(f"OI divergence — price {price_chg_6h_pct:+.1f}% on OI "
-                           f"{oi_chg_6h_pct:+.1f}% — short covering, bullish (1.5pt)")
-            score += 1.5
+                           f"{oi_chg_6h_pct:+.1f}% — short covering, bullish ({_oi_div_pts:g}pt)")
+            score += _oi_div_pts
         elif px_up and oi_up:
+            # recalibrated 2026-07-13, shadow-ledger Ridge proposal, ratified by Kev (1.0->0.0)
+            _oi_conf_pts = SCAN_WEIGHTS.get("oi_confirm", 0.0)
             reasons.append(f"OI confirmation — price {price_chg_6h_pct:+.1f}% with OI "
-                           f"{oi_chg_6h_pct:+.1f}% — bullish participation (1pt)")
-            score += 1.0
+                           f"{oi_chg_6h_pct:+.1f}% — bullish participation ({_oi_conf_pts:g}pt)")
+            score += _oi_conf_pts
         elif px_down and oi_up:
+            # recalibrated 2026-07-13, shadow-ledger Ridge proposal, ratified by Kev (1.0->0.0)
+            _oi_conf_pts = SCAN_WEIGHTS.get("oi_confirm", 0.0)
             reasons.append(f"OI confirmation — price {price_chg_6h_pct:+.1f}% with OI "
-                           f"{oi_chg_6h_pct:+.1f}% — bearish participation (1pt)")
-            score += 1.0
+                           f"{oi_chg_6h_pct:+.1f}% — bearish participation ({_oi_conf_pts:g}pt)")
+            score += _oi_conf_pts
 
     return reasons, score
 
@@ -144,25 +157,30 @@ if __name__ == "__main__":
     r, s = classify_derivs(0.0005, None, None)
     check("funding boundary", s == 2.0)
 
-    # 5. Price up + OI down -> bearish divergence 1.5pt
+    # 5. Price up + OI down -> bearish divergence, oi_divergence pts
+    #    (recalibrated 2026-07-13, shadow-ledger Ridge proposal, ratified by Kev: 1.5->2.5 --
+    #    this self-test still asserted the pre-recalibration value until this Phase 6A review
+    #    caught it; SCAN_WEIGHTS defaults to {} standalone so classify_derivs() falls back to
+    #    the 2.5/0.0 literal defaults baked into the .get() calls, matching current reality)
     r, s = classify_derivs(0.0, -3.0, 2.0)
-    check("weak rally", len(r) == 1 and "bearish" in r[0] and s == 1.5)
+    check("weak rally", len(r) == 1 and "bearish" in r[0] and s == 2.5)
 
-    # 6. Price down + OI down -> bullish divergence (short covering)
+    # 6. Price down + OI down -> bullish divergence (short covering), oi_divergence pts
     r, s = classify_derivs(0.0, -3.0, -2.0)
-    check("short covering", len(r) == 1 and "bullish" in r[0] and s == 1.5)
+    check("short covering", len(r) == 1 and "bullish" in r[0] and s == 2.5)
 
-    # 7. Price up + OI up -> bullish confirmation 1pt
+    # 7. Price up + OI up -> bullish confirmation, oi_confirm pts
+    #    (recalibrated 2026-07-13: 1.0->0.0)
     r, s = classify_derivs(0.0, 3.0, 2.0)
-    check("bull participation", len(r) == 1 and "bullish" in r[0] and s == 1.0)
+    check("bull participation", len(r) == 1 and "bullish" in r[0] and s == 0.0)
 
-    # 8. Price down + OI up -> bearish confirmation 1pt
+    # 8. Price down + OI up -> bearish confirmation, oi_confirm pts
     r, s = classify_derivs(0.0, 3.0, -2.0)
-    check("bear participation", len(r) == 1 and "bearish" in r[0] and s == 1.0)
+    check("bear participation", len(r) == 1 and "bearish" in r[0] and s == 0.0)
 
-    # 9. Funding + OI stack -> two reasons, points sum
+    # 9. Funding + OI stack -> two reasons, points sum (3.0 extreme funding + 2.5 oi_divergence)
     r, s = classify_derivs(0.0011, -3.0, 2.0)
-    check("stacked signals", len(r) == 2 and s == 4.5)
+    check("stacked signals", len(r) == 2 and s == 5.5)
 
     # 10. None OI / None price -> funding-only path, no crash
     r, s = classify_derivs(0.0011, None, 5.0)

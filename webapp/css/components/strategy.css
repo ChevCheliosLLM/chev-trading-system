@@ -67,6 +67,32 @@
 .stratScoreCard .v.good { color: var(--green); }
 .stratScoreCard .v.bad  { color: var(--red); }
 
+/* PHASE 6D PART 5: "Today at a glance" strip -- always visible at the top of the
+   Strategy panel regardless of which tab is active, so the four questions Kev
+   actually wakes up with (win rate, today's trades, Weight Lab state, last
+   playbook update) are answerable without opening a single tab. Same card
+   language as .stratScoreCard on purpose -- a native part of this panel, not a
+   bolted-on widget. */
+#stratGlanceStrip {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+  padding: 10px 20px; border-bottom: 1px solid var(--card-border);
+}
+.stratGlanceCard {
+  background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--card-radius);
+  padding: 8px 12px; cursor: pointer; transition: filter 0.15s;
+}
+.stratGlanceCard:hover { filter: brightness(1.15); }
+.stratGlanceCard .k {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--txt2);
+  font-family: 'Inter', sans-serif;
+}
+.stratGlanceCard .v {
+  font-size: 12.5px; font-weight: 600; color: var(--txt1); font-family: 'Inter', sans-serif;
+  margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.stratGlanceCard .v.good { color: var(--green); }
+.stratGlanceCard .v.bad  { color: var(--red); }
+
 .stratSectionLabel {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--txt2);
   font-family: 'Inter', sans-serif; font-weight: 600; margin: 20px 0 10px;

@@ -39,6 +39,19 @@
   function fmtR(n) { return (n >= 0 ? '+' : '') + n.toFixed(2); }
   function fmtNum(n) { return (n >= 0 ? '+' : '') + (Math.round(n * 100) / 100); }
 
+  // PHASE 6D: shared "label + raw code" renderer -- friendly name in normal
+  // text, raw tag code in small muted text beside/beneath it, used everywhere
+  // a tag is displayed. Reuses friendlyTag()/TAG_REGISTRY (already used
+  // throughout this file and the rest of the app, backed by /api/tag_registry)
+  // rather than a second, separately-maintained label dictionary -- one
+  // registry, everything reads from it.
+  function _wlTagLabel(tag, inline) {
+    const rawStyle = inline
+      ? "font-family:'Share Tech Mono',monospace;font-size:9.5px;color:var(--txt3);margin-left:6px"
+      : "display:block;font-family:'Share Tech Mono',monospace;font-size:9.5px;color:var(--txt3);margin-top:1px";
+    return `${esc(friendlyTag(tag))}<span style="${rawStyle}">${esc(tag)}</span>`;
+  }
+
   function _wlBody() { return document.getElementById('weightLabBody'); }
 
   // Never call .json() on a non-JSON body (e.g. a 404's HTML error page, or a
@@ -71,6 +84,63 @@
     return `<div style="padding:10px 12px;border:1px solid ${c.border};background:${c.bg};
       border-radius:6px;color:${c.fg};font-family:'Inter',sans-serif;font-size:11.5px;
       margin-bottom:10px;line-height:1.5">${html}</div>`;
+  }
+
+  // PHASE 6D PART 2: freeze-progress rate estimate. In-memory only (no
+  // localStorage, resets on page reload -- fine, this is a rough "how's it
+  // going" read, never a persisted fact). This panel has no auto-polling
+  // (see the file header -- first-open + manual refresh-button only), so a
+  // "sample" is really "whenever Kev last checked in"; the rate math doesn't
+  // care how sparse that is, it just measures real elapsed wall-clock time
+  // between check-ins. Capped small buffer; rate is computed oldest-vs-newest
+  // in the buffer so one noisy refresh-to-refresh gap doesn't swing the
+  // estimate wildly. Buffer resets whenever frozen_since changes (a new
+  // freeze window started) so a stale rate from a PREVIOUS freeze can never
+  // leak into a new one's estimate.
+  let _wlFreezeSamples = [];
+  let _wlFreezeSampleSince = null;
+  const _WL_FREEZE_SAMPLE_CAP = 6;
+
+  function _wlRecordFreezeSample(frozenSince, recordsSinceChange) {
+    if (_wlFreezeSampleSince !== frozenSince) {
+      _wlFreezeSamples = [];
+      _wlFreezeSampleSince = frozenSince;
+    }
+    _wlFreezeSamples.push({ t: Date.now(), n: recordsSinceChange });
+    if (_wlFreezeSamples.length > _WL_FREEZE_SAMPLE_CAP) _wlFreezeSamples.shift();
+  }
+
+  // Returns '' (no estimate) whenever the math isn't trustworthy yet -- fewer
+  // than 2 samples, no elapsed time, or a zero/negative record delta (can
+  // happen if the freeze window itself just changed). Never a placeholder
+  // guess dressed as a real number.
+  function _wlFreezeEtaText(needed, recordsSinceChange) {
+    if (_wlFreezeSamples.length < 2) return '';
+    const oldest = _wlFreezeSamples[0];
+    const newest = _wlFreezeSamples[_wlFreezeSamples.length - 1];
+    const dtMin = (newest.t - oldest.t) / 60000;
+    const dn = newest.n - oldest.n;
+    if (dtMin <= 0 || dn <= 0) return '';
+    const perMin = dn / dtMin;
+    const remaining = needed - recordsSinceChange;
+    if (remaining <= 0 || perMin <= 0) return '';
+    const etaMin = remaining / perMin;
+    if (etaMin < 90) return `~${Math.max(1, Math.round(etaMin))} min to go`;
+    const etaHr = etaMin / 60;
+    return `~${etaHr < 10 ? etaHr.toFixed(1) : Math.round(etaHr)} hr to go`;
+  }
+
+  function _wlFreezeBanner(prop) {
+    _wlRecordFreezeSample(prop.frozen_since, prop.records_since_last_change);
+    const needed = prop.needed > 0 ? prop.needed : 0;
+    const pct = needed > 0 ? Math.min(100, Math.max(0, (prop.records_since_last_change / needed) * 100)) : 0;
+    const sinceTxt = prop.frozen_since ? ` (since ${esc(prop.frozen_since)} UTC)` : '';
+    const eta = _wlFreezeEtaText(needed, prop.records_since_last_change);
+    const etaTxt = eta ? ` — ${eta}` : '';
+    const bar = `<div style="margin-top:8px;height:8px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden">
+      <div style="height:100%;width:${pct}%;background:rgba(240,180,41,0.55);border-radius:4px"></div>
+    </div>`;
+    return _wlBanner('warn', `Collecting fresh data since your last change${sinceTxt} — ${prop.records_since_last_change} of ${prop.needed} new records${etaTxt}. Proposals resume when the window fills.${bar}`);
   }
 
   // ── Server-side preview + in-panel confirm (shared by approve / approve-all
@@ -233,7 +303,7 @@
       const e = entries[i];
       return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;
         font-family:'Share Tech Mono',monospace;font-size:11px">
-        <span style="flex:1">${esc(friendlyTag(e.tag))} ${e.delta > 0 ? '+' : ''}${e.delta}pt
+        <span style="flex:1">${_wlTagLabel(e.tag, true)} ${e.delta > 0 ? '+' : ''}${e.delta}pt
           ${e.source === 'manual' ? '<span style="opacity:0.6">(manual)</span>' : ''}</span>
         <button class="wlUndoBtn" data-index="${i}" style="background:none;
           border:1px solid rgba(240,180,41,0.4);color:#f0b429;border-radius:4px;
@@ -243,22 +313,161 @@
     return _wlBanner('warn', `⚠ ${pendingIdx.length} approved change(s) not yet live — takes effect within one scan cycle (~5 min), no restart needed.<div style="margin-top:6px">${rows}</div>`);
   }
 
-  function _wlDigestHeader(verifiedRows, lastReviewedAt) {
+  // PHASE 6D PART 1: "what the strategy believes" -- one row per verified-
+  // mapping tag in the payload, horizontal bar sized by current_weight
+  // (largest = full width), colored by what the shadow evidence currently
+  // says. Renders from whatever proposals array it's given -- loadWeightLab
+  // decides whether that's the fresh payload or the cached one during a
+  // freeze. No backend calls of its own; every field it reads (mapping,
+  // current_weight, significant, coef) is already in /api/weight_proposal.
+  function _wlSnapshotPanel(proposals) {
+    const verified = (proposals || []).filter(p =>
+      (p.mapping || 'unmapped') === 'verified' && p.current_weight != null);
+    if (!verified.length) {
+      return `<div style="font-family:'Inter',sans-serif;font-size:10.5px;color:var(--txt3);padding:4px 0 10px">snapshot appears after the first analysis</div>`;
+    }
+    const sorted = verified.slice().sort((a, b) => b.current_weight - a.current_weight);
+    // Normalize bar width against the largest POSITIVE weight only -- a future
+    // negative baseline shouldn't compress every other bar's scale.
+    const positiveMax = Math.max(0.01, ...sorted.map(p => p.current_weight).filter(w => w > 0));
+
+    // .tBull/.tBear (toasts.css) are this app's real green/red convention --
+    // the CSS variable names in the original brief (--bg-success etc.) don't
+    // exist anywhere in this codebase and would render no color at all.
+    const COLORS = {
+      earning:  { fg: '#089981', bg: 'rgba(8,153,129,0.16)' },
+      costing:  { fg: '#f23645', bg: 'rgba(242,54,69,0.16)' },
+      unproven: { fg: 'var(--txt3)', bg: 'rgba(255,255,255,0.07)' },
+    };
+
+    const rows = sorted.map(p => {
+      const status = !p.significant ? 'unproven' : (p.coef > 0 ? 'earning' : 'costing');
+      const c = COLORS[status];
+      const barPct = p.current_weight > 0 ? Math.max(4, (p.current_weight / positiveMax) * 100) : 3;
+      return `
+        <div style="display:flex;align-items:center;gap:8px;padding:3px 0">
+          <div style="width:112px;min-width:112px;overflow:hidden">
+            <div style="font-family:'Inter',sans-serif;font-size:11px;color:var(--txt1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(friendlyTag(p.tag))}</div>
+            <div style="font-family:'Share Tech Mono',monospace;font-size:9.5px;color:var(--txt3)">${esc(p.tag)}</div>
+          </div>
+          <div style="flex:1;height:14px;background:rgba(255,255,255,0.04);border-radius:3px;overflow:hidden">
+            <div style="height:100%;width:${barPct}%;background:${c.bg};border-left:2px solid ${c.fg};border-radius:3px"></div>
+          </div>
+          <div style="width:40px;text-align:right;font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--txt1)">${p.current_weight}pt</div>
+          <div style="width:58px;text-align:right;font-family:'Inter',sans-serif;font-size:9.5px;font-weight:700;color:${c.fg}">${status}</div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div style="border:1px solid rgba(147,112,219,0.25);border-radius:6px;padding:10px 12px;
+        margin-bottom:12px;background:rgba(255,255,255,0.015)">
+        <div style="font-family:'Inter',sans-serif;font-size:11.5px;font-weight:700;color:var(--txt1);margin-bottom:6px">
+          Strategy snapshot — what the weights currently say</div>
+        <div>${rows}</div>
+      </div>`;
+  }
+
+  // PHASE 6D PART 3: change history -- "date · label old → new · source",
+  // with an honest per-entry verdict beneath. Everything here is display
+  // logic only; /api/weight_history does all the actual computation
+  // (before/after split, win rates, the too_early gate).
+  const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function _wlShortDate(ts) {
+    // ts format is always "YYYY-MM-DD HH:MM:SS" (UTC), the backend's own
+    // strftime convention (_reload_weight_overrides, _build_weight_history_payload).
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ts || '');
+    if (!m) return esc(ts || '');
+    return `${MONTH_ABBR[parseInt(m[2], 10) - 1] || m[2]} ${parseInt(m[3], 10)}`;
+  }
+
+  function _wlHistorySourceHtml(source) {
+    // weight_lab (an approved regression proposal) and manual (Kev's own
+    // direct edit / the Phase 3 freeze markers) are both Kev-approved paths --
+    // shown the same friendly way, with the raw source word kept muted
+    // beside it so the distinction isn't lost, just de-emphasized.
+    const friendly = (source === 'weight_lab' || source === 'manual') ? 'ratified by you' : esc(source || 'unknown');
+    return `${friendly}<span style="font-family:'Share Tech Mono',monospace;font-size:9.5px;color:var(--txt3);margin-left:6px">${esc(source || '')}</span>`;
+  }
+
+  // Derives "old → new" from the tag's CURRENT live weight (current_weight,
+  // from the already-fetched /api/weight_proposal payload) minus this
+  // entry's own delta. Only ever called when this is the tag's ONLY entry in
+  // the whole timeline (checked by the caller) -- with 2+ entries for the
+  // same tag, intermediate historical values can't be safely reconstructed
+  // from current_weight alone (ordering/compounding would need re-deriving
+  // the full delta sequence), so those cases fall back to showing the delta.
+  function _wlHistoryOldNew(tag, delta, proposalsByTag) {
+    const row = proposalsByTag[tag];
+    if (!row || row.current_weight == null) return null;
+    return { old: row.current_weight - delta, new: row.current_weight };
+  }
+
+  function _wlHistoryEntry(e, tagCounts, proposalsByTag) {
+    const date = _wlShortDate(e.applied_at || e.approved_at);
+
+    // delta=0 entries are freeze markers (Phase 3's hand-edit reconciliation,
+    // or any future one) -- one muted line, no verdict block, per this
+    // phase's own explicit spec.
+    if (e.delta === 0) {
+      const note = (e.evidence && e.evidence.note) ? e.evidence.note : `${friendlyTag(e.tag)} freeze marker recorded`;
+      return `<div style="font-family:'Inter',sans-serif;font-size:10px;color:var(--txt3);padding:4px 0;opacity:0.7">
+        ${date} — marker: ${esc(note)}</div>`;
+    }
+
+    const canDerive = (tagCounts[e.tag] || 0) === 1;
+    const derived = canDerive ? _wlHistoryOldNew(e.tag, e.delta, proposalsByTag) : null;
+    const changeText = derived
+      ? `${derived.old}pt → ${derived.new}pt`
+      : `(${e.delta > 0 ? '+' : ''}${e.delta}pt)`;
+
+    const v = e.verdict || {};
+    const verdictLine = v.verdict_status === 'too_early'
+      ? `too early to judge (${v.n_after || 0} of ${v.needed || 200} records)`
+      : `Since then: win rate ${v.winrate_after != null ? v.winrate_after + '%' : 'n/a'}${v.winrate_before != null ? ` (was ${v.winrate_before}%)` : ''}`;
+
+    return `
+      <div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06)">
+        <div style="font-family:'Inter',sans-serif;font-size:11px;color:var(--txt1)">
+          ${date} — ${_wlTagLabel(e.tag, true)} ${changeText} · ${_wlHistorySourceHtml(e.source)}
+        </div>
+        <div style="font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--txt2);margin-top:2px">
+          ${esc(verdictLine)}
+        </div>
+      </div>`;
+  }
+
+  function _wlHistorySection(timeline, proposalsByTag) {
+    if (!timeline || !timeline.length) {
+      return `<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:10px;
+        font-family:'Inter',sans-serif;font-size:10.5px;color:var(--txt3)">No weight changes recorded yet.</div>`;
+    }
+    const tagCounts = {};
+    timeline.forEach(e => { tagCounts[e.tag] = (tagCounts[e.tag] || 0) + 1; });
+    const rows = timeline.map(e => _wlHistoryEntry(e, tagCounts, proposalsByTag)).join('');
+    return `
+      <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:10px">
+        <div style="font-family:'Inter',sans-serif;font-size:11px;font-weight:700;color:var(--txt1);margin-bottom:4px">
+          Change history</div>
+        <div>${rows}</div>
+      </div>`;
+  }
+
+  // PHASE 6C: last_reviewed_at moved to its own always-visible top-of-panel
+  // line (see loadWeightLab) -- this header no longer carries it, so it no
+  // longer needs to be gated on that field at all, just the row count.
+  function _wlDigestHeader(verifiedRows) {
     if (verifiedRows.length < 2) return '';
-    const reviewedLine = lastReviewedAt
-      ? `since your last review (${esc(lastReviewedAt)} UTC)`
-      : `— no review recorded yet`;
     const tableRows = verifiedRows.map(p => `
       <div style="display:flex;justify-content:space-between;gap:8px;font-family:'Share Tech Mono',monospace;
         font-size:10.5px;padding:2px 0;color:var(--txt2)">
-        <span>${esc(friendlyTag(p.tag))}</span>
+        <span>${_wlTagLabel(p.tag, true)}</span>
         <span>n=${p.n} · ${fmtR(p.coef)}R · ${p.current_weight}→${p.effective_weight_preview}pt</span>
       </div>`).join('');
     return `
       <div style="border:1px solid var(--gold,#d4af37);border-radius:6px;padding:12px;margin-bottom:12px;
            background:rgba(212,175,55,0.06)">
         <div style="font-family:'Inter',sans-serif;font-size:12.5px;font-weight:700;color:var(--gold,#d4af37)">
-          📋 Weekly digest — ${verifiedRows.length} verified proposals ${reviewedLine}</div>
+          📋 Weekly digest — ${verifiedRows.length} verified proposals</div>
         <div style="margin-top:8px">${tableRows}</div>
         <div style="display:flex;gap:8px;margin-top:10px">
           <button id="wlApproveAllBtn" style="flex:1;padding:6px;border-radius:5px;cursor:pointer;
@@ -272,7 +481,25 @@
       </div>`;
   }
 
+  // PHASE 6C: always-visible top-of-panel line -- previously last_reviewed_at
+  // only ever appeared inside _wlDigestHeader, which itself only renders with
+  // 2+ actionable proposals, so it was invisible the rest of the time.
+  function _wlLastReviewedLine(lastReviewedAt) {
+    const text = lastReviewedAt ? `Last reviewed ${esc(lastReviewedAt)} UTC` : 'Not reviewed yet';
+    return `<div style="font-family:'Inter',sans-serif;font-size:10px;color:var(--txt3);margin-bottom:8px">${text}</div>`;
+  }
+
+  // PHASE 6C: this function now only ever renders the "actionable" subset --
+  // significant AND verified AND the backend gave a real delta/current_weight
+  // to act on (see loadWeightLab's `actionable` filter). Everything that used
+  // to render an inline "not approvable" badge here (unverified/unmapped, or
+  // simply not significant) now lives in _wlWatchingSection instead, each
+  // with its own plain-English reason -- so a card only ever appears next to
+  // a button that actually does something.
   function _wlProposalCard(p) {
+    const canPropose = (p.mapping || 'unmapped') === 'verified' && p.proposed_delta != null && p.current_weight != null;
+    if (!canPropose) return '';  // defensive no-op; loadWeightLab should never pass one of these here
+
     const name = friendlyTag(p.tag);
     const evLine = `n=${p.n} · effect ${fmtR(p.coef)}R · 95% CI [${fmtR(p.ci[0])}, ${fmtR(p.ci[1])}]`;
     const hasCross = p.n_with != null && p.winrate_with != null && p.winrate_without != null;
@@ -280,74 +507,84 @@
       ? `With this tag: ${p.winrate_with}% WR, ${fmtR(p.avg_netR_with)}R avg · Without: ${p.winrate_without}% WR, ${fmtR(p.avg_netR_without)}R avg`
       : '';
     const conflict = p.agreement === 'conflict';
-    // Missing mapping (e.g. a stale cached payload from before this field existed)
-    // is treated as 'unmapped' -- never render an Approve button on an assumption.
-    const mapping = p.mapping || 'unmapped';
-    // The mapping gate is checked client-side too, independent of whatever
-    // current_weight/proposed_delta the payload happens to carry -- a stale
-    // cache must never be able to resurrect an Approve button for a
-    // now-unverified tag.
-    const canPropose = mapping === 'verified' && p.proposed_delta != null && p.current_weight != null;
-    const deltaLabel = canPropose ? (p.proposed_delta > 0 ? `+${p.proposed_delta}` : `${p.proposed_delta}`) : null;
-    const weightLine = canPropose
-      ? `${p.current_weight}pt → ${p.effective_weight_preview}pt`
-      : mapping === 'unverified'
-        ? 'current: n/a (unverified mapping)'
-        : 'current: n/a (unmapped)';
 
-    let actionEl = '';
-    if (canPropose) {
-      actionEl = `<button class="wlApproveBtn" data-tag="${esc(p.tag)}" data-delta="${p.proposed_delta}"
-           data-evidence='${esc(JSON.stringify({ n: p.n, coef: p.coef, ci: p.ci }))}'
-           style="margin-left:auto;font-family:'Share Tech Mono',monospace;font-size:11px;
-             font-weight:700;padding:4px 10px;border-radius:5px;cursor:pointer;
-             ${conflict
-               ? 'background:rgba(240,180,41,0.12);border:1px solid rgba(240,180,41,0.5);color:#f0b429'
-               : 'background:rgba(212,175,55,0.12);border:1px solid var(--gold);color:var(--gold)'}">
-           APPROVE ${deltaLabel}</button>`;
-    } else if (mapping === 'unverified') {
-      actionEl = `<span title="Same labeller code as a CONFLUENCE_SCORES key, but the mechanic behind it hasn't been confirmed identical — see handoff PHASE 16's no-aliasing rule."
-        style="margin-left:auto;font-family:'Share Tech Mono',monospace;font-size:9.5px;font-weight:700;
-          padding:4px 10px;border-radius:5px;color:var(--txt3);background:rgba(255,255,255,0.03);
-          border:1px dashed rgba(255,255,255,0.15);cursor:help">same name, unconfirmed mechanic — not approvable</span>`;
+    // Plain-English one-liner in place of the bare tag name -- "<TAG> setups
+    // are losing/making money — proposal: <cur> → <new>?" The direction is
+    // read straight off proposed_delta's sign, which the server itself derives
+    // directly from coef's sign (dexter.py: "delta = 1 if coef > 0 else -1"),
+    // so this is never an independent guess about direction.
+    const deltaLabel = p.proposed_delta > 0 ? `+${p.proposed_delta}` : `${p.proposed_delta}`;
+    const losing = p.proposed_delta < 0;
+    const oneLiner = `${esc(name)} setups are ${losing ? 'losing' : 'making'} money — proposal: ${p.current_weight} → ${p.effective_weight_preview}?`;
+
+    // ✓/⚠ badge: previously only the conflict (⚠) state was ever rendered --
+    // agreement === 'agree' produced no visible indicator at all, so Kev only
+    // ever saw a warning, never the reassurance that the raw numbers back up
+    // the regression.
+    let agreementBadge = '';
+    if (p.agreement === 'conflict') {
+      agreementBadge = `<span style="font-size:9.5px;font-weight:700;color:#f0b429;
+        background:rgba(240,180,41,0.12);border:1px dashed rgba(240,180,41,0.5);
+        border-radius:10px;padding:2px 7px" title="Ridge regression and the simple raw-average comparison point in different directions -- treat this proposal with extra suspicion">⚠ regression vs raw stats disagree</span>`;
+    } else if (p.agreement === 'agree') {
+      agreementBadge = `<span style="font-size:9.5px;font-weight:700;color:#5ee6a0;
+        background:rgba(94,230,160,0.10);border:1px solid rgba(94,230,160,0.35);
+        border-radius:10px;padding:2px 7px" title="Ridge regression and the simple raw-average comparison agree on direction">✓ regression and raw stats agree</span>`;
     }
-    const unmappedNote = mapping === 'unmapped'
-      ? `<div style="font-size:9px;color:var(--txt3);margin-top:4px;font-family:'Inter',sans-serif">no live weight uses this code — informational only</div>`
-      : '';
+
+    const actionEl = `<button class="wlApproveBtn" data-tag="${esc(p.tag)}" data-delta="${p.proposed_delta}"
+         data-evidence='${esc(JSON.stringify({ n: p.n, coef: p.coef, ci: p.ci }))}'
+         style="margin-left:auto;font-family:'Share Tech Mono',monospace;font-size:11px;
+           font-weight:700;padding:4px 10px;border-radius:5px;cursor:pointer;
+           ${conflict
+             ? 'background:rgba(240,180,41,0.12);border:1px solid rgba(240,180,41,0.5);color:#f0b429'
+             : 'background:rgba(212,175,55,0.12);border:1px solid var(--gold);color:var(--gold)'}">
+         APPROVE ${deltaLabel}</button>`;
 
     return `
       <div style="border:1px solid rgba(147,112,219,0.25);border-radius:6px;padding:10px 12px;
         margin-bottom:8px;background:rgba(255,255,255,0.02)">
-        <div style="font-family:'Inter',sans-serif;font-size:12px;font-weight:600;color:var(--txt1)"
-             title="${esc(p.tag)}">${esc(name)}</div>
+        <div style="font-family:'Inter',sans-serif;font-size:12.5px;font-weight:600;color:var(--txt1)">${oneLiner}</div>
+        <div style="font-family:'Share Tech Mono',monospace;font-size:9.5px;color:var(--txt3);margin-top:1px">${esc(p.tag)}</div>
         <div style="font-family:'Share Tech Mono',monospace;font-size:10.5px;color:var(--txt2);margin-top:3px">${esc(evLine)}</div>
         ${crossLine ? `<div style="font-family:'Inter',sans-serif;font-size:10.5px;color:var(--txt2);margin-top:3px">${esc(crossLine)}</div>` : ''}
-        ${conflict ? `<div style="margin-top:4px"><span style="font-size:9.5px;font-weight:700;color:#f0b429;
-             background:rgba(240,180,41,0.12);border:1px dashed rgba(240,180,41,0.5);
-             border-radius:10px;padding:2px 7px">⚠ regression and raw stats disagree — treat with suspicion</span></div>` : ''}
+        ${agreementBadge ? `<div style="margin-top:4px">${agreementBadge}</div>` : ''}
         <div style="display:flex;align-items:center;gap:8px;margin-top:6px;
              font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--txt1)">
-          <span>${esc(weightLine)}</span>
+          <span>${p.current_weight}pt → ${p.effective_weight_preview}pt</span>
           ${actionEl}
         </div>
-        ${unmappedNote}
         <div style="font-size:9px;color:var(--txt3);margin-top:6px;font-family:'Inter',sans-serif">
           Proposal only. Nothing changes until you approve — live within one scan cycle after that.</div>
       </div>`;
   }
 
-  function _wlNonSignificant(rows) {
+  // PHASE 6C: replaces _wlNonSignificant. Now groups by APPROVABILITY, not
+  // significance -- every proposal that isn't in loadWeightLab's `actionable`
+  // set lands here (not significant yet, regardless of mapping; OR
+  // significant but unverified/unmapped), each with its own reason, so a
+  // significant-but-unapprovable tag no longer gets a full card mixed in next
+  // to real, actionable ones (a dead button dressed as a live one).
+  function _wlApprovabilityReason(p) {
+    const mapping = p.mapping || 'unmapped';
+    if (mapping === 'unmapped') return 'no live weight uses this code — informational only';
+    if (mapping === 'unverified') return 'same name, unconfirmed mechanic — not wired for one-tap changes yet';
+    return 'not enough evidence yet';  // verified mapping, just not significant
+  }
+
+  function _wlWatchingSection(rows) {
     if (!rows.length) return '';
     const items = rows.map(p => `
-      <div style="display:flex;gap:10px;padding:3px 0;font-family:'Share Tech Mono',monospace;
-        font-size:10.5px;color:var(--txt3)">
-        <span style="flex:1;opacity:0.7">${esc(friendlyTag(p.tag))}</span>
-        <span>n=${p.n} · ${fmtR(p.coef)}R</span>
+      <div style="display:flex;gap:10px;padding:4px 0;font-family:'Share Tech Mono',monospace;
+        font-size:10.5px;color:var(--txt3);align-items:baseline">
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0.8">${_wlTagLabel(p.tag, true)}</span>
+        <span style="white-space:nowrap">n=${p.n} · ${fmtR(p.coef)}R</span>
+        <span style="white-space:nowrap;font-family:'Inter',sans-serif;font-size:9.5px;opacity:0.7">${esc(_wlApprovabilityReason(p))}</span>
       </div>`).join('');
     return `
       <details style="margin-top:6px">
         <summary style="font-family:'Inter',sans-serif;font-size:10.5px;color:var(--txt3)">
-          Show ${rows.length} tags below the evidence bar</summary>
+          watching, not yet approvable (${rows.length})</summary>
         <div style="margin-top:6px">${items}</div>
       </details>`;
   }
@@ -648,7 +885,7 @@
     if (setBtn) setBtn.addEventListener('click', () => _wlManualSet(setBtn));
   }
 
-  function _wireCardButtons(root, verifiedSignificant) {
+  function _wireCardButtons(root, actionable) {
     root.querySelectorAll('.wlApproveBtn').forEach(btn => {
       btn.addEventListener('click', () => {
         const tag = btn.dataset.tag, delta = parseInt(btn.dataset.delta, 10);
@@ -661,7 +898,7 @@
       btn.addEventListener('click', () => _wlUndo(parseInt(btn.dataset.index, 10), btn));
     });
     const approveAllBtn = document.getElementById('wlApproveAllBtn');
-    if (approveAllBtn) approveAllBtn.addEventListener('click', () => _wlApproveAll(verifiedSignificant, approveAllBtn));
+    if (approveAllBtn) approveAllBtn.addEventListener('click', () => _wlApproveAll(actionable, approveAllBtn));
     const markReviewedBtn = document.getElementById('wlMarkReviewedBtn');
     if (markReviewedBtn) markReviewedBtn.addEventListener('click', () => _wlMarkReviewed(markReviewedBtn));
   }
@@ -681,50 +918,96 @@
       const ov = await _wlSafeJson(ovRes);
       _wlLoaded = true;
 
-      // Pin 2: cache proposals for the manual editor's FYI line whenever the
-      // engine actually returned something usable — on a self-test failure,
-      // deliberately leave the previous cache (stale-but-labeled) rather than
-      // wiping it to nothing.
-      if (prop.ok) _wlLastProposalPayload = prop.proposals || [];
+      // Pin 2: cache proposals for the manual editor's FYI line (and now also
+      // PHASE 6D's snapshot panel) whenever the engine actually returned real
+      // proposals — deliberately excludes a frozen response (its own
+      // "proposals" field is always []) so a freeze can never wipe out the
+      // last real snapshot; on a self-test failure the previous cache is left
+      // alone too (stale-but-labeled beats fresh-but-empty either way).
+      if (prop.ok && !prop.frozen) _wlLastProposalPayload = prop.proposals || [];
 
-      let html = _wlPendingBanner(ov.entries || []);
+      // Lookup used by the change-history section's old->new derivation --
+      // same fresh-or-cached source as the snapshot panel above.
+      const proposalsByTag = {};
+      (prop.ok && !prop.frozen ? (prop.proposals || []) : (_wlLastProposalPayload || []))
+        .forEach(p => { proposalsByTag[p.tag] = p; });
+
+      // PHASE 6D PART 3: change history fetched INDEPENDENTLY of the main
+      // Promise.all above -- a hiccup on this endpoint must never take down
+      // the core proposal-cards experience, only degrade this one section.
+      let historyHtml;
+      try {
+        const histRes = await _apiFetch('/api/weight_history');
+        const hist = await _wlSafeJson(histRes);
+        historyHtml = _wlHistorySection(hist.timeline || [], proposalsByTag);
+      } catch (e) {
+        historyHtml = `<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:10px;
+          font-family:'Inter',sans-serif;font-size:10.5px;color:var(--txt3)">Change history unavailable — ${esc(e.message)}</div>`;
+      }
+
+      // PHASE 6C: always visible at the top, regardless of which branch below
+      // this ends up taking (error/frozen/normal) -- previously last_reviewed_at
+      // only ever showed up inside the digest header, invisible the rest of
+      // the time.
+      let html = _wlLastReviewedLine(prop.last_reviewed_at);
+
+      // PHASE 6D PART 1: strategy snapshot at the very top, above everything
+      // else -- fresh data when available, the cache preserved above when
+      // frozen (never the frozen response's own empty "proposals": []).
+      if (prop.ok) {
+        html += _wlSnapshotPanel(prop.frozen ? _wlLastProposalPayload : (prop.proposals || []));
+      }
+      html += _wlPendingBanner(ov.entries || []);
 
       // Manual mode must work even if the regression engine is broken or
       // frozen (server-side rationale in /api/weight_manual/tags' docstring)
       // — so the manual section is appended and wired on EVERY reachable
-      // path below, not just the happy path.
+      // path below, not just the happy path. Change history is appended on
+      // every reachable path too, for the same reason -- it's Kev's record
+      // of what happened, independent of whether today's regression run
+      // succeeded.
       if (!prop.ok) {
         html += _wlBanner('error', 'Proposal engine failed its own math check — no suggestions will be shown. See Dexter logs.');
         html += _wlManualSectionHtml();
+        html += historyHtml;
         body.innerHTML = html;
         _wireManualSection();
         return;
       }
       if (prop.frozen) {
-        html += _wlBanner('warn', `Collecting fresh data since your last change — ${prop.records_since_last_change} of ${prop.needed} new records. Proposals resume when the window fills.`);
+        // PHASE 6D PART 2: progress bar + rate-based ETA, replacing the plain
+        // count line from 6C (which is still shown as text alongside the bar).
+        html += _wlFreezeBanner(prop);
         html += _wlManualSectionHtml();
+        html += historyHtml;
         body.innerHTML = html;
         _wireManualSection();
         return;
       }
 
       const proposals = prop.proposals || [];
-      const significant = proposals.filter(p => p.significant);
-      const nonSignificant = proposals.filter(p => !p.significant);
-      const verifiedSignificant = significant.filter(p =>
-        (p.mapping || 'unmapped') === 'verified' && p.proposed_delta != null && p.current_weight != null);
+      // PHASE 6C: "actionable" = the exact gate _wlProposalCard/approve-all
+      // require -- significant, verified mapping, and a real delta/current_weight
+      // to act on. Everything else (not significant yet, OR significant but
+      // unverified/unmapped) goes into the single "watching, not yet
+      // approvable" drawer instead of a full card. This answers "what can I
+      // actually do right now," not "what cleared the stats bar."
+      const actionable = proposals.filter(p =>
+        p.significant && (p.mapping || 'unmapped') === 'verified' && p.proposed_delta != null && p.current_weight != null);
+      const watching = proposals.filter(p => !actionable.includes(p));
 
-      html += _wlDigestHeader(verifiedSignificant, prop.last_reviewed_at);
+      html += _wlDigestHeader(actionable);
 
-      if (!significant.length) {
+      if (!actionable.length) {
         html += `<div style="font-family:'Inter',sans-serif;font-size:11.5px;color:var(--txt2);padding:6px 0">No tag currently clears the evidence bar. That's the system working, not broken.</div>`;
       } else {
-        html += significant.map(_wlProposalCard).join('');
+        html += actionable.map(_wlProposalCard).join('');
       }
-      html += _wlNonSignificant(nonSignificant);
+      html += _wlWatchingSection(watching);
       html += _wlManualSectionHtml();
+      html += historyHtml;
       body.innerHTML = html;
-      _wireCardButtons(body, verifiedSignificant);
+      _wireCardButtons(body, actionable);
       _wireManualSection();
     } catch (e) {
       body.innerHTML = _wlBanner('error', esc(e.message));

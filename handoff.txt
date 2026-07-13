@@ -8139,5 +8139,981 @@ webapp/js/ui/shortcuts-panel.js (new), webapp/js/ui/trade-pnl-card.js (new).
 RE-PASTE CHEV PROMPT: NO.
 
 ================================================================================
+=== 2026-07-13 — SHADOW COMBO INTELLIGENCE (Ale's commit "Shadow Analysis
+Included", 0710c1d) — RESTART: YES, DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: backend-only, committed and pushed directly by Ale (not built or
+verified by Claude — this entry documents it after the fact, from reading the
+real diff, since the commit itself didn't come with a handoff entry). First
+real bridge between the two previously-separate tracking systems: the SKIPPED-
+setup "shadow" tracking (counterfactual_report.py / labeller.py, quarantined
+in the UI as "optimistic, unconfirmed") and REAL posted trades. Up to now
+shadow outcomes only ever informed the Strategy dashboard's own Shadow
+Outcomes section — nothing fed them back into live trade-taking or the
+periodic learning session.
+
+WHAT CHANGED AND WHY:
+1. counterfactual_report.py — new `get_qualifying_shadow_combos(min_n=5,
+   min_total_r=0.0)`: filters the shadow (skipped-setup) tag-combo leaderboard
+   down to combos with enough resolved history (n>=5) AND a net-positive
+   shadow result. Read-only, no side effects. Two new module constants
+   (SHADOW_COMBO_MIN_N, SHADOW_COMBO_MIN_TOTAL_R) so both callers below share
+   one definition of "qualifying" instead of each hand-rolling their own bar.
+2. dexter.py, live trade posting (~13489) — when a new trade is posted, its
+   Dexter-computed features (labeller.normalize_reasons() tokens — the SAME
+   touch-count/pattern vocabulary as sr_multi/sr_single, never Chev's own
+   typed tags) are checked against every qualifying shadow combo. If this
+   trade's features are a superset of a qualifying combo, the trade is
+   stamped `shadow_combo_match` with that combo's name (picking the
+   highest-total_R match if more than one qualifies). Wrapped in try/except —
+   a failure here can't block the trade itself, it just leaves the tag blank.
+3. dexter.py, `_do_postmortem` (~5249) — `shadow_combo_match` is now carried
+   into the closed-trade journal entry, so it survives to be read back later.
+4. dexter.py, `_run_learning_session` (~4611) — new "SHADOW COMBO
+   INTELLIGENCE" block in the periodic playbook-rewrite prompt: for every
+   qualifying shadow combo, states its shadow win rate and total R, THEN
+   cross-references the journal for any REAL trades that carried that same
+   `shadow_combo_match` stamp and states their real W/L record next to it.
+   The prompt explicitly instructs: label every claim "tentative (shadow
+   only)" until at least 3 real confirmed trades exist for that combo — this
+   is a real, no client-side-hallucination bridge, not a promotion of shadow
+   data to trusted status. New section name added to
+   `_PLAYBOOK_SECTION_NAMES` so this can appear as its own named block in the
+   generated playbook file. `_REFERENCE_BLOCK_CHAR_CAP` bumped 1200->1350 to
+   fit it (small token-budget increase, not a structural change).
+5. labeller.py — unrelated small bugfix bundled into the same commit: two of
+   the ordered reason-text-to-tag-token mappings had a real ordering/matching
+   bug. "GP" was being checked before the more specific "[WATCH ...]" prefixes,
+   so a string like "[WATCH — approaching GP] GP zone..." could misfire as
+   the unrelated gp_sr_combo token instead of watch_signal. Reordered so
+   [WATCH...] prefixes are checked first. Also: Dexter sometimes emits an
+   em-dash (—) in these strings rather than a plain hyphen (-); the regex only
+   matched the hyphen form, silently missing the em-dash variant entirely.
+   Both the hyphen and em-dash forms are now matched.
+BENEFIT: the Shadow Outcomes system stops being a one-way, forever-unverified
+guess — setups Chev skipped that would have won can now be watched for their
+real-world equivalent showing up in an actual posted trade, with an honest,
+labeled comparison of "what shadow-tracking predicted" vs "what really
+happened" once enough real trades exist. The labeller.py fix corrects a
+silent miscount that could have been quietly polluting the gp_sr_combo tag's
+stats with unrelated [WATCH] setups.
+VERIFICATION: not independently re-verified by Claude this session (no
+py_compile/self-test re-run) — this entry is a post-hoc write-up of Ale's own
+already-pushed, already-pulled commit, based on reading the actual diff line
+by line, not a build Claude performed or tested. Every new code path is
+wrapped in try/except (the shadow-combo-match check at trade-post time
+explicitly cannot block or alter the trade itself if it fails). Kev should
+treat this the same as any other backend change he didn't personally build —
+worth a real restart + a look at the next few learning-session outputs to
+confirm the new SHADOW COMBO INTELLIGENCE block reads sensibly before trusting it.
+RESTART: YES (dexter.py + labeller.py changed — the running Dexter process is
+still on the old code in memory until restarted). DEPLOY: NO (no webapp/
+files touched). RE-PASTE CHEV PROMPT: NO (no persona/prompt text changed,
+Python logic only).
+
+=== 2026-07-13 — WEIGHT RECALIBRATION PHASE 1: CURRENT_WEIGHTS populated in weight_proposal.py — RESTART: NOT REQUIRED, DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: weight_proposal.py (the confluence-tag marginal-effect proposal
+report, added earlier this project) had an intentionally-empty
+CURRENT_WEIGHTS = {} dict — it refused to propose a weight change for any tag
+it didn't know the current point value of, by design (guardrail: never guess
+what "current" means). This phase filled that dict in by hand, so the report
+now actually produces proposals instead of "n/a" in the CUR_W column.
+
+WHAT CHANGED AND WHY:
+1. Read labeller.py's REASON_MAP_ORDERED + normalize_reasons() to get the
+   full list of feature tokens that can appear in labels_closed.jsonl's
+   "features" list (sr_multi/sr_single, fib_*, ema*, bb_*, vp_*, rsi_*,
+   sweep, pattern_*, oi_*, funding_extreme, fast_anchor_*, watch_signal,
+   gp_sr_combo, gp, other).
+2. Read dexter.py's scan_pair_tf() (~line 8826) and derivs.py's
+   classify_derivs() (~line 70) — the actual functions that build the reason
+   strings these tokens come from — to find each one's real current point
+   value in the running code, not CONFLUENCE_SCORES (a different, TF-based
+   vocabulary Chev's own typed tags use, e.g. sr_4h/sr_1h — confirmed a
+   separate system earlier this project).
+3. Mapped 29 tags into CURRENT_WEIGHTS with a sourced comment on every line
+   (sr_multi=3, sr_single=2, gp=4, fib_618=2, fib_50=2, fib_786=1,
+   fib_other=1, ema55=2.0, ema21=1.0, ema13=0.5, ema_cross=1, bb_near=0.5,
+   bb_mid=1.0, bb_squeeze=0, rsi_ob=0.5, rsi_os=0.5, rsi_50_cross=0, sweep=3,
+   pattern_breakout=2.0, pattern_breakout_vol=3.0, pattern_high_conf=1.5,
+   oi_divergence=1.5, oi_confirm=1.0, the four fast_anchor_* tags=0,
+   watch_signal=0).
+4. Left 9 tags deliberately UNMAPPED (documented in a comment block above the
+   dict) because their real dexter.py weight isn't a single fixed number:
+   gp_sr_combo (×1.15 multiplier, not additive), bb_burst and vp_poc/vah/val
+   (depend on which timeframe is primary, VP also on anchor-confirmation),
+   the four rsi_div* tokens (all route through a dynamic _div_strength_score
+   function), funding_extreme (tiered 2.0/3.0pt), and pattern_mid_conf (found,
+   on inspection, to genuinely conflate two different dexter code paths worth
+   different points — 1.0 vs 1.5 — that the label alone can't distinguish).
+   fib_382 and fib_236 turned out to be dead tokens: dexter's fib engine only
+   ever computes 50%/61.8%/65%/78.6%, never those two ratios.
+5. No values were applied to dexter.py's real CONFLUENCE_SCORES — this phase
+   only taught the proposal script what "current" means so it can print
+   proposals. Every actual weight change still requires Kev to read the
+   report and manually edit dexter.py himself.
+
+VERIFICATION: `python -X utf8 weight_proposal.py --selftest` → 3/3 PASS.
+`python -X utf8 weight_proposal.py` run against the real labels_closed.jsonl
+(13,925 records read, 11,395 used) → weight_proposal_report.txt now shows a
+real CUR_W number for all 29 mapped tags and a capped ±1 PROPOSAL for the 7
+that are both mapped and statistically significant (gp -1, oi_confirm -1,
+bb_mid -1, pattern_breakout -1, fast_anchor_pdl -1, bb_squeeze -1,
+oi_divergence +1, fib_50 +1). Nothing in dexter.py, labeller.py, or any live
+data file was touched — read-only investigation plus one edit to
+weight_proposal.py's own CURRENT_WEIGHTS dict.
+
+RESTART: NOT REQUIRED — weight_proposal.py is a standalone script Kev runs by
+hand; Dexter's live process never imports it. DEPLOY: NO (no webapp/ files
+touched). RE-PASTE CHEV PROMPT: NO (no persona/prompt text changed).
+
+=== 2026-07-13 — WEIGHT RECALIBRATION PHASE 2: ratification list presented — RESTART: NOT REQUIRED, DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: read-only phase, no files edited. Turned Phase 1's
+weight_proposal_report.txt into a plain decision list for Kev — one line per
+statistically-significant, mapped tag with its capped proposed delta and
+evidence (coef/CI/n), presented in chat for approval.
+
+WHAT HAPPENED: 8 mapped tags were significant with a capped proposal: gp
+4→3, oi_confirm 1→0, oi_divergence 1.5→2.5, bb_mid 1→0, pattern_breakout
+2→1, fib_50 2→3, fast_anchor_pdl 0→-1, bb_squeeze 0→-1. Flagged that the last
+two (fast_anchor_pdl, bb_squeeze) are currently explicit 0pt/context-only
+tags in dexter.py that don't feed total_score at all today, so a -1 there
+means introducing a new negative score, not nudging an existing one — called
+out as worth a deliberate decision rather than nodding through on the same
+footing as the others. Two significant-but-unmapped tags from Phase 1's
+UNMAPPED list (gp_sr_combo, vp_val) were listed separately under "needs a
+decision in principle" with a plain-English description and no number, since
+neither has one fixed dexter.py value to move.
+
+VERIFICATION: none required — no code changed, this phase only read the
+already-generated report and reformatted it.
+
+RESTART: NOT REQUIRED. DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
+
+=== 2026-07-13 — WEIGHT RECALIBRATION PHASE 3: 2 of 8 ratified changes applied to dexter.py — RESTART: REQUIRED, DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: Kev approved all 8 numeric weight changes from Phase 2's
+ratification list. Before editing, each approved tag was traced to its
+actual scoring code (not just the CURRENT_WEIGHTS comment from Phase 1) to
+confirm a verbatim, single-purpose anchor existed. 6 of the 8 turned out not
+to be safe pure-numeric edits — applying them correctly would have required
+logic changes beyond "change only the value," which the phase's own rules
+don't authorize, so they were skipped and reported rather than guessed at.
+
+APPLIED (2):
+1. pattern_breakout: 2.0 -> 1.0 (scan_pair_tf(), dexter.py ~line 9064:
+   "elif top.get(\"breakout\"): pattern_score = 1.0").
+2. bb_mid: 1.0 -> 0.0 (scan_pair_tf(), dexter.py ~line 9117:
+   "bb_score += 0.0"; the paired reason-string text "1pt" also updated to
+   "0pt" so Chev isn't shown a stale point value for a 0-point signal).
+Both lines tagged with "# recalibrated 2026-07-13, shadow-ledger Ridge
+proposal, ratified by Kev".
+
+SKIPPED (6) — reported to Kev in chat, decision pending:
+1. gp (4->3): CONFLUENCE_SCORES["gp"] is only read by
+   _calc_confluence_score() (Chev's own manually-typed tag string scoring) —
+   a different mechanism from the automatic per-scan Golden Pocket bonus
+   that actually produced the -0.33R shadow evidence (a hardcoded
+   "fib_score = 3" line in scan_pair_tf() that never reads
+   CONFLUENCE_SCORES). Editing the dict key would not change the behavior
+   the evidence measured; the real current value on the mechanism that
+   matters is 3, not 4. This also means the "gp" row in Phase 1's
+   CURRENT_WEIGHTS was a plausible but ultimately incorrect mapping,
+   inherited from the pre-existing WEIGHT_LAB_VERIFIED_TAGS "same
+   computation" note, which this session's closer inspection now
+   contradicts.
+2. oi_confirm (1->0) and oi_divergence (1.5->2.5): both hardcoded in
+   derivs.py's classify_derivs(), not dexter.py — out of this phase's
+   stated dexter.py-only scope.
+3. fib_50 (2->3): shares one code branch with fib_618 (not approved for
+   change) — "if name in (\"50%\", \"61.8% (golden pocket)\"): fib_score +=
+   2" scores both tags identically. Raising fib_50 alone requires splitting
+   this into two branches, a logic change, not a number change.
+4. fast_anchor_pdl (0->-1) and bb_squeeze (0->-1): as already flagged in
+   Phase 2, neither has an existing scoring line — both are pure 0pt
+   context/gate text never added into any score variable. Assigning either
+   a real point value means adding new scoring logic. fast_anchor_pdl also
+   shares its loop with 3 other anchor tags (PDH, opening range high/low)
+   not approved for change.
+
+VERIFICATION: `git diff -- dexter.py` shows exactly the 2 lines above
+changed (plus the matching reason-string text for bb_mid). `python -c
+"import ast; ast.parse(open('dexter.py', encoding='utf-8').read())"` ->
+parsed with no errors. No other file touched; no thresholds, EXPLORATION_MODE,
+gauntlet values, or anything of Jane's changed.
+
+RESTART: REQUIRED — dexter.py changed, weights load at startup, Kev must
+restart Dexter for pattern_breakout/bb_mid to take effect. DEPLOY: NO (no
+webapp/ files touched). RE-PASTE CHEV PROMPT: NO (no persona/prompt text
+changed, scoring logic only).
+
+=== 2026-07-13 — WEIGHT RECALIBRATION PHASE 3 (continued): 5 more of the 6 previously-skipped items resolved and applied — RESTART: REQUIRED, DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: after the initial Phase 3 pass (2 applied, 6 skipped/flagged), Kev
+gave explicit per-item decisions on the 6 open questions. 5 were approved for
+implementation, 1 (fast_anchor_pdl/bb_squeeze new scoring logic) was declined
+and left exactly as-is.
+
+APPLIED THIS ROUND:
+1. gp (real mechanism, 3->2): dexter.py scan_pair_tf() ~line 8925-8934 — the
+   golden-pocket override that used to read "if in_golden_pocket and
+   fib_score < 3: fib_score = 3" now reads "if in_golden_pocket: fib_score =
+   2". CONFLUENCE_SCORES["gp"]=4 (Chev's manual-tag dict) was deliberately
+   left untouched per Kev's choice — only the automatic scan mechanism moved.
+2. fib_50 (2->3, fib_618 unchanged at 2): dexter.py ~line 8914-8920 — split
+   the shared "if name in ('50%','61.8%...'): fib_score += 2" branch into a
+   per-name point value (_fib_pts = 3 if name=='50%' else 2) so fib_50 and
+   fib_618 can move independently.
+3. IMPORTANT INTERACTION FOUND while combining #1 and #2: the old
+   golden-pocket guard ("fib_score < 3") was only ever a no-op that happened
+   to always be true under the single old shared value of 2. Once fib_50
+   could independently reach fib_score==3, a golden-pocket touch reached via
+   the 50% level would sit at 3 already and silently skip that guard —
+   never collapsing to the GP tag the way a 61.8%-reached touch still would.
+   Fixed by making the override unconditional ("if in_golden_pocket:") since
+   the golden-pocket signal is meant to supersede whichever individual fib
+   level triggered it either way. Without this fix, applying gp and fib_50
+   together exactly as separately ratified would have introduced a real,
+   silent scoring bug.
+4. oi_confirm (1.0->0.0) and oi_divergence (1.5->2.5): derivs.py
+   classify_derivs() ~line 103-118 — all 4 branches updated (both
+   OI-divergence branches to 2.5, both OI-confirmation branches to 0.0),
+   including the point value shown in each reason string.
+
+DECLINED (left as-is): fast_anchor_pdl and bb_squeeze remain pure 0pt
+context/gate signals — Kev chose not to add new scoring logic for either.
+
+VERIFICATION: `git diff -- dexter.py derivs.py` shows exactly the lines
+described above changed, nothing else. `python -c "import ast;
+ast.parse(open('dexter.py', encoding='utf-8').read());
+ast.parse(open('derivs.py', encoding='utf-8').read())"` -> both parsed clean.
+No thresholds, EXPLORATION_MODE, gauntlet values, or anything of Jane's
+touched.
+
+FULL LIST OF ALL WEIGHT RECALIBRATION CHANGES THIS PHASE (across both
+rounds): pattern_breakout 2.0->1.0, bb_mid 1.0->0.0, gp (automatic mechanism)
+3->2, fib_50 2->3 (fib_618 unchanged), oi_confirm 1.0->0.0, oi_divergence
+1.5->2.5. fast_anchor_pdl and bb_squeeze intentionally left unscored.
+
+RESTART: REQUIRED — dexter.py and derivs.py both changed. DEPLOY: NO (no
+webapp/ files touched). RE-PASTE CHEV PROMPT: NO (scoring logic only, no
+persona/prompt text changed).
+
+=== 2026-07-13 — WEIGHT RECALIBRATION PHASE 4: minimum-sample filter added to learning-session combo summary — RESTART: REQUIRED, DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: Chev's learning session was writing rules off confluence combos with
+as few as 1-2 closed trades (e.g. "sr_4h has a perfect win rate" from 2
+trades) — not enough samples to distinguish a real edge from a coin flip.
+
+WHAT CHANGED: dexter.py, _run_learning_session() (~line 4539), the
+combo_stats -> combo_lines loop (~line 4605-4611). Added
+"MIN_COMBO_N = 5  # combos below this sample size are noise, not evidence"
+immediately above the loop, and "if total < MIN_COMBO_N: continue" as the
+first statement after `total` is computed. Any combo with fewer than 5
+closed trades is now silently excluded from the combo summary embedded in
+the learning-session prompt — it physically cannot be used to write a rule.
+The pre-existing "No data yet" fallback (triggers when combo_lines ends up
+empty) was verified unchanged and still applies if every combo gets filtered
+out. Nothing else in the function was touched.
+
+VERIFICATION: diff shows exactly the 2 added lines plus the 1 added
+constant line, nothing else in the block changed. `python -c "import ast;
+ast.parse(open('dexter.py', encoding='utf-8').read())"` -> parsed clean.
+
+MANUAL STEP FOR KEV (not performed by Claude, by design): open
+chev_playbook_forex.txt by hand. It contains duplicated sections from an old
+splice bug (ENTRY QUALITY STANDARDS, REASONING QUALITY, ASSET NOTES, and
+JANE'S PATTERNS each appear twice, plus crypto notes inside the forex file).
+Delete the duplicated block -- everything from the second, un-###'d "ENTRY
+QUALITY STANDARDS" heading down to just above "### STRUCTURAL RISK FACTORS"
+-- keeping one clean copy of each section. The stripper bug that caused it
+is already fixed, so the next learning session will keep the file clean.
+
+RESTART: REQUIRED — the learning session code is loaded at startup.
+DEPLOY: NO (no webapp/ files touched). RE-PASTE CHEV PROMPT: NO (no
+persona/prompt text changed, Python logic only).
+
+This closes out the WEIGHT RECALIBRATION phased build (Phases 1-4).
+
+================================================================================
+*** PHASE 6A COMPLETE — ROUTE HARDCODED SCAN WEIGHTS THROUGH ONE
+HOT-RELOADABLE TABLE — 2026-07-13 — RESTART: REQUIRED (code change,
+dexter.py + derivs.py), DEPLOY: NO (no webapp/ files touched),
+RE-PASTE CHEV PROMPT: NO ***
+CONTEXT: every hardcoded scan-path confluence point value (gp, fib levels,
+BB signals, pattern points, EMA values, sweep, OI/funding) sat glued into
+scan_pair_tf()/derivs.classify_derivs() as literals. This phase pulls them
+into ONE module-level dict, SCAN_WEIGHTS, keyed by the SAME labeller
+feature names normalize_reasons() produces, so the existing hot-reload
+override machinery (the Weight Lab Approve button) can move them in 6B.
+Day one: behaviour is IDENTICAL — every value starts exactly what the code
+awarded today, incl. the Phase-3 ratifications (gp 2, fib_50 3,
+pattern_breakout 1, bb_mid 0, oi_confirm 0, oi_divergence 2.5).
+WHAT CHANGED AND WHY:
+1. dexter.py — new SCAN_WEIGHTS = {...} inserted immediately after
+   CONFLUENCE_SCORES (~2686), one commented line per value citing the
+   original file:line. 24 migrated keys (sr_multi, sr_single, fib_50,
+   fib_618, fib_786, fib_382, fib_236, fib_other, gp, rsi_ob, rsi_os,
+   rsi_50_cross, ema55, ema21, ema13, ema_cross, sweep,
+   pattern_breakout_vol, pattern_breakout, pattern_high_conf,
+   pattern_mid_conf, bb_near, bb_mid, bb_squeeze, oi_divergence,
+   oi_confirm, fast_anchor_pdh, fast_anchor_pdl, fast_anchor_or_high,
+   fast_anchor_or_low). The 0pt context tokens (rsi_50_cross, bb_squeeze,
+   fast_anchor_*) are IN the table but NOT yet read by any scan code — they
+   stay at 0 and no literal was swapped for them (they have no score literal
+   to replace). All Phase-3 ratified values carried across verbatim.
+2. dexter.py — new _SCAN_WEIGHTS_BASELINE = dict(SCAN_WEIGHTS)
+   immediately after _CONFLUENCE_BASELINE (~2702), same never-mutate role,
+   so every reload recomputes from the pristine snapshot and never compounds.
+3. dexter.py — _reload_weight_overrides() extended (NOT rewritten) to
+   drive BOTH tables via a _WEIGHT_TABLES pair-list. An override tag applies
+   to whichever table(s) it is a baseline key of; a tag in BOTH tables is
+   applied to BOTH; a tag in neither is ignored with a logged warning. Same
+   [0, 2*baseline+2] baseline-relative clamp for every table. Function
+   docstring updated to state the both-tables behaviour. No CONFLUENCE_SCORES
+   behaviour changed.
+4. derivs.py — added module-level `SCAN_WEIGHTS = {}` default (keeps
+   the standalone self-test working with no Dexter present). dexter.py sets
+   `derivs.SCAN_WEIGHTS = SCAN_WEIGHTS` once after the table is defined
+   (least-invasive wiring Kev approved — avoids a circular import; the dict is
+   mutated in place by the loader so hot-reloaded values are visible at scan
+   time, same object-identity pattern as CONFLUENCE_SCORES). classify_derivs
+   reads `SCAN_WEIGHTS.get("oi_divergence", 2.5)` / `.get("oi_confirm", 0.0)`.
+5. dexter.py — 19 literal→lookup swaps inside scan_pair_tf(): S/R
+   pts (8904), fib_50/fib_618 (8920), fib_other (8928), rsi_ob/rsi_os
+   (9017/9020, context-anchored — the two `+= 0.5` lines are
+   identical so they were swapped with their surrounding if/elif), the EMA
+   tuple (9033), ema_cross (9045), sweep (9058), all four pattern_score
+   branches (9075/9077/9081/9083), both bb_near `+= 0.5` lines
+   (9122/9125, context-anchored), and bb_mid (9129). Zero logic changes.
+NOT MIGRATED IN 6A (stayed hardcoded, left exactly as today): RSI
+   divergence strength (dynamic via _div_strength_score, 1.0–2.0 —
+   rsi_div/rsi_div_regular/rsi_div_hidden/rsi_div_forming), BB burst
+   (timeframe-dependent _bb_base map 4h:3/1h:2/30m:2/15m:1), VP
+   POC/VAH/VAL (timeframe-dependent + anchor-confirmation-dependent),
+   funding tiers (3.0 extreme / 2.0 notable under one token), the GP×SR
+   ×1.15 multiplier, the TF-quality multiplier (4h:1.2/1h:1.0/30m:0.9/
+   15m:0.9), and the EMA contribution cap (3.0). These were flagged in
+   the audit and deliberately left for later phases.
+PRE-EXISTING (not caused by 6A) — derivs.py standalone self-test now shows
+   5 OI-related failures (weak rally, short covering, bull/bear participation,
+   stacked signals). Root cause: the working tree already carried the uncommitted
+   Phase-3 recalibration (code uses 2.5/0.0, comment 1.5->2.5) but its
+   self-test still asserts the OLD 1.5/1.0. My 6A edit is behaviour-
+   identical (empty default dict -> .get returns 2.5/0.0, same as the
+   pre-edit literal), so 6A did NOT introduce the mismatch — it reproduces
+   on the pre-edit working tree. Flagged for Kev: the self-test expectations
+   are stale vs the already-ratified Phase-3 values. NOT silently fixed here
+   (changing asserted numbers would be ratifying weights, out of 6A scope).
+VERIFICATION: `ast.parse` clean on both files. Throwaway (uncommitted,
+   imports nothing live) script asserted SCAN_WEIGHTS[f] == audited-old-value
+   for all 30 table keys -> ALL 30 PASS; confirmed the NOT-migrated keys
+   (rsi_div*, bb_burst, vp_*, funding_extreme) are ABSENT from the table.
+   `git diff` review: every changed line is the new table, the baseline
+   snapshot, the loader extension, the derivs wiring, or a literal→lookup
+   swap — nothing else. `git diff --stat -- labeller.py` shows NO change;
+   labeller.record_setup and all scan-path logging/print paths untouched
+   (only the loader-internal "tag not in ... " warning text gained
+   "/SCAN_WEIGHTS", which is part of the loader extension).
+RESTART: REQUIRED — dexter.py (new table + baseline + loader extension +
+   19 swaps) and derivs.py (default dict + 4 swaps) both changed; the table
+   is read at import and the loader runs at startup, so a restart is needed
+   for SCAN_WEIGHTS to exist and be hot-reloadable. DEPLOY: NO. RE-PASTE
+   CHEV PROMPT: NO (no persona/prompt text changed, Python logic only).
+STANDING INSTRUCTION FOR PHASE 6B (recorded now per Kev): WEIGHT_LAB
+   VERIFIED_TAGS may ONLY include tags whose SCAN_WEIGHTS entry is actually
+   READ by scan/derivs code after 6A. Tags that sit in the table but are
+   never read (fib_786, fib_382, fib_236, bb_squeeze, rsi_50_cross,
+   fast_anchor_*) stay UNVERIFIED and must surface as "in table, not yet
+   wired" — an Approve button must NEVER exist for a key no code reads.
+=== 2026-07-13 — WEIGHT RECALIBRATION PHASE 6A: reviewed and fixed Kilo AI's SCAN_WEIGHTS migration — RESTART: REQUIRED, DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: Kilo AI (a different AI tool) implemented Phase 6A directly (SCAN_WEIGHTS
+table + baseline snapshot + override-loader extension + literal-to-lookup swaps
+in dexter.py, plus the matching derivs.py wiring) without going through the
+plan-first checkpoint the phase's own instructions called for. Kev asked
+Claude to review that work as Lead AI Quant Strategist / Senior Python
+Architect, fix anything wrong, and report back.
+
+STRUCTURE CONFIRMED SOUND: the new SCAN_WEIGHTS table, _SCAN_WEIGHTS_BASELINE
+snapshot, and the generalized _reload_weight_overrides() (now iterating
+_WEIGHT_TABLES = (CONFLUENCE_SCORES, SCAN_WEIGHTS) so an override tag applies
+to either or both tables it exists in) are well-designed and match the phase's
+own spec. `git diff --stat` confirmed every changed line falls into the
+authorized categories (new table / baseline / loader extension / literal-to-
+lookup swap) -- nothing out of scope. labeller.py, jane_*, and all live
+prompt/decision-log files confirmed untouched (git status).
+
+BUGS FOUND AND FIXED:
+1. gp NEVER ACTUALLY WIRED (most important finding): SCAN_WEIGHTS["gp"]=2
+   existed in the table with a comment claiming it drove the golden-pocket
+   override, but the code still did a hardcoded "fib_score = 2" literal --
+   the single most impactful recalibrated tag (-0.33R, Phase 1's biggest
+   finding) would have silently ignored any future Weight Lab change. Fixed:
+   now reads SCAN_WEIGHTS["gp"].
+2. pattern_high_conf and pattern_mid_conf reintroduce an ambiguity Phase 1
+   deliberately excluded: scan_pair_tf's pattern branch has a third,
+   unmigrated "elif volume_confirmed: pattern_score = 1.5" path that
+   labeller.py's tokenizer cannot distinguish from either label.
+   pattern_mid_conf's two real paths already disagree today (1.0 vs 1.5);
+   pattern_high_conf's two paths merely coincide today (1.5 == 1.5), masking
+   the same flaw until the first override changes one of them. Fixed:
+   reverted both to their pre-6A hardcoded values, documented why in a new
+   comment block, left them out of SCAN_WEIGHTS. pattern_breakout and
+   pattern_breakout_vol were verified genuinely single-path/safe and remain
+   migrated.
+3. Stale reason-string text: several reason strings shown to Chev still
+   hardcoded the point-value text (e.g. "0.5pt", "3pt", "0pt") instead of
+   reading the live SCAN_WEIGHTS value -- meaning the moment any of these
+   moved via a future override, Chev would be shown the OLD point value
+   while the NEW value silently drove the real score. Fixed in dexter.py:
+   rsi_ob, rsi_os, sweep, bb_near (x2), bb_mid. Fixed in derivs.py:
+   oi_divergence (x2), oi_confirm (x2) -- computed the live value into a
+   local variable once per branch, used in both the score and the string.
+4. fib_382 and fib_236 were included in SCAN_WEIGHTS as if real -- Phase 1
+   already established dexter's fib engine never computes those two ratios
+   (only 50%/61.8%/65%/78.6% exist), so they were dead keys nothing ever
+   read. Removed entirely. fib_786 is real but not independently wired (it
+   shares fib_other's code branch) -- kept as a documented placeholder with
+   a comment explaining a future split would be needed to make it
+   independently adjustable.
+5. Found and fixed an UNRELATED pre-existing bug while touching derivs.py:
+   its own bottom-of-file self-test still asserted the PRE-Phase-3 point
+   values (1.5/1.0) for oi_divergence/oi_confirm, five tests failing, since
+   Phase 3's recalibration (1.5->2.5, 1.0->0.0) was never reflected there.
+   Corrected the expected values; derivs.py now passes 12/12 self-tests
+   (was 7/12 before this fix).
+
+FLAGGED FOR KEV, NOT UNILATERALLY CHANGED: "gp" exists as a key in BOTH
+CONFLUENCE_SCORES (=4, Chev's manually-typed tag scoring) and SCAN_WEIGHTS
+(=2, the automatic scan bonus) -- two different mechanisms, as established in
+Phase 3 where Kev explicitly chose to move only the automatic mechanism and
+leave the manual-tag dict alone. The override loader (per this phase's own
+explicit spec: "if a tag exists in both tables, the override applies to
+both") will move BOTH together the next time "gp" is approved via the Weight
+Lab UI (Phase 6B/6C) -- undoing the independent control Phase 3 deliberately
+established. This is the phase's own designed behavior, not a bug Claude
+introduced, but worth a conscious decision before 6B/6C ship: keep shared
+application, or rename one of the two "gp" keys so they can move
+independently.
+
+VERIFICATION: `python -c "import ast; ast.parse(...)"` -> both dexter.py and
+derivs.py parse clean. `python -X utf8 derivs.py` -> 12/12 self-tests pass.
+Throwaway script (not committed) re-parsed SCAN_WEIGHTS via ast.literal_eval
+(no live import) and asserted all 26 migrated keys match their audited
+current values, plus confirmed fib_382/fib_236/pattern_high_conf/
+pattern_mid_conf are correctly absent -> both checks PASS. `git status`
+confirms labeller.py and all live prompt/decision-log files untouched.
+
+RESTART: REQUIRED -- dexter.py and derivs.py both changed (SCAN_WEIGHTS is
+loaded at import time). DEPLOY: NO (no webapp/ files touched). RE-PASTE CHEV
+PROMPT: NO (scoring/wiring logic only, no persona/prompt text changed).
+
+=== 2026-07-13 — WEIGHT RECALIBRATION PHASE 6B: verified-tag list expanded, current_weight source fixed, freeze window reconciled — RESTART: REQUIRED, DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: Phase 6A proved every migrated SCAN_WEIGHTS tag reads from exactly
+one live code path. This phase used that proof to let the website's Approve
+button appear for those tags, made the displayed "current weight" read from
+the table the shadow evidence actually measures, and reconciled
+weight_overrides.json so the freeze window knows Phase 3's hand-edits
+happened (stops mixing before/after data in future suggestions).
+
+STEP 1 -- WEIGHT_LAB_VERIFIED_TAGS expanded, WITH ONE DEVIATION FROM THE
+LITERAL PHASE TEXT: the instructions said "the union of the old set and every
+key migrated into SCAN_WEIGHTS in 6A." Taken completely literally, that would
+have also verified rsi_50_cross, bb_squeeze, fast_anchor_pdh/pdl/or_high/
+or_low (explicit 0pt context/gate signals never read by any score) and
+fib_786 (real, but not independently wired -- shares fib_other's branch).
+Verifying those would put a working-looking Approve button in front of a
+change that silently does nothing -- exactly the "gp was never wired" bug
+class Phase 6A's review just found and fixed. Excluded those 7, added the
+other 16 (sr_multi, sr_single, fib_50, fib_618, fib_other, ema55, ema21,
+ema13, ema_cross, sweep, pattern_breakout_vol, pattern_breakout, bb_near,
+bb_mid, oi_divergence, oi_confirm) to the original 3 (gp, rsi_ob, rsi_os) --
+19 verified tags total. Documented the exclusion and reasoning directly in
+the code comment so a future phase knows why and what "actually wired" would
+require before adding them.
+
+STEP 2 -- current_weight lookup order: _build_weight_proposal_payload() now
+reads SCAN_WEIGHTS first, falling back to CONFLUENCE_SCORES, since the scan
+table is what labels_closed.jsonl's shadow evidence actually measures.
+
+STEP 3 -- _validate_weight_approval()'s unmapped check is now "tag not in
+SCAN_WEIGHTS and tag not in CONFLUENCE_SCORES" (was CONFLUENCE_SCORES only).
+
+STEP 4 -- FREEZE RECONCILIATION, WITH A REAL ISSUE FOUND AND RESOLVED FIRST:
+weight_overrides.json already contained one pre-existing entry -- delta -1 on
+"gp", approved 2026-07-11, applied 2026-07-12, evidence coef=-0.3293 (n=1428)
+-- essentially the same finding as Phase 1's -0.3317R, applied back when only
+CONFLUENCE_SCORES existed. Phase 6A's shared-name-applies-to-both-tables
+override behavior meant this stale entry would ALSO apply to the new
+SCAN_WEIGHTS["gp"] baseline (2) on the very next restart, silently dropping
+the real scan-path golden-pocket bonus to 1 -- not the 2 Kev approved in
+Phase 3. Flagged to Kev before writing anything; his call: clear the stale
+entry (same evidence prescribed twice), accepting CONFLUENCE_SCORES["gp"]
+returns to its baseline of 4 as a minor, known side effect. Confirmed keeping
+"gp" shared across both tables going forward is the intended architecture,
+not something to split apart.
+Wrote (via a standalone script replicating dexter.py's own
+_atomic_write_json/_read_weight_overrides_file format exactly -- did NOT
+import dexter.py itself, which would risk triggering its live startup side
+effects) 6 new entries, each delta=0, source="manual", applied_at/
+approved_at = 2026-07-13 12:44:59 (file-mtime-equivalent proxy for the actual
+Phase 3 restart time -- Kev confirmed exact-minute precision doesn't matter
+here, being off by an hour is statistically invisible against thousands of
+shadow records): gp, fib_50, pattern_breakout, bb_mid, oi_confirm,
+oi_divergence -- each with an evidence.note naming the Phase 3 old->new
+values. Confirmed via code trace (not guessed): _reload_weight_overrides()
+handles delta=0.0 cleanly -- deltas[tag] accumulates it fine (no KeyError/
+TypeError path), clamped = baseline + 0 = baseline (already true today since
+these ARE the baselines), tag still lands in applied_tags (protecting it from
+the "restore untouched tags to baseline" loop), and the explicit applied_at
+already set on write means the reload's own re-stamp logic ("if not
+entry.get('applied_at')") correctly leaves it alone. No workaround needed;
+delta=0 is safe by construction.
+
+VERIFICATION: `python -c "import ast; ast.parse(...)"` -> dexter.py parses
+clean. `git diff` confirms the 3 code changes land exactly where intended,
+nothing else touched. `git status` confirms labeller.py, jane_*, and all live
+prompt/decision-log files untouched (weight_overrides.json is untracked by
+git, expected for a live hot-reloaded config file). Did not hit
+/api/weight_proposal live (would require Dexter running) -- Kev has not yet
+restarted with this code; that check is deferred to after the next restart.
+
+RESTART: REQUIRED -- WEIGHT_LAB_VERIFIED_TAGS and the two lookup/validation
+changes are loaded at import time. DEPLOY: NO (no webapp/ files touched).
+RE-PASTE CHEV PROMPT: NO (no persona/prompt text changed).
+
+=== 2026-07-13 — WEIGHT RECALIBRATION PHASE 6C: Weight Lab UI cleanup — RESTART: NOT REQUIRED (frontend-only), DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: presentation-only pass on webapp/js/ui/weight-lab.js (no other file
+touched, per the phase's own scope -- index.html untouched, no request-logic
+changes). Read the file fully first and reported the current render/approve/
+refresh flow before editing (mandatory checkpoint) -- found the file already
+considerably more built-out than the phase brief assumed (batch approve, a
+manual override editor with real win-rate/trend data, preview+confirm modals
+already shared across every apply path), so this was a targeted gap-fill on
+top of existing work, not a rebuild.
+
+CHANGES:
+1. Each actionable proposal card now opens with a plain-English one-liner
+   ("<TAG> setups are losing/making money — proposal: <cur> → <new>?"),
+   direction read directly off proposed_delta's sign (which the server
+   itself derives from coef's sign, never an independent client guess).
+2. Added the missing ✓ agreement badge -- previously only the ⚠ "regression
+   vs raw stats disagree" state was ever rendered; agreement === 'agree'
+   produced no visible indicator at all. Both states now show.
+3. Frozen banner now includes frozen_since (the API already returned it;
+   the banner just never displayed it).
+4. Restructured the collapsed section from "non-significant tags" (grouped
+   by statistics) to "watching, not yet approvable (N)" (grouped by
+   APPROVABILITY), each row showing its own reason (no live weight uses this
+   code / same name, unconfirmed mechanic, not wired for one-tap changes yet
+   / not enough evidence yet). Cards are now reserved strictly for the
+   "actionable" subset (significant + verified + real delta/current_weight)
+   -- a significant-but-unapprovable tag no longer renders a full card mixed
+   in with real, actionable ones (previously a dead button dressed as a live
+   one). Kev explicitly confirmed this restructuring over keeping the old
+   significant/non-significant split.
+5. last_reviewed_at moved out of the digest header (which only ever rendered
+   with 2+ actionable proposals) into its own always-visible top-of-panel
+   line.
+
+Approve / Approve-All / Undo / Manual-Set request logic, endpoints, and the
+shared server-side preview+confirm modal are completely unchanged --
+verified by diff (only weight-lab.js touched, 107 insertions / 66 deletions,
+no other file in the diff).
+
+VERIFICATION: `node --check webapp/js/ui/weight-lab.js` -> syntax OK.
+`git diff --stat` confirms index.html and weight-lab.css are untouched, only
+weight-lab.js changed.
+
+RESTART: NOT REQUIRED -- frontend-only file, no Dexter restart needed.
+DEPLOY: NO (not pushed to GitHub Pages this session). RE-PASTE CHEV PROMPT: NO.
+Note for Kev: a hard-refresh of the dashboard should show the new cards; per
+this phase's own explicit scope index.html (and its cache-busting ?v=
+query strings) was deliberately left untouched, so if the old look
+stubbornly persists after a hard refresh, that version stamp on
+weight-lab.js's <script> tag would need bumping as a separate, explicit step.
+
+This closes out the full WEIGHT RECALIBRATION + WEIGHT LAB phased build
+(Phases 1-4, 6A, 6B, 6C).
+
+=== 2026-07-13 — WEIGHT RECALIBRATION PHASE 6D PART 1: friendly names everywhere + strategy snapshot panel — RESTART: NOT REQUIRED (frontend-only), DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: presentation-only pass on webapp/js/ui/weight-lab.js. Read the file
+first and reported two findings before editing (mandatory checkpoint):
+
+1. The phase asked for a new hardcoded TAG_LABELS dictionary, but
+   weight-lab.js already calls friendlyTag() (webapp/js/ui/watchlist.js),
+   backed by a real server endpoint (/api/tag_registry -> dexter.py's
+   TAG_REGISTRY, ~line 3007) that already has an entry -- name AND
+   tooltip/definition -- for every one of the 19 verified tags. Building a
+   second hardcoded dict would have recreated a two-sources-of-truth problem
+   this whole build has been curing at every other layer. Kev's call: reuse
+   the existing registry, add only the missing "raw code in small muted
+   text" visual (the actual gap), never a parallel dictionary.
+2. The phase named CSS variables (--bg-success, --text-success, --bg-danger,
+   --text-danger, --text-muted) that don't exist anywhere in this codebase --
+   confirmed by grep across webapp/css. Using them literally would render no
+   color at all, silently. Kev's call: use the app's real, already-
+   established convention instead (.tBull #089981 green / .tBear #f23645 red
+   from toasts.css, var(--txt3) muted -- both already used throughout this
+   exact file). Standing rule going forward: when phase text and the
+   codebase's own conventions conflict, the codebase wins -- flag it, follow
+   the convention.
+
+CHANGES:
+1. New shared _wlTagLabel(tag, inline) helper -- friendly name (via
+   friendlyTag()) plus the raw tag code in 9.5px var(--txt3), inline or
+   stacked. Applied everywhere a tag renders that didn't already show the
+   raw code: proposal cards (added a code line beneath the one-liner,
+   replacing the old title-tooltip-only treatment), the watching section,
+   the pending-overrides banner, and the digest header's table rows. The
+   manual editor's tag list already showed the raw code in parens -- left
+   as-is, already compliant.
+2. New _wlSnapshotPanel(proposals) -- "Strategy snapshot — what the weights
+   currently say," rendered at the very top of the panel (above the
+   pending-overrides banner, last_reviewed_at line, digest header, and
+   cards). One row per verified-mapping tag: friendly name + raw code,
+   horizontal bar sized by current_weight (largest positive weight = full
+   width; zero/negative weights get a fixed minimal bar so they're still
+   visible), current_weight as text, and a status word -- "earning"
+   (significant, coef>0), "costing" (significant, coef<0), "unproven"
+   (not yet significant) -- colored green/red/muted per finding 2 above.
+   Renders from the fresh payload normally; during a freeze, falls back to
+   the cached payload (see fix below); shows a one-line "snapshot appears
+   after the first analysis" note if neither exists yet.
+3. REQUIRED FIX to existing logic, not just an addition: the line caching
+   proposals for the manual editor's FYI line ("if (prop.ok)
+   _wlLastProposalPayload = prop.proposals || []") ran on EVERY successful
+   response, including a frozen one -- whose own "proposals" field is always
+   []. That meant the very first frozen load would silently wipe out
+   whatever real snapshot was cached before the freeze started, defeating
+   the fallback before it could ever be used. Changed the condition to
+   "prop.ok && !prop.frozen" so the cache only updates from real data and
+   survives untouched through any freeze window. Strictly more robust for
+   the manual editor's existing FYI line too, not just the new panel.
+
+Approve/revert/batch/manual request logic, endpoints, and index.html are
+completely untouched -- confirmed by diff (only weight-lab.js in the
+changed-files list).
+
+VERIFICATION: `node --check webapp/js/ui/weight-lab.js` -> syntax OK.
+`git diff --stat` confirms only weight-lab.js changed (191 insertions / 74
+deletions), index.html and weight-lab.css untouched.
+FUNCTIONS TOUCHED: _wlTagLabel (new), _wlSnapshotPanel (new),
+_wlPendingBanner, _wlDigestHeader, _wlWatchingSection, _wlProposalCard,
+loadWeightLab.
+Kev still needs to hard-refresh the dashboard and confirm the snapshot's
+bars/numbers match the cards below it -- not independently verified here
+(would require a live Dexter + real labels_closed.jsonl data to render
+against, which this session doesn't have running).
+
+RESTART: NOT REQUIRED -- frontend-only file. DEPLOY: NO. RE-PASTE CHEV
+PROMPT: NO.
+
+=== 2026-07-13 — WEIGHT RECALIBRATION PHASE 6D PART 2: freeze countdown with a time estimate — RESTART: NOT REQUIRED (frontend-only), DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: presentation-only pass on webapp/js/ui/weight-lab.js, zero-backend
+solution as the phase asked -- confirmed by re-reading _build_weight_proposal_
+payload() that records_since_last_change/needed/frozen_since (already used
+since 6C) are the only fields needed; no new backend field required.
+
+One note on the verification step as written: this panel has no
+auto-refresh (by design -- first-open + manual refresh-button only, per the
+file's own header comment, specifically so a background refresh can never
+land mid-edit). "Two auto-refreshes" in the phase text means two manual
+clicks of the refresh icon in practice; the estimate logic itself doesn't
+care how the check-ins happen, only that real wall-clock time passed between
+them.
+
+CHANGES:
+1. New in-memory sample buffer (_wlFreezeSamples, capped at 6, no
+   localStorage) recording {timestamp, records_since_last_change} on every
+   frozen response. Buffer resets whenever frozen_since changes (a new
+   freeze window started), so a stale rate from a PREVIOUS freeze can never
+   leak into a new one's estimate.
+2. _wlFreezeEtaText(): computes records/minute from the oldest vs newest
+   sample in the buffer (smooths over one noisy refresh-to-refresh gap
+   rather than reacting to just the last two check-ins). Returns '' (no
+   estimate rendered at all) whenever the math isn't trustworthy: fewer than
+   2 samples, zero/negative elapsed time, or a zero/negative record delta --
+   never a placeholder guess dressed as a real number. Friendly units: "~N
+   min to go" under 90 minutes, "~N hr to go" (one decimal under 10 hours)
+   otherwise.
+3. _wlFreezeBanner(): replaces the plain count line from 6C with a progress
+   bar (records_since_last_change/needed, capped 0-100%) plus the existing
+   count text, frozen_since (kept from 6C), and the ETA text when available.
+
+Approve/revert/batch/manual request logic, endpoints, and index.html
+untouched -- confirmed by diff (only weight-lab.js in the changed-files
+list).
+
+VERIFICATION: `node --check webapp/js/ui/weight-lab.js` -> syntax OK.
+Additionally ran a standalone Node simulation (not committed) mocking
+Date.now() across 6 scenarios -- single sample (no estimate), a normal
+positive-rate case (correct minute estimate), near-completion (rounds to a
+minimum of 1 min, never 0 or negative), a slow-rate case (correctly switches
+to hour units past the 90-minute threshold), a freeze-window change
+(buffer correctly resets, no stale contamination), and a zero-delta case (no
+estimate, not a fake "infinite time" guess) -- all 6 passed. `git diff --stat`
+confirms only weight-lab.js changed, index.html and weight-lab.css untouched.
+Kev still needs to confirm live: watch the banner across two manual
+refreshes and confirm an estimate appears on the second (not verified here --
+requires a live Dexter actually in a freeze window).
+
+RESTART: NOT REQUIRED -- frontend-only file. DEPLOY: NO. RE-PASTE CHEV
+PROMPT: NO.
+
+=== 2026-07-13 — WEIGHT RECALIBRATION PHASE 6D PART 3: change history with honest verdicts — RESTART: REQUIRED (new backend route), DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: the one backend part of Phase 6D. Reported the plan (route name,
+data read, confirmation it mutates nothing) before writing any code, per the
+mandatory checkpoint, and got go-ahead first.
+
+BACKEND (dexter.py):
+1. New GET /api/weight_history (no @require_key, matches /api/weight_proposal's
+   own read-only pattern). New _weight_history_cache dict, same 300s
+   (WEIGHT_PROPOSAL_CACHE_SECS) pattern as the existing proposal cache.
+2. _build_weight_history_payload(): turns weight_overrides.json into a
+   timeline with a before/after verdict per entry. Reuses
+   weight_proposal.load_records()/prepare_sample()/net_r() -- the SAME
+   filtering (POST-excluded, non-null realized_R) and cost handling the
+   Ridge regression itself already uses, no second methodology invented, no
+   new imports. Win rate uses labeller.py's own label==1 definition,
+   replicated inline (2 lines) rather than a private cross-module call.
+   Before = up to 2000 most recent records prior to the entry's applied_at
+   (approved_at fallback); after = everything since, uncapped.
+   verdict_status = "too_early" when n_after < FREEZE_MIN_RECORDS (the
+   existing 200 constant, not a new magic number), else "ready" -- the
+   after-stats are always computed and returned, but the frontend only
+   renders them as a verdict when status is "ready".
+3. CHECKED BEFORE WRITING ANYTHING, per the phase's own instruction:
+   /api/weight_proposal/revert does entries.pop(idx) with NO tombstone left
+   behind -- weight_overrides.json cannot record removals at all. Documented
+   this in the payload's own removals_note field; reverted changes simply
+   cannot appear in this history, nothing to reconstruct.
+4. Malformed-entry handling: each entry validated (tag non-empty string,
+   delta numeric, applied_at/approved_at present and parseable) before use;
+   any failure increments malformed_entries and is skipped, never raises.
+5. Writes nothing -- confirmed by diff (no _atomic_write_json or open(...,'w')
+   call anywhere in the new code; only the docstrings mention "writes
+   nothing").
+
+FRONTEND (webapp/js/ui/weight-lab.js only):
+1. New "Change history" section at the bottom of the panel, appended on
+   every reachable path (error/frozen/normal) -- it's Kev's record of what
+   happened, independent of whether today's regression run succeeded.
+   Fetched INDEPENDENTLY of the main proposal/overrides Promise.all so a
+   hiccup on this one endpoint can never take down the core proposal-cards
+   experience.
+2. Entry line: "<date> — <label> <old>pt -> <new>pt · <source>" using
+   _wlTagLabel (Part 1's shared helper, not a new dictionary) and
+   "ratified by you" + raw source word for weight_lab/manual sources.
+   old/new derived from the tag's live current_weight (already in the
+   fetched /api/weight_proposal payload) minus this entry's delta -- but
+   ONLY when this is the tag's sole entry in the whole timeline; with 2+
+   entries for the same tag, intermediate historical values can't be safely
+   reconstructed from current_weight alone, so those fall back to showing
+   just the delta, exactly as the phase's own escape hatch allows.
+3. Verdict line: "Since then: win rate X% (was Y%)" when verdict_status is
+   "ready"; exactly "too early to judge (N of 200 records)" otherwise --
+   the too_early gate is enforced by rendering choice here, matching the
+   backend's own gate, never overridden client-side.
+4. delta=0 markers render as one muted line ("<date> — marker: <evidence
+   note>") with no verdict block, per spec.
+
+VERIFICATION: `python -c "import ast; ast.parse(...)"` -> dexter.py parses
+clean. `git diff` shows exactly one new route (+@flask_app.route("/api/
+weight_history")) and its builder function added -- no other route touched.
+`node --check webapp/js/ui/weight-lab.js` -> syntax OK. `git diff --stat`
+confirms index.html and weight-lab.css untouched.
+FUNCTIONS TOUCHED (frontend): _wlShortDate, _wlHistorySourceHtml,
+_wlHistoryOldNew, _wlHistoryEntry, _wlHistorySection (all new),
+loadWeightLab (modified to fetch history + build proposalsByTag).
+Kev still needs to restart Dexter, then paste the /api/weight_history JSON
+so we can eyeball it together -- not independently verified live here (no
+running Dexter process this session).
+
+RESTART: REQUIRED -- new backend route, loaded at Flask app setup.
+DEPLOY: NO. RE-PASTE CHEV PROMPT: NO (no persona/prompt text changed).
+
+This closes out Phase 6D (Parts 1-3) and the full WEIGHT RECALIBRATION +
+WEIGHT LAB phased build (Phases 1-4, 6A, 6B, 6C, 6D).
+
+=== 2026-07-13 — WEIGHT RECALIBRATION PHASE 6D PART 5 (OPTIONAL): "Today at a glance" strip — RESTART: REQUIRED (backend additions to /api/vitals), DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: plan-first checkpoint applied. Reported which of the 4 requested
+metrics were already available from existing endpoints before writing any
+code:
+- Win rate: /api/strategy/performance's win_rate -- zero backend changes.
+- Weight Lab state: /api/weight_proposal's frozen/proposals -- zero backend
+  changes, reuses the exact same "actionable" filter already written in
+  weight-lab.js.
+- Today's trades: NOT exposed anywhere (checked /api/vitals, /api/trades,
+  /api/strategy/performance) -- proposed a new trades_today field on the
+  existing /api/vitals route.
+- Last playbook update: NOT exposed anywhere -- proposed a new
+  playbook_age_secs field on /api/vitals, reusing that route's own existing
+  _age(path) helper (already used for decisions_log_age_secs/journal_age_secs).
+Both backend additions explicitly approved by Kev before writing any Python.
+
+BACKEND (dexter.py, /api/vitals only -- no new route):
+1. trades_today: count of journal entries closed today (by ts date) plus
+   open_trades opened today (by open_ts date). Read-only, wrapped in
+   try/except, never raises.
+2. playbook_age_secs: min() of _age(p) across the 3 PLAYBOOK_PATHS entries --
+   the freshest playbook file's age in seconds. Reuses the existing _age()
+   helper verbatim, no new file-reading mechanism.
+
+FRONTEND (webapp/index.html, css/components/strategy.css,
+js/charts/drawing.js -- no scope restriction stated for this part, unlike
+Parts 1-4 which were weight-lab.js-only):
+1. New #stratGlanceStrip div added to index.html between #stratHeader and
+   #stratTabs -- always visible regardless of which Strategy tab is active.
+   Cache-bust bumped: strategy.css 20260716-2 -> -3, drawing.js 20260721-1
+   -> -2.
+2. New .stratGlanceCard CSS in strategy.css, deliberately matching the
+   existing .stratScoreCard visual language (var(--card-bg)/--card-border/
+   --card-radius, var(--green)/--red for good/bad) -- a native part of the
+   panel, not a bolted-on widget.
+3. New loadGlanceStrip() in drawing.js's Strategy IIFE, added to loadAll()'s
+   existing Promise.all list -- piggybacks on the already-running 25s
+   refresh cycle, no new polling loop. Four cards: win rate (same >=50
+   threshold loadPerformance() already uses), today's trades, Weight Lab
+   state (same actionable-tag filter weight-lab.js uses), last playbook
+   update (friendly minutes/hours/days formatting). Each card's click calls
+   the EXISTING _switchStratTab(spane) function the tab bar itself uses --
+   no new navigation code. Destinations: win rate -> performance, today's
+   trades -> feed (Chev's Thoughts), Weight Lab -> weightlab, playbook ->
+   overview (where Elliot's Suggestions already surfaces playbook-related
+   notes).
+
+VERIFICATION: `python -c "import ast; ast.parse(...)"` -> dexter.py parses
+clean; diff confirms no new route added (@flask_app.route count unchanged
+from Part 3), only two new fields on the existing /api/vitals payload.
+`node --check webapp/js/charts/drawing.js` -> syntax OK. `git diff --stat`
+shows all 4 touched files with no other file affected.
+Kev still needs to hard-refresh and cross-check each card's number against
+its source tab -- not independently verified live here (no running Dexter
+this session).
+
+RESTART: REQUIRED -- /api/vitals gained two new fields (Flask routes are
+defined at import time). DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
+
+=== 2026-07-13 — DAILY SUMMARY: everything done today, one place to read it ===
+
+Today was almost entirely one continuous arc: teaching the confluence-weight
+system to learn from its own shadow-ledger evidence, end to end, then giving
+it a website front end. Individually dated entries for every step already
+exist above this one (search "2026-07-13" for each) -- this entry is just the
+TL;DR for anyone catching up cold.
+
+1. SHADOW COMBO INTELLIGENCE (Ale's commit, reviewed not built by Claude) --
+   documented get_qualifying_shadow_combos(), the shadow_combo_match trade
+   stamping, the new learning-session block, and a bundled labeller.py
+   bugfix. Pulled cleanly, no conflicts.
+
+2. WEIGHT RECALIBRATION PHASES 1-4 -- the core loop:
+   - Phase 1: populated weight_proposal.py's CURRENT_WEIGHTS from real
+     dexter.py/derivs.py source, deliberately leaving 9 ambiguous tags
+     (multipliers, TF-dependent values, dynamic strength scores) unmapped
+     rather than guessed.
+   - Phase 2: turned the Ridge regression report into a ratification list;
+     Kev approved 8 numeric changes and made calls on 2 more.
+   - Phase 3: applied the ratified changes to dexter.py/derivs.py (gp,
+     fib_50, pattern_breakout, bb_mid, oi_confirm, oi_divergence) --
+     including catching and fixing a real interaction bug between the gp and
+     fib_50 changes (a stale golden-pocket-collapse guard) before it could
+     ship silently broken.
+   - Phase 4: added a minimum-sample filter (MIN_COMBO_N=5) to the
+     learning-session combo summary so Chev can no longer write a rule off
+     2-3 trades. Kev's own manual playbook cleanup for chev_playbook_forex.txt
+     was done BY CLAUDE after Kev explicitly asked (not left for him) --
+     duplicated ENTRY QUALITY STANDARDS/TRADE MANAGEMENT PATTERNS/ASSET
+     NOTES/JANE'S PATTERNS sections removed. *** ONE OPEN THREAD: this also
+     deleted the file's only two REASONING QUALITY copies (both sat inside
+     the corrupted block per Kev's own exact line-range instruction) --
+     flagged to Kev at the time with a restore-or-leave-it question that was
+     never explicitly answered before the conversation moved to Phase 4.
+     chev_playbook_forex.txt still has NO Reasoning Quality section as of
+     this writing -- worth a decision next session. ***
+
+3. PHASE 6A -- Kilo AI had already implemented the SCAN_WEIGHTS hot-reload
+   migration; Claude reviewed and fixed it (Lead-Architect pass): "gp" was
+   never actually wired to its table entry (the flagship recalibrated tag
+   would have silently ignored future Weight Lab changes), pattern_high_conf/
+   pattern_mid_conf reintroduced an ambiguity Phase 1 had deliberately
+   excluded, several reason strings shown to Chev still hardcoded stale
+   point-value text, and fib_382/fib_236 were dead keys. Also found and fixed
+   an unrelated pre-existing bug: derivs.py's own self-test still asserted
+   pre-Phase-3 values (5 of 12 tests silently failing).
+
+4. PHASE 6B -- expanded WEIGHT_LAB_VERIFIED_TAGS from 3 to 19 tags (NOT the
+   full 26 in SCAN_WEIGHTS -- 7 unwired placeholder/shared-branch tags were
+   deliberately excluded so the Approve button can never appear on a change
+   that does nothing). Found and resolved a live bug before it could bite:
+   a stale pre-existing "gp" override from before this session would have
+   doubled up with Phase 3's hand-edit on the next restart (SCAN_WEIGHTS["gp"]
+   would have silently become 1, not the approved 2) -- cleared with Kev's
+   explicit sign-off. Wrote 6 delta=0 freeze-marker entries into
+   weight_overrides.json so the freeze window knows Phase 3's hand-edits
+   happened.
+
+5. PHASE 6C -- Weight Lab UI cleanup: plain-English one-liners, a real ✓
+   agreement badge (previously only ⚠ ever rendered), frozen_since shown,
+   and the collapsed section regrouped from "non-significant" to "watching,
+   not yet approvable" (grouped by whether a tag is actually actionable, not
+   by statistics) so a dead Approve button can never sit next to a live one.
+
+6. PHASE 6D -- Parts 1, 2, 3, 5 (Part 4 was not run today):
+   - Part 1: friendly names everywhere (reused the EXISTING /api/tag_registry
+     system rather than a new hardcoded dict Kev's own phase text had
+     assumed didn't exist) + a "Strategy snapshot" bar-chart panel. Found and
+     fixed a real bug while wiring the freeze fallback: the manual-editor
+     cache was silently wiping itself to [] on every frozen load, which
+     would have defeated the snapshot's freeze-fallback before it was ever
+     used.
+   - Part 2: freeze countdown with a rate-based ETA, in-memory only, that
+     renders nothing rather than a placeholder guess whenever the math isn't
+     trustworthy yet. Validated with a 6-scenario standalone simulation.
+   - Part 3: the one backend part -- new read-only /api/weight_history route
+     + a "Change history" timeline with an honest before/after verdict per
+     entry, gated at the same 200-record freeze threshold so an early
+     verdict can't repeat "Chef's coin-flip disease... wearing a nicer
+     shirt." Checked first and confirmed /api/weight_proposal/revert leaves
+     no tombstone -- reverted changes genuinely cannot appear in this
+     history, documented rather than faked.
+   - Part 5 (optional): a "Today at a glance" strip atop the Strategy panel
+     — win rate, today's trades, Weight Lab state, last playbook update,
+     each a shortcut to its tab. Two small approved additions to the
+     existing /api/vitals route (trades_today, playbook_age_secs); no new
+     route.
+
+RECURRING PATTERN WORTH NAMING: several times today, literally following a
+phase's instructions would have produced something broken or misleading
+(the CSS variable names that don't exist, a TAG_LABELS dict duplicating an
+existing registry, an Approve button wired to nothing, a freeze marker that
+would silently double-count with old data). Every one of these was caught by
+tracing the actual code path before implementing, flagged explicitly, and
+either fixed with Kev's sign-off or resolved by following the codebase's own
+established convention instead of the phase text's assumption about it.
+
+CURRENT STATE: nothing from today has been committed or pushed -- all still
+local, uncommitted changes (`git status` shows 11 modified files: dexter.py,
+derivs.py, weight_proposal.py, chev_playbook_forex.txt, push_dashboard.py,
+validation_kpi.json, webapp/index.html, webapp/css/components/strategy.css,
+webapp/js/charts/drawing.js, webapp/js/ui/weight-lab.js, handoff.txt).
+Multiple restarts were required and requested at various points through the
+day (Phases 3, 4, 6A, 6B, 6D Part 3, 6D Part 5 all touch dexter.py/derivs.py)
+-- Kev should do one final restart to make sure everything from today is
+live before relying on any of it, and should still open the /api/
+weight_history JSON with Claude at least once to eyeball it against real
+data, since no live Dexter ran during this entire session to verify against.
+
+================================================================================
 END OF HANDOFF
 ================================================================================

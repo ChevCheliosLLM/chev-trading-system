@@ -1072,8 +1072,73 @@
       if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
     }
 
+    // PHASE 6D PART 5: "Today at a glance" strip -- one plain sentence each for win
+    // rate, today's trades, Weight Lab state, and last playbook update, each a
+    // shortcut to the tab it summarizes via the SAME _switchStratTab() the tab bar
+    // itself uses (no new navigation code). Piggybacks on loadAll()'s existing 25s
+    // cycle -- no new polling loop.
+    async function loadGlanceStrip() {
+      const el = document.getElementById('stratGlanceStrip');
+      if (!el) return;
+      try {
+        const [vitalsR, perfR, wpR] = await Promise.allSettled([
+          _apiFetch('/api/vitals').then(r => r.json()),
+          _apiFetch('/api/strategy/performance').then(r => r.json()),
+          _apiFetch('/api/weight_proposal').then(r => r.json()),
+        ]);
+        const vitals = vitalsR.status === 'fulfilled' ? vitalsR.value : {};
+        const perf   = perfR.status === 'fulfilled' ? perfR.value : {};
+        const wp     = wpR.status === 'fulfilled' ? wpR.value : {};
+
+        // Card 1: win rate -- same >=50 threshold loadPerformance() itself uses for
+        // scWinRate's good/bad class, not a second one invented here.
+        const wrText = perf.total_closed ? `${perf.win_rate.toFixed(1)}% win rate` : 'no closed trades yet';
+        const wrCls  = perf.total_closed ? (perf.win_rate >= 50 ? 'good' : 'bad') : '';
+
+        // Card 2: today's trades -- vitals.trades_today (PHASE 6D PART 5 backend addition).
+        const tt = vitals.trades_today;
+        const ttText = tt == null ? 'unavailable' : (tt === 0 ? 'no trades yet today' : `${tt} trade${tt === 1 ? '' : 's'} today`);
+        const ttCls  = (tt != null && tt > 0) ? 'good' : '';
+
+        // Card 3: Weight Lab state -- same "actionable" gate weight-lab.js's own
+        // loadWeightLab() uses (significant + verified + real delta/current_weight),
+        // not a second definition of "waiting on you."
+        let wlText = 'unavailable', wlCls = '';
+        if (wp.ok) {
+          if (wp.frozen) {
+            wlText = 'frozen — collecting data';
+          } else {
+            const actionable = (wp.proposals || []).filter(p =>
+              p.significant && (p.mapping || 'unmapped') === 'verified' && p.proposed_delta != null && p.current_weight != null);
+            wlText = actionable.length ? `${actionable.length} suggestion${actionable.length === 1 ? '' : 's'} waiting` : 'nothing new';
+            wlCls  = actionable.length ? 'good' : '';
+          }
+        }
+
+        // Card 4: last playbook update -- vitals.playbook_age_secs (PHASE 6D PART 5
+        // backend addition, freshest of the 3 playbook files' mtimes).
+        const pbAge = vitals.playbook_age_secs;
+        let pbText = 'unavailable';
+        if (pbAge != null) {
+          const hrs = pbAge / 3600;
+          pbText = hrs < 1 ? `${Math.max(1, Math.round(pbAge / 60))}m ago`
+                 : hrs < 48 ? `${hrs.toFixed(1)}h ago`
+                 : `${Math.round(hrs / 24)}d ago`;
+        }
+
+        el.innerHTML = `
+          <div class="stratGlanceCard" data-spane="performance"><div class="k">Win rate</div><div class="v ${wrCls}">${wrText}</div></div>
+          <div class="stratGlanceCard" data-spane="feed"><div class="k">Today</div><div class="v ${ttCls}">${ttText}</div></div>
+          <div class="stratGlanceCard" data-spane="weightlab"><div class="k">Weight Lab</div><div class="v ${wlCls}">${wlText}</div></div>
+          <div class="stratGlanceCard" data-spane="overview"><div class="k">Playbook</div><div class="v">${pbText}</div></div>`;
+        el.querySelectorAll('.stratGlanceCard').forEach(card => {
+          card.addEventListener('click', () => _switchStratTab(card.dataset.spane));
+        });
+      } catch (e) { console.warn('[Strategy] glance strip load failed', e); }
+    }
+
     async function loadAll() {
-      await Promise.all([loadMode(), loadFeed(), loadFunnel(), loadPerformance(), loadHeatmap(), loadShadow(), loadTimeseries(), loadScoreboard(), loadValidationKpi(), loadElliotSuggestions()]);
+      await Promise.all([loadMode(), loadFeed(), loadFunnel(), loadPerformance(), loadHeatmap(), loadShadow(), loadTimeseries(), loadScoreboard(), loadValidationKpi(), loadElliotSuggestions(), loadGlanceStrip()]);
       // Runs only after BOTH loadFunnel (renders the bars) and loadShadow (populates
       // _shadowBucketsCache) have settled -- no race between the two, regardless of which
       // resolves first.
@@ -2490,6 +2555,13 @@
     if (activeTool==='vp'&&currentCandles.length) t2=Math.min(t2,currentCandles[currentCandles.length-1].time);
     const base={time1:firstClickPos.time,price1:firstClickPos.price,time2:t2,price2:p2};
     pushUndo();drawings.push({type:activeTool,...base,color:TOOL_COLORS[activeTool],lineWidth:1.5,visible:true});
+    // Bug fix: a manually-drawn VP box had no bin_volumes/bin_edges until the
+    // user dragged one of its anchors afterward (the only place that ever
+    // called _recomputeVPFromCandles) -- renderShape's vp branch requires that
+    // data and silently draws nothing without it, so the box looked like it
+    // never appeared. Compute it immediately on creation too, same function,
+    // same result a drag would produce.
+    if (activeTool==='vp') _recomputeVPFromCandles(drawings[drawings.length-1]);
     saveDrawings();previewShape=null;clickCount=0;firstClickPos=null;updateObjTree();markDirty();
   });
 
