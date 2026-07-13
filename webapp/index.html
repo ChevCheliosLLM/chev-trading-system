@@ -45,6 +45,110 @@
 <link rel="stylesheet" href="css/components/strategy.css?v=20260716-2">
 <link rel="stylesheet" href="css/components/weight-lab.css?v=20260716-2">
 <link rel="stylesheet" href="css/animations.css">
+<!-- ============================================================
+     Kev's live UI tweaks — deliberately kept INSIDE index.html (not a new
+     css/ file) since only this file is safe to edit right now: a partner is
+     actively working on dexter.py and every script, so any other file
+     touched here would just get overwritten by their next pull. Loaded last
+     so these rules win the normal cascade over the external stylesheets
+     above with no !important needed.
+     ============================================================ -->
+<style>
+  /* 1. "UI density" button is now "Settings" (label changed in the markup
+     itself) and also holds the Shortcuts entry -- match its look to the
+     existing Compact/Comfortable/Large rows. */
+  #densityPopover #shortcutsBtn {
+    background: transparent; border: none; color: var(--txt2);
+    font-family: 'Inter', sans-serif; font-size: 0.6875rem; text-align: left;
+    padding: var(--pad-s) var(--pad-m); border-radius: var(--r-xs); cursor: pointer;
+    transition: background 0.12s, color 0.12s; width: 100%;
+  }
+  #densityPopover #shortcutsBtn:hover { background: rgba(255,255,255,0.06); color: var(--txt1); }
+  /* "Size" submenu (native <details>/<summary>, no JS) -- same row look as
+     Compact/Comfortable/Large/Keyboard Shortcuts, options indented slightly
+     underneath so the nesting reads clearly. */
+  .densitySizeDetails summary {
+    list-style: none; cursor: pointer; color: var(--txt2);
+    font-family: 'Inter', sans-serif; font-size: 0.6875rem;
+    padding: var(--pad-s) var(--pad-m); border-radius: var(--r-xs);
+    transition: background 0.12s, color 0.12s;
+  }
+  .densitySizeDetails summary::-webkit-details-marker { display: none; }
+  .densitySizeDetails summary:hover { background: rgba(255,255,255,0.06); color: var(--txt1); }
+  .densitySizeDetails summary::after { content: '▸'; float: right; opacity: 0.6; }
+  .densitySizeDetails[open] summary::after { content: '▾'; }
+  .densitySizeDetails .densityOpt { padding-left: calc(var(--pad-m) + 10px); }
+
+  /* 3. Setup Volume heatmap (Strategy -> Chev's Edge overview tab) -- cells
+     were stretching to fill 1fr of a 94vw-wide panel; fixed, small pixel
+     sizes instead (roughly 80% smaller than the old flexible sizing). */
+  #stratHeatmap { grid-template-columns: 22px repeat(6, 16px); gap: 1px; }
+  .stratHeatCell { width: 16px; height: 16px; aspect-ratio: 1; }
+
+  /* "CHEV" wordmark, top left -- was bumped 80% bigger (16px->29px) last
+     round; that read as too big, so pulled back 30% from there (29px->20px). */
+  #chevWordmark { font-size: 20px; }
+
+  /* 2. Live-trades quick button -- right-aligned (mlAuto) in row 2, so it
+     sits underneath #topRightCluster's Arsenal button above. Three moved
+     (not duplicated) live elements inside -- see the markup comment for
+     which script keeps writing to each -- styled as three small stat
+     segments with thin dividers, same visual language as .tsbSep/.drawSep
+     elsewhere on the page. */
+  #tradesQuickBtn {
+    display: flex; align-items: center; gap: 10px; height: var(--btn-h);
+    padding: 0 var(--pad-m);
+  }
+  .tqStat { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.2; }
+  .tqSep { width: 1px; height: 18px; background: rgba(255,255,255,0.08); flex-shrink: 0; }
+  #tradesQuickBtn .tsbLabel {
+    font-size: 8px; color: var(--txt3); text-transform: uppercase;
+    letter-spacing: 0.08em; font-family: 'Inter', sans-serif;
+  }
+  #tradesQuickBtn .tsbValue,
+  #tradesQuickBtn .sectionBadge {
+    font-size: 11px; font-weight: 700; font-family: 'Inter', sans-serif; color: var(--txt2);
+    background: none; border: none; padding: 0; border-radius: 0;
+  }
+  #tradesQuickBtn .tsbValue.pos { color: var(--green); }
+  #tradesQuickBtn .tsbValue.neg { color: var(--red); }
+  #tradesQuickBtn .sectionBadge { color: var(--gold); }
+
+  /* #topRightCluster: Arsenal/Strategy/Call Chev/Settings, grouped in the
+     markup specifically so this rule can shift just this cluster, not the
+     whole topbar (chevWordmark/search/TF pills and all of row 2 stay put). */
+  #topRightCluster { display: flex; align-items: center; gap: 6px; }
+
+  /* 3. When the right Intel drawer (#rightPanel) is open, it's a fixed
+     overlay that used to cover these buttons (higher z-index, starts from
+     the very top of the page). #topRightCluster and #rightPanel aren't
+     direct siblings (#rightPanel is nested inside #body), so a plain CSS
+     sibling selector can't reach across -- :has() can, watching for
+     #rightPanel.open ANYWHERE in the page and shrinking the cluster's own
+     width by the same 420px the drawer opens to. The existing
+     .tb-row1-spacer (flex:1) absorbs the difference, so these buttons slide
+     left into view instead of vanishing under the drawer -- reuses the
+     drawer's own open/close class, no script changes. Same transition
+     timing/easing as #rightPanel's own width transition (toasts.css) so
+     both move together. */
+  body:has(#rightPanel.open) #topRightCluster {
+    margin-right: 420px;
+    transition: margin-right 0.2s cubic-bezier(0.4,0,0.2,1);
+  }
+
+  /* 6. Condensed symbol/price header -- #priceInfo's old floating box on the
+     chart duplicated this bar (see index.html markup: its OHLC/countdown/
+     freshness children moved up into #symbolHeader, and the box itself is
+     hidden here since #symLabel/#priceLabel are now redundant with
+     #symHeaderName/#symHeaderPrice). Numbers in the surviving bar are 30%
+     bigger (15px->19.5px, 11.5px->15px, 10px->13px, 11px->14px). */
+  #priceInfo { display: none; }
+  #symbolHeader { flex-wrap: wrap; row-gap: 4px; }
+  #symHeaderName, #symHeaderPrice { font-size: 19.5px; }
+  #symHeaderChangePct, #symHeaderChangeAbs { font-size: 15px; }
+  .symHeaderStat { font-size: 13px; }
+  #symbolHeader #ohlcInfo, #symbolHeader #candleCountdown { font-size: 14px; }
+</style>
 </head>
 <body>
 
@@ -436,30 +540,46 @@
       <button class="pill" data-tf="4h">4h</button>
       <button class="pill" data-tf="1d">1d</button>
       <div class="tb-row1-spacer"></div>
-      <button class="pill iconBtn" id="strategyBtn" data-tip="Strategy" onclick="window._openStrategy?.()">
-        <svg class="icon"><use href="#icon-flame"/></svg>
-      </button>
-      <button class="pill iconBtn" id="cmdPaletteBtn" data-tip="Command palette" onclick="window._openCmdPalette?.()">
-        <svg class="icon"><use href="#icon-search"/></svg>
-      </button>
-      <button class="pill iconBtn" id="rightToggle" data-tip="Call Chev">
-        <svg class="icon"><use href="#icon-message-circle"/></svg>
-      </button>
-      <!-- PHASE 4 Task 3: UI density control. js/ui/density.js applies the
-           choice and persists it; see the inline anti-FOUC snippet in <head>
-           for how it's applied before first paint. -->
-      <button class="pill iconBtn" id="densityBtn" data-tip="UI density">
-        <svg class="icon"><use href="#icon-settings"/></svg>
-      </button>
-      <div id="densityPopover">
-        <button class="densityOpt" data-density="compact">Compact</button>
-        <button class="densityOpt" data-density="comfortable">Comfortable</button>
-        <button class="densityOpt" data-density="large">Large</button>
+      <!-- Kev UI tweak: Arsenal/Strategy/Call Chev/Settings grouped into one
+           wrapper specifically so the drawer-slide CSS below can shift just
+           this cluster left, not the whole topbar (chevWordmark/search/TF
+           pills stay put; row 2 stays put). -->
+      <div id="topRightCluster">
+        <button id="arsenalToggleBtn" data-tip="Arsenal"><svg class="arsenalToggleIcon" viewBox="0 0 44 28" fill="none"><rect x="8" y="7" width="26" height="8" rx="4" fill="currentColor"/><rect x="30" y="9" width="10" height="4" rx="2" fill="currentColor"/><rect x="6" y="7" width="5" height="10" rx="1" fill="currentColor" opacity="0.7"/><circle cx="11" cy="18" r="4" fill="currentColor"/><circle cx="25" cy="18" r="4" fill="currentColor"/><circle cx="11" cy="18" r="1.5" fill="rgba(0,0,0,0.45)"/><circle cx="25" cy="18" r="1.5" fill="rgba(0,0,0,0.45)"/></svg>Chev's Arsenal</button>
+        <button class="pill iconBtn" id="strategyBtn" data-tip="Strategy" onclick="window._openStrategy?.()">
+          <svg class="icon"><use href="#icon-flame"/></svg>
+        </button>
+        <button class="pill iconBtn" id="rightToggle" data-tip="Call Chev">
+          <svg class="icon"><use href="#icon-message-circle"/></svg>
+        </button>
+        <!-- PHASE 4 Task 3: UI density control. js/ui/density.js applies the
+             choice and persists it; see the inline anti-FOUC snippet in <head>
+             for how it's applied before first paint. Kev UI tweak: relabeled
+             "Settings" now that Shortcuts lives inside this same popover too. -->
+        <button class="pill iconBtn" id="densityBtn" data-tip="Settings">
+          <svg class="icon"><use href="#icon-settings"/></svg>
+        </button>
+        <div id="densityPopover">
+          <!-- Kev UI tweak: Settings is growing beyond just density, so the three
+               size options now live under their own "Size" submenu instead of
+               sitting bare at the top level. <details>/<summary> is native,
+               no-JS disclosure (same element this codebase already uses for the
+               Elliot's Suggestions evidence rows) -- js/ui/density.js's
+               `popover.querySelectorAll('.densityOpt')` still finds all three
+               buttons regardless of the extra nesting, so no script changes
+               needed. -->
+          <details class="densitySizeDetails">
+            <summary>Size</summary>
+            <button class="densityOpt" data-density="compact">Compact</button>
+            <button class="densityOpt" data-density="comfortable">Comfortable</button>
+            <button class="densityOpt" data-density="large">Large</button>
+          </details>
+          <!-- Kev UI tweak: moved in from its own standalone topbar button --
+               same id, so js/ui/shortcuts-panel.js's existing click wiring still
+               finds and opens it exactly as before; only its location/look changed. -->
+          <button id="shortcutsBtn">Keyboard Shortcuts</button>
+        </div>
       </div>
-      <!-- PHASE 6 Task 2: keyboard shortcuts panel. Also opened by pressing ? -->
-      <button class="pill iconBtn" id="shortcutsBtn" data-tip="Shortcuts">
-        <svg class="icon"><use href="#icon-keyboard"/></svg>
-      </button>
     </div>
 
     <!-- ROW 2: indicators only now — drawing tools moved to #toolRail (PHASE 4
@@ -472,8 +592,37 @@
       <button class="pill" id="indRsiBtn" data-tip="RSI">RSI</button>
       <button class="pill" id="indBBBtn" data-tip="Bollinger Bands">BB</button>
       <button class="pill" id="indVwapBtn" data-tip="VWAP">VWAP</button>
-      <div class="drawSep"></div>
-      <button id="arsenalToggleBtn" data-tip="Arsenal"><svg class="arsenalToggleIcon" viewBox="0 0 44 28" fill="none"><rect x="8" y="7" width="26" height="8" rx="4" fill="currentColor"/><rect x="30" y="9" width="10" height="4" rx="2" fill="currentColor"/><rect x="6" y="7" width="5" height="10" rx="1" fill="currentColor" opacity="0.7"/><circle cx="11" cy="18" r="4" fill="currentColor"/><circle cx="25" cy="18" r="4" fill="currentColor"/><circle cx="11" cy="18" r="1.5" fill="rgba(0,0,0,0.45)"/><circle cx="25" cy="18" r="1.5" fill="rgba(0,0,0,0.45)"/></svg>Chev's Arsenal</button>
+      <!-- Kev UI tweak: right-aligned (mlAuto) so it sits underneath the
+           Arsenal button now living in #topRightCluster above. Three moved-
+           not-duplicated live elements: #tsbNetPnl (was in #tradesSummaryBar,
+           where Balance/Win Rate/Reset stay put), #tsbOpenCount (same, was
+           labeled "Open" there), and #radarBadge (was the On Radar section's
+           own count, per Kev: "on radar" setups ARE what he means by
+           "pending" here). All three keep the exact ids their owning scripts
+           (trading-logs.js / chev-corner.js) already write to -- nothing
+           duplicated, nothing new to track. onclick reuses the Trades tab's
+           own already-wired click handler (panel-toggle.js) to open the
+           drawer straight to Trades -- no new script logic. NOTE: #radarBadge
+           is still hidden by chev-corner.js itself whenever pending=0 (that
+           script logic wasn't touched), so the Pending number disappears at
+           zero the same way it always has -- a real, pre-existing behavior,
+           not something new added here. -->
+      <button id="tradesQuickBtn" class="pill mlAuto" data-tip="View trades" onclick="document.querySelector('#intelTabBar [data-tab=trades]').click()">
+        <span class="tqStat">
+          <span class="tsbLabel">Net P&amp;L</span>
+          <span class="tsbValue flat" id="tsbNetPnl">—</span>
+        </span>
+        <span class="tqSep"></span>
+        <span class="tqStat">
+          <span class="tsbLabel">Live</span>
+          <span class="tsbValue" id="tsbOpenCount">0</span>
+        </span>
+        <span class="tqSep"></span>
+        <span class="tqStat">
+          <span class="tsbLabel">Pending</span>
+          <span class="sectionBadge" id="radarBadge" style="display:none">0</span>
+        </span>
+      </button>
     </div>
   </div>
 
@@ -645,6 +794,13 @@
         <span class="symHeaderStat">24h L <b id="symHeaderLow">—</b></span>
         <span class="symHeaderStat">24h Vol <b id="symHeaderVol">—</b></span>
       </span>
+      <!-- Kev UI tweak: moved in from the floating #priceInfo box on the chart --
+           same ids, so chart-core.js's existing getElementById lookups still find
+           and populate them exactly as before; only their visible location moved,
+           condensing what used to be two separate symbol/price displays into one. -->
+      <div id="ohlcInfo"></div>
+      <div id="candleCountdown"></div>
+      <div class="freshStamp" id="freshChart"></div>
     </div>
     <!-- Position strip: shown when an idea or trade is selected -->
     <div id="chevActiveIdeaBanner"></div>
@@ -722,11 +878,14 @@
         <div class="tpcRow"><span>Stop distance</span><span id="tpcStopDist">—</span></div>
         <div class="tpcRow"><span>Target distance</span><span id="tpcTpDist">—</span></div>
       </div>
+      <!-- Kev UI tweak: this used to float its own symbol+price+OHLC+countdown box
+           on top of the chart, duplicating #symbolHeader above. Its OHLC/countdown/
+           freshness children moved up into #symbolHeader; #symLabel/#priceLabel stay
+           here (chart-core.js still writes to them every tick) but are hidden via
+           CSS (#priceInfo { display:none } below) since #symbolHeader already shows
+           the same symbol/price. -->
       <div id="priceInfo">
         <div><span class="sym" id="symLabel">SOLUSDT</span><span class="price" id="priceLabel">--</span></div>
-        <div id="ohlcInfo"></div>
-        <div id="candleCountdown"></div>
-        <div class="freshStamp" id="freshChart"></div>
       </div>
       <div id="status">Loading...</div>
     </div>
@@ -766,18 +925,8 @@
           </div>
           <div class="tsbSep"></div>
           <div class="tsbBlock">
-            <div class="tsbLabel">Net P&amp;L</div>
-            <div class="tsbValue flat" id="tsbNetPnl">—</div>
-          </div>
-          <div class="tsbSep"></div>
-          <div class="tsbBlock">
             <div class="tsbLabel">Win Rate</div>
             <div class="tsbValue" id="tsbWinRate">—</div>
-          </div>
-          <div class="tsbSep"></div>
-          <div class="tsbBlock">
-            <div class="tsbLabel">Open</div>
-            <div class="tsbValue" id="tsbOpenCount">0</div>
           </div>
           <div class="mlAuto">
             <button id="resetBalance" data-tip="Reset balance"><svg class="icon"><use href="#icon-rotate-ccw"/></svg>Reset</button>
@@ -799,7 +948,6 @@
         <div class="tradeSectionHeader" id="hdrOnRadar">
           <svg class="icon"><use href="#icon-radar"/></svg>
           On Radar
-          <span class="sectionBadge" id="radarBadge" style="display:none">0</span>
           <span class="tsHeaderNote">Chev's pending setups</span>
         </div>
         <div id="chevsCorner">
@@ -1194,7 +1342,7 @@
 <script src="js/charts/rsi-canvas.js?v=20260709-2"></script>
 <script src="js/ui/chat.js?v=20260717-1"></script>
 <script src="js/charts/timeframe-load.js?v=20260709-2"></script>
-<script src="js/charts/drawing.js?v=20260720-1"></script>
+<script src="js/charts/drawing.js?v=20260721-1"></script>
 <script src="js/charts/engine.js?v=20260718-1"></script>
 <script src="js/ui/weight-lab.js?v=20260713-1"></script>
 <script src="js/ui/sparklines.js?v=20260709-2"></script>
