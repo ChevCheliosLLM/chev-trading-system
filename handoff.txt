@@ -9114,6 +9114,69 @@ live before relying on any of it, and should still open the /api/
 weight_history JSON with Claude at least once to eyeball it against real
 data, since no live Dexter ran during this entire session to verify against.
 
+=== 2026-07-13 — LEARN TAB REDESIGN ("The Trading Floor") — RESTART: NOT REQUIRED (frontend-only), DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ===
+
+CONTEXT: Kev found the Strategy panel's Learn tab (div[data-spane="learn"])
+hard to read -- small text, no visual hierarchy, no categorization, and (the
+real root cause, found while reading the code) the 19-entry Sections list had
+NO visible title at all, just unlabeled paragraphs stacked one after another.
+Asked to redesign for readability, staying non-coder-friendly and leaning
+into the site's existing cast of named roles (Dexter, Chev, Elliot, plus 3
+Kev didn't know were already in the copy: Jax, George, Mike Ross).
+
+ONE APPROVED JS CHANGE (everything else is CSS + static HTML only, per Kev's
+explicit constraint that no existing ids/data-attributes/hooks be touched):
+Added SECTION_TITLES/SECTION_OWNER/OWNER_LABEL lookup tables to drawing.js's
+Learn Tab section and one more <div class="gName"> line inside the EXISTING
+#stratLearnSections template, so each section entry finally shows a real
+heading ("Scorecard", "Weight Lab", etc.) plus a small role chip ("Jax",
+"Dexter"...). Owners were read directly off each section's own SECTION_STORY
+prose already in the file (e.g. "Jax's honest, real-money ledger..." -> jax),
+never invented. Same owner field added to the 6-item CONCEPT_GLOSSARY array.
+No existing id, data attribute, or click handler was touched -- confirmed by
+diff.
+
+EVERYTHING ELSE IS CSS/HTML ONLY:
+1. Confluence Tags glossary (100+ tags) recolored/regrouped into a card grid
+   entirely via CSS attribute selectors on the data-search attribute each
+   tag entry ALREADY carries (name+code, lowercased) -- zero JS changes.
+   6 functional categories (Structure/S-R, Patterns & Market Structure,
+   Fibonacci, Momentum, Trend & Volatility, Volume/Derivatives/Liquidity),
+   mirroring the exact same groupings _tagStoryText() already uses for Story
+   Time, so the visual color and the story text can never disagree.
+2. Sections + Concept Glossary entries became real cards (background fill,
+   rounded corners, spacing) with a colored left accent + role chip, keyed
+   to the new data-owner attribute -- 6 role colors (Dexter cyan, Chev gold,
+   Elliot violet, Jax green, George orange, Mike Ross blue), each already
+   meaningful elsewhere in the app (gold=Chev's own color everywhere, green/
+   orange already mean real-good/risk-caution, violet was already Elliot's
+   icon color).
+3. New sticky quick-nav rail (static HTML, grouped by role, linking to the
+   same #learnEntry-<key> anchors the (i) icons already deep-link to) --
+   left column of a new 2-column grid layout scoped ONLY to
+   .stratPane[data-spane="learn"].active (had to include .active in that
+   selector specifically, not just the data-spane attribute, or the new
+   grid rule would have won a specificity tie against .stratPane.active's
+   hide/show toggle by source order and broken every OTHER tab -- checked
+   and fixed before shipping, not after). Collapses to a horizontal wrapped
+   row under 720px.
+4. Mode toggle and search bar restyled as a premium segmented control /
+   focus-glow input, matching the rest of the dashboard's existing button
+   and card language rather than introducing new components.
+
+VERIFICATION: `node --check webapp/js/charts/drawing.js` -> syntax OK. Brace
+count on strategy.css (208 open / 208 close) and div-tag count on index.html
+(414 open / 414 close) both balanced. `git diff --stat` shows only these 3
+files changed. Cache-bust bumped: strategy.css 20260716-3 -> -4, drawing.js
+20260721-2 -> -3.
+NOT independently verified in a live browser this session -- Kev should hard
+refresh and confirm the new layout renders correctly, the (i) deep-links and
+pinned-highlight still work, and the sticky rail behaves as expected at
+different panel widths.
+
+RESTART: NOT REQUIRED -- frontend-only. DEPLOY: NO (not pushed this
+session). RE-PASTE CHEV PROMPT: NO.
+
 ================================================================================
 END OF HANDOFF
 ================================================================================

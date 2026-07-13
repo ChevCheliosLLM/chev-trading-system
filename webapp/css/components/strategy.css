@@ -123,25 +123,188 @@
 }
 .stratLearnIcon:hover { background: rgba(155,89,182,0.3); }
 
-.learnModeToggleRow { display: flex; gap: 6px; margin-bottom: 16px; }
-#stratLearnSections { margin-bottom: 22px; }
-.learnEntry { padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04); scroll-margin-top: 12px; }
-.learnEntry:last-child { border-bottom: none; }
-.learnEntry .gName { font-size: 12px; font-weight: 700; color: var(--gold); font-family: 'Inter', sans-serif; }
+/* ============================================================================
+   PHASE 6D LEARN TAB REDESIGN -- "The Trading Floor"
+   Concept: every stat on this dashboard was produced by one of six named
+   roles the rest of the site already uses in its prose (Dexter scans/counts,
+   Chev judges, Elliot digests, Jax keeps the real ledger, George enforces
+   risk, Mike Ross tracks the shadow "what-ifs"). Instead of one undifferen-
+   tiated wall of paragraphs, every entry gets a colored left accent + a small
+   role chip so you always know who's talking, a sticky rail groups the
+   Sections list by that same role so you can jump straight to what you want,
+   and the Confluence Tags glossary becomes a color-coded card grid grouped
+   by what the tag actually measures (structure, momentum, trend, etc.)
+   instead of one long alphabetical list. No JS hooks/ids touched beyond the
+   two purely-additive fields (data-owner, a title) drawing.js now also
+   writes into these same existing containers.
+   ============================================================================ */
+
+/* Six-color role system, reused for both Sections/Concepts (by WHO reports it)
+   and, separately, Confluence Tags (by WHAT it measures -- see far below). */
+:root {
+  --role-dexter:   #4dd0e1;
+  --role-chev:     var(--gold);
+  --role-elliot:   #9b59b6;
+  --role-jax:      var(--green);
+  --role-george:   #ff8a3d;
+  --role-mikeross: #5dade2;
+}
+
+/* ---- Two-column layout: sticky rail + main content ---- */
+.stratPane[data-spane="learn"].active {
+  display: grid; grid-template-columns: 172px 1fr; gap: 26px; align-items: start;
+}
+.learnQuickNav {
+  position: sticky; top: 0; display: flex; flex-direction: column; gap: 16px;
+  padding-right: 14px; border-right: 1px solid var(--border);
+}
+.lqnGroupLabel {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--txt3); font-family: 'Inter', sans-serif; margin-bottom: 5px;
+  padding-left: 8px; border-left: 2px solid var(--border2);
+}
+.lqnGroupLabel[data-owner="dexter"]   { border-left-color: var(--role-dexter); }
+.lqnGroupLabel[data-owner="chev"]     { border-left-color: var(--role-chev); }
+.lqnGroupLabel[data-owner="elliot"]   { border-left-color: var(--role-elliot); }
+.lqnGroupLabel[data-owner="jax"]      { border-left-color: var(--role-jax); }
+.lqnGroupLabel[data-owner="george"]   { border-left-color: var(--role-george); }
+.lqnGroupLabel[data-owner="mikeross"] { border-left-color: var(--role-mikeross); }
+.learnQuickNav a {
+  display: block; font-size: 11px; color: var(--txt2); text-decoration: none;
+  font-family: 'Inter', sans-serif; padding: 3px 8px; border-radius: 5px; line-height: 1.4;
+}
+.learnQuickNav a:hover { background: rgba(255,255,255,0.06); color: var(--txt1); }
+.learnMainCol { min-width: 0; }
+
+@media (max-width: 720px) {
+  .stratPane[data-spane="learn"].active { grid-template-columns: 1fr; }
+  .learnQuickNav {
+    position: static; flex-direction: row; flex-wrap: wrap; gap: 6px 16px;
+    padding-right: 0; padding-bottom: 12px; border-right: none; border-bottom: 1px solid var(--border);
+    margin-bottom: 14px;
+  }
+  .lqnGroup { display: flex; align-items: center; gap: 6px; }
+  .lqnGroupLabel { margin-bottom: 0; }
+}
+
+/* ---- Mode toggle: premium segmented control instead of two loose pills ---- */
+.learnModeToggleRow {
+  display: inline-flex; gap: 2px; margin-bottom: 18px; padding: 3px;
+  background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md);
+}
+.learnModeToggleRow .pill {
+  border: none; background: transparent; border-radius: calc(var(--r-md) - 3px);
+  padding: 7px 16px; font-size: 11.5px; color: var(--txt2);
+}
+.learnModeToggleRow .pill.active { background: var(--gold); color: #201a08; font-weight: 700; }
+
+/* ---- Search bar: premium sizing + focus glow ---- */
+#glossarySearch {
+  width: 100%; box-sizing: border-box; padding: 10px 14px; margin-bottom: 14px;
+  background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-md);
+  color: var(--txt1); font-family: 'Inter', sans-serif; font-size: 12.5px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+#glossarySearch:focus {
+  outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(212,175,55,0.15);
+}
+
+/* ---- Base card treatment shared by Sections + Concept Glossary entries ----
+   (Confluence Tags gets its own denser grid card further below -- 100+ tags
+   need a tighter format than 19 sections + 6 concepts do.) */
+#stratLearnSections, #stratConceptGlossary { margin-bottom: 24px; }
+#stratLearnSections .learnEntry, #stratConceptGlossary .learnEntry {
+  padding: 14px 16px; margin-bottom: 8px; border-bottom: none;
+  background: var(--card-bg); border: 1px solid var(--card-border);
+  border-left: 3px solid var(--border2); border-radius: var(--card-radius);
+  scroll-margin-top: 12px;
+}
+#stratLearnSections .learnEntry:last-child, #stratConceptGlossary .learnEntry:last-child { margin-bottom: 0; }
+#stratLearnSections .learnEntry[data-owner="dexter"],   #stratConceptGlossary .learnEntry[data-owner="dexter"]   { border-left-color: var(--role-dexter); }
+#stratLearnSections .learnEntry[data-owner="chev"],     #stratConceptGlossary .learnEntry[data-owner="chev"]     { border-left-color: var(--role-chev); }
+#stratLearnSections .learnEntry[data-owner="elliot"],   #stratConceptGlossary .learnEntry[data-owner="elliot"]   { border-left-color: var(--role-elliot); }
+#stratLearnSections .learnEntry[data-owner="jax"],      #stratConceptGlossary .learnEntry[data-owner="jax"]      { border-left-color: var(--role-jax); }
+#stratLearnSections .learnEntry[data-owner="george"],   #stratConceptGlossary .learnEntry[data-owner="george"]   { border-left-color: var(--role-george); }
+#stratLearnSections .learnEntry[data-owner="mikeross"], #stratConceptGlossary .learnEntry[data-owner="mikeross"] { border-left-color: var(--role-mikeross); }
+
+.learnEntry .gName {
+  font-size: 13.5px; font-weight: 700; color: var(--txt1); font-family: 'Inter', sans-serif;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.learnEntry .gOwner {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  font-family: 'Share Tech Mono', monospace; color: var(--txt3);
+  background: rgba(255,255,255,0.05); border-radius: 10px; padding: 2px 9px; white-space: nowrap;
+}
+.learnEntry[data-owner="dexter"]   .gOwner { color: var(--role-dexter);   background: rgba(77,208,225,0.12); }
+.learnEntry[data-owner="chev"]     .gOwner { color: var(--role-chev);     background: rgba(212,175,55,0.12); }
+.learnEntry[data-owner="elliot"]   .gOwner { color: var(--role-elliot);   background: rgba(155,89,182,0.15); }
+.learnEntry[data-owner="jax"]      .gOwner { color: var(--role-jax);      background: rgba(8,153,129,0.14); }
+.learnEntry[data-owner="george"]   .gOwner { color: var(--role-george);   background: rgba(255,138,61,0.14); }
+.learnEntry[data-owner="mikeross"] .gOwner { color: var(--role-mikeross); background: rgba(93,173,226,0.14); }
+
 .learnEntry .gCode { font-size: 9px; color: var(--txt3); font-family: 'Share Tech Mono', monospace; margin-left: 6px; }
 .learnEntry .gPoints { font-size: 9px; color: #b39ddb; font-family: 'Share Tech Mono', monospace; margin-left: 6px; }
-.learnEntry .gDef { font-size: 11px; color: var(--txt2); font-family: 'Inter', sans-serif; margin-top: 3px; line-height: 1.5; }
-.learnEntry .gHow { font-size: 10.5px; color: var(--txt3); font-family: 'Inter', sans-serif; margin-top: 3px; font-style: italic; }
-/* Persistent highlight after a deep-link jump -- same violet accent as the rest of
-   Learning Mode's UI. Stays lit (survives a Definition/Story Time toggle, which
-   rebuilds this list's HTML) until you click the highlighted entry itself to clear it. */
-.learnEntry.learnPinned { background: rgba(155,89,182,0.22); cursor: pointer; transition: background 0.25s ease-out; }
+.learnEntry .gDef { font-size: 11.5px; color: var(--txt2); font-family: 'Inter', sans-serif; margin-top: 5px; line-height: 1.6; }
+.learnEntry .gHow { font-size: 10.5px; color: var(--txt3); font-family: 'Inter', sans-serif; margin-top: 6px; font-style: italic; }
+/* Persistent highlight after a deep-link jump -- stays lit (survives a
+   Definition/Story Time toggle, which rebuilds this list's HTML) until you
+   click the highlighted entry itself to clear it. */
+.learnEntry.learnPinned { background: rgba(155,89,182,0.20); border-color: rgba(155,89,182,0.5); cursor: pointer; transition: background 0.25s ease-out; }
 
-#glossarySearch {
-  width: 100%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 12px;
-  background: var(--s1); border: 1px solid var(--border); border-radius: var(--r-sm);
-  color: var(--txt1); font-family: 'Inter', sans-serif; font-size: 12px;
+/* ---- Confluence Tags: color-coded card grid, grouped by WHAT each tag
+   measures (not who reports it -- a functional category matters more here
+   than it does for Sections). Colors keyed off the data-search attribute
+   already emitted per tag (name + code, lowercased) -- zero JS changes,
+   same category groupings _tagStoryText() in drawing.js already uses for
+   Story Time, so the visual accent and the story text never disagree. ---- */
+#stratTagGlossary {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px;
 }
+#stratTagGlossary .learnEntry {
+  padding: 11px 13px; margin-bottom: 0; border-bottom: none;
+  background: var(--card-bg); border: 1px solid var(--card-border);
+  border-left: 3px solid var(--border2); border-radius: var(--card-radius);
+  scroll-margin-top: 12px;
+}
+#stratTagGlossary .learnEntry .gDef { margin-top: 4px; }
+#stratTagGlossary .learnEntry .gHow { margin-top: 5px; }
+
+/* Structure & S/R */
+#stratTagGlossary .learnEntry[data-search*="support"],
+#stratTagGlossary .learnEntry[data-search*="resistance"] { border-left-color: var(--green); }
+/* Patterns & Market Structure (Elliot's domain) */
+#stratTagGlossary .learnEntry[data-search*="triangle"],
+#stratTagGlossary .learnEntry[data-search*="wedge"],
+#stratTagGlossary .learnEntry[data-search*="flag"],
+#stratTagGlossary .learnEntry[data-search*="pennant"],
+#stratTagGlossary .learnEntry[data-search*="channel"],
+#stratTagGlossary .learnEntry[data-search*="double top"],
+#stratTagGlossary .learnEntry[data-search*="double bottom"],
+#stratTagGlossary .learnEntry[data-search*="triple top"],
+#stratTagGlossary .learnEntry[data-search*="triple bottom"],
+#stratTagGlossary .learnEntry[data-search*="head & shoulders"],
+#stratTagGlossary .learnEntry[data-search*="rectangle"],
+#stratTagGlossary .learnEntry[data-search*="pattern"],
+#stratTagGlossary .learnEntry[data-search*="market structure"] { border-left-color: var(--role-elliot); }
+/* Fibonacci & Golden Pocket */
+#stratTagGlossary .learnEntry[data-search*="fibonacci"],
+#stratTagGlossary .learnEntry[data-search*="golden pocket"] { border-left-color: var(--gold); }
+/* Momentum (RSI/Divergence) */
+#stratTagGlossary .learnEntry[data-search*="rsi"],
+#stratTagGlossary .learnEntry[data-search*="divergence"] { border-left-color: var(--role-mikeross); }
+/* Trend & Volatility (EMA, Bollinger) */
+#stratTagGlossary .learnEntry[data-search*="ema"],
+#stratTagGlossary .learnEntry[data-search*="bollinger"] { border-left-color: var(--role-dexter); }
+/* Volume, Derivatives & Liquidity */
+#stratTagGlossary .learnEntry[data-search*="volume"],
+#stratTagGlossary .learnEntry[data-search*="vwap"],
+#stratTagGlossary .learnEntry[data-search*="open interest"],
+#stratTagGlossary .learnEntry[data-search*="funding"],
+#stratTagGlossary .learnEntry[data-search*="prior day"],
+#stratTagGlossary .learnEntry[data-search*="opening range"],
+#stratTagGlossary .learnEntry[data-search*="liquidity sweep"],
+#stratTagGlossary .learnEntry[data-search*="candle"] { border-left-color: var(--role-george); }
 
 /* Live feed cards */
 #stratFeedFilters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }

@@ -2174,19 +2174,48 @@
     };
 
     const CONCEPT_GLOSSARY = [
-      { name: "Confluence Score", def: "A plain number Dexter computes for every setup by adding up points from whichever indicators lined up — support/resistance, Fibonacci levels, RSI divergence, EMAs, chart patterns, and more. Nothing subjective here; it's arithmetic. A setup must clear a minimum score before Dexter will even show it to Chev.", how: "Each matched indicator contributes its own fixed point value (see Confluence Tags below); the score is their sum. The minimum required score depends on the asset (crypto/forex/stock) and whether EXPLORATION_MODE is active.",
+      { name: "Confluence Score", owner: "dexter", def: "A plain number Dexter computes for every setup by adding up points from whichever indicators lined up — support/resistance, Fibonacci levels, RSI divergence, EMAs, chart patterns, and more. Nothing subjective here; it's arithmetic. A setup must clear a minimum score before Dexter will even show it to Chev.", how: "Each matched indicator contributes its own fixed point value (see Confluence Tags below); the score is their sum. The minimum required score depends on the asset (crypto/forex/stock) and whether EXPLORATION_MODE is active.",
         story: "This is Dexter's own arithmetic, and it really is just addition — a point for a support test, a point for a confirmed divergence, on down the list. Nothing subjective ever enters into it. A setup has to clear his line before he'll even walk it over to Chev's desk." },
-      { name: "Risk:Reward (R:R)", def: "The ratio between how much a trade risks (entry to stop-loss) and how much it targets (entry to take-profit). A 2:1 R:R means the target is twice as far as the stop — if it wins, the reward is twice the risk.", how: "Computed as the target distance divided by the stop distance, both measured from the entry price.",
+      { name: "Risk:Reward (R:R)", owner: "dexter", def: "The ratio between how much a trade risks (entry to stop-loss) and how much it targets (entry to take-profit). A 2:1 R:R means the target is twice as far as the stop — if it wins, the reward is twice the risk.", how: "Computed as the target distance divided by the stop distance, both measured from the entry price.",
         story: "Every setup in the building carries this ratio the moment its numbers are set, whether or not anyone's paying attention to it yet. It's the plainest measure in the whole operation — how far to the target, divided by how far to the stop. George will ask a much harsher version of this same question later." },
-      { name: "Net R:R", def: "The same Risk:Reward ratio, but adjusted for the real cost of trading — fees and slippage on both the entry and exit. A setup can look like a good R:R on paper and still fail Net R:R once those costs are subtracted, especially on tight stops. This is the number George (the risk gauntlet) actually enforces, not the raw R:R.", how: "Net R:R = (reward% − round-trip cost%) ÷ (risk% + round-trip cost%). Costs reduce the effective reward and increase the effective risk at the same time.",
+      { name: "Net R:R", owner: "george", def: "The same Risk:Reward ratio, but adjusted for the real cost of trading — fees and slippage on both the entry and exit. A setup can look like a good R:R on paper and still fail Net R:R once those costs are subtracted, especially on tight stops. This is the number George (the risk gauntlet) actually enforces, not the raw R:R.", how: "Net R:R = (reward% − round-trip cost%) ÷ (risk% + round-trip cost%). Costs reduce the effective reward and increase the effective risk at the same time.",
         story: "This is George's own number, and it's the harsher one — the same ratio, but with real fees and slippage subtracted first. A setup can look fine on Dexter's raw math and still fail George's version once the true cost of getting in and out is counted." },
-      { name: "Shadow Outcomes", def: "Hypothetical results for setups Chev skipped or a gate rejected — what would have happened if the trade had been taken, using the same win/loss labelling method as real trades, with realistic costs modelled in. These numbers never touch the real P&L or real stats; they exist purely to show whether the system is skipping good setups or correctly avoiding bad ones.", how: "Computed by the Examiner (labeller.py) using the same triple-barrier method (does price hit target, stop, or time out first) applied to every setup Dexter evaluates, whether or not it was ever escalated to Chev.",
+      { name: "Shadow Outcomes", owner: "mikeross", def: "Hypothetical results for setups Chev skipped or a gate rejected — what would have happened if the trade had been taken, using the same win/loss labelling method as real trades, with realistic costs modelled in. These numbers never touch the real P&L or real stats; they exist purely to show whether the system is skipping good setups or correctly avoiding bad ones.", how: "Computed by the Examiner (labeller.py) using the same triple-barrier method (does price hit target, stop, or time out first) applied to every setup Dexter evaluates, whether or not it was ever escalated to Chev.",
         story: "Mike Ross keeps this file on setups nobody actually took — what would have happened, hypothetically, using the exact same win/loss test as a real trade. None of it ever touches the real ledger. It exists purely so someone, eventually, can ask whether good setups are being let go for no good reason." },
-      { name: "Setup Grades (B / A / A+)", def: "A quality tier Dexter assigns to a setup based on how far its confluence score clears the minimum bar, boosted for a trending regime or a peak trading session, and reduced for forex during a low-quality session. There is no \"C\" grade — the floor is B.", how: "Starts from the ratio of the setup's score to the minimum required score (2x+ = A+, 1.5x+ = A, otherwise B), then adjusted up for a trending 4H regime or a peak session, and down for forex in a low-quality session.",
+      { name: "Setup Grades (B / A / A+)", owner: "dexter", def: "A quality tier Dexter assigns to a setup based on how far its confluence score clears the minimum bar, boosted for a trending regime or a peak trading session, and reduced for forex during a low-quality session. There is no \"C\" grade — the floor is B.", how: "Starts from the ratio of the setup's score to the minimum required score (2x+ = A+, 1.5x+ = A, otherwise B), then adjusted up for a trending 4H regime or a peak session, and down for forex in a low-quality session.",
         story: "Dexter hands out this grade the moment he first sees a setup — B is the floor, there's no grade below it. It gets a bump for a trending market or a peak session, and a small penalty for forex during a quiet one." },
-      { name: "The Funnel Stages", def: "The path every setup takes from \"Dexter noticed it\" to \"a real trade opened,\" in the last 24 hours: setups seen → filtered out before Chev ever sees them (score too low, too far from the level, on cooldown, etc.) → escalated to Chev → Chev's verdict (posted / skipped) → George's gate and gauntlet checks → actually opened. Each stage shows where setups are lost.", how: "Pre-escalation filters come from the Examiner's shadow log; Chev's decisions and George's gate/gauntlet rejections come from the decision log; the opened count comes from the live trade list.",
+      { name: "The Funnel Stages", owner: "dexter", def: "The path every setup takes from \"Dexter noticed it\" to \"a real trade opened,\" in the last 24 hours: setups seen → filtered out before Chev ever sees them (score too low, too far from the level, on cooldown, etc.) → escalated to Chev → Chev's verdict (posted / skipped) → George's gate and gauntlet checks → actually opened. Each stage shows where setups are lost.", how: "Pre-escalation filters come from the Examiner's shadow log; Chev's decisions and George's gate/gauntlet rejections come from the decision log; the opened count comes from the live trade list.",
         story: "This is Dexter's own accounting of one night, start to finish — everything he saw, everything filtered out before Chev ever looked at it, what reached Chev, what he decided, and what survived George's checklist to actually open. The early filtering numbers come straight from Mike Ross's shadow files, since he's the one watching setups even before Chev does." },
     ];
+
+    // PHASE 6D LEARN TAB REDESIGN: human-readable titles + "who owns this" tag for the
+    // Sections list, which previously rendered with NO visible heading at all -- just an
+    // unlabeled paragraph per section, the single biggest reason the tab read as a wall
+    // of text. Purely additive: no existing id/attribute changes, only new lookup tables
+    // and one more element inside the already-existing #stratLearnSections container.
+    // Owners are read straight off each section's own SECTION_STORY text above (e.g.
+    // "Jax's honest, real-money ledger..." -> jax), never invented.
+    const SECTION_TITLES = {
+      elliot_suggestions: "Elliot's Suggestions", scorecard: "Scorecard", equity_curve: "Equity Curve",
+      setup_volume_heatmap: "Setup Volume", funnel: "The Funnel", skip_reject_reasons: "Why Setups Get Skipped",
+      shadow_outcomes: "Shadow Outcomes", gate_scoreboard: "Gate Scoreboard",
+      shadow_tag_leaderboard: "Shadow Tag Leaderboard", shadow_combo_leaderboard: "Shadow Combo Leaderboard",
+      weekly_regret_trend: "Weekly Regret Trend", win_rate_by_grade: "Win Rate by Grade",
+      tag_leaderboard: "Tag Leaderboard", combo_leaderboard: "Combo Leaderboard",
+      planned_rr_distribution: "Planned Risk:Reward", system_over_time: "System Over Time",
+      indicator_scoreboard: "Indicator Scoreboard", self_check_rate: "Self-Check Rate", weight_lab: "Weight Lab",
+    };
+    const SECTION_OWNER = {
+      elliot_suggestions: "elliot", scorecard: "jax", equity_curve: "jax",
+      setup_volume_heatmap: "dexter", funnel: "dexter", skip_reject_reasons: "chev",
+      shadow_outcomes: "mikeross", gate_scoreboard: "mikeross",
+      shadow_tag_leaderboard: "mikeross", shadow_combo_leaderboard: "mikeross",
+      weekly_regret_trend: "mikeross", win_rate_by_grade: "dexter",
+      tag_leaderboard: "jax", combo_leaderboard: "jax",
+      planned_rr_distribution: "george", system_over_time: "george",
+      indicator_scoreboard: "dexter", self_check_rate: "chev", weight_lab: "dexter",
+    };
+    const OWNER_LABEL = { dexter: "Dexter", chev: "Chev", elliot: "Elliot", jax: "Jax", george: "George", mikeross: "Mike Ross" };
 
     // PHASE 21: order matters for the Sections list -- same order the sections actually
     // appear in the dashboard (Overview, then Why It Skips, then Performance).
@@ -2248,12 +2277,13 @@
     async function _renderLearnContent() {
       const isStory = _learnMode === 'story';
       document.getElementById('stratLearnSections').innerHTML = SECTION_ORDER.map(key => `
-        <div class="learnEntry${key === _pinnedLearnKey ? ' learnPinned' : ''}" id="learnEntry-${esc(key)}">
+        <div class="learnEntry${key === _pinnedLearnKey ? ' learnPinned' : ''}" id="learnEntry-${esc(key)}" data-owner="${esc(SECTION_OWNER[key] || '')}">
+          <div class="gName">${esc(SECTION_TITLES[key] || key)}<span class="gOwner">${esc(OWNER_LABEL[SECTION_OWNER[key]] || '')}</span></div>
           <div class="gDef">${esc(_applyCharacterNames(isStory ? (SECTION_STORY[key] || SECTION_TOOLTIPS[key]) : SECTION_TOOLTIPS[key]) || '')}</div>
         </div>`).join('');
       document.getElementById('stratConceptGlossary').innerHTML = CONCEPT_GLOSSARY.map(c => `
-        <div class="learnEntry">
-          <div class="gName">${esc(c.name)}</div>
+        <div class="learnEntry" data-owner="${esc(c.owner || '')}">
+          <div class="gName">${esc(c.name)}<span class="gOwner">${esc(OWNER_LABEL[c.owner] || '')}</span></div>
           <div class="gDef">${esc(_applyCharacterNames(isStory ? (c.story || c.def) : c.def))}</div>
           <div class="gHow">${esc(_applyCharacterNames(c.how))}</div>
         </div>`).join('');
