@@ -63,6 +63,11 @@ COST_R_CAP = 0.50
 # never has to serve an unbounded, ever-growing list to a phone. Most recent first.
 RESOLVED_ITEMS_CAP = 300
 
+# Thresholds for a shadow combo to qualify as decision-influencing evidence.
+# Consumed by get_qualifying_shadow_combos() — one place to tune both callers.
+SHADOW_COMBO_MIN_N       = 5    # minimum resolved count
+SHADOW_COMBO_MIN_TOTAL_R = 0.0  # must be net-positive in shadow space
+
 CAVEATS = (
     "SHADOW OUTCOMES ARE OPTIMISTIC. They assume the entry filled at the zone touch, no\n"
     "checkpoint management, no partial exits, no concurrency limits, and modelled costs only.\n"
@@ -417,6 +422,26 @@ def _symbol_asset_type(symbol):
     if "/" in symbol:
         return "forex"
     return "stock"
+
+
+def get_qualifying_shadow_combos(min_n=None, min_total_r=None):
+    """Return shadow combos meeting evidence thresholds. Read-only — no writes, no side effects.
+    Consumed by dexter.py at trade-post time (shadow_combo_match tagging) and by
+    _run_learning_session (playbook rewrite context). Filter logic lives here so
+    both callers share the same definition of 'qualifying'."""
+    min_n       = min_n       if min_n       is not None else SHADOW_COMBO_MIN_N
+    min_total_r = min_total_r if min_total_r is not None else SHADOW_COMBO_MIN_TOTAL_R
+    closed_all    = _load_jsonl(LABELS_CLOSED_FILE)
+    open_all      = _load_jsonl(LABELS_OPEN_FILE)
+    shadow_closed = [r for r in closed_all if r.get("chev_decision") in ("SKIP", "NOT_ESCALATED")]
+    shadow_open   = [r for r in open_all   if r.get("chev_decision") in ("SKIP", "NOT_ESCALATED")]
+    _, shadow_combos = _tag_combo_aggregate(shadow_closed, shadow_open)
+    return [
+        c for c in shadow_combos
+        if c["n"] >= min_n
+        and c.get("shadow_wr") is not None
+        and c["total_r"] > min_total_r
+    ]
 
 
 def build_counterfactual(baseline_ts=None,

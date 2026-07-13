@@ -62,7 +62,7 @@ COST_R_CAP = 0.50
 #   SR:        "Resistance(3x,3pt)", "Support(2x,2pt)"  [parsed by _SR_RE regex]
 #   Fib:       "Fib 61.8% (golden pocket) (2pt)", "Fib 50% (2pt)", "Fib 38.2%"
 #   GP:        "* GOLDEN POCKET" (in-zone), "[WATCH - approaching GP] GP zone..."
-#   Div:       "[WATCH - not yet confirmed] FORMING ...", "Regular Bearish Divergence (str=Xpt)"
+#   Div:       "[WATCH — not yet confirmed] FORMING ...", "Regular Bearish Divergence (str=Xpt)"
 #   EMA:       "EMA55 support (2.0pt)", "EMA21 resistance (1.0pt)", "EMA crossover bullish_cross 2c ago"
 #   BB:        "BB upper BURST (%B=1.15, ...)", "BB mid support (%B=0.50, 1pt)", "BB squeeze (...)"
 #   VP:        "VP POC 4h (0.15% away ...)", "VP VAH 1h ...", "VP VAL 4h ..."
@@ -76,9 +76,13 @@ _PATTERN_RE = re.compile(r"conf=")                             # only pattern re
 
 REASON_MAP_ORDERED = [
     # ── Meta / combo — before any component matches ─────────────────────────
-    ("GP",                                 "gp_sr_combo"),   # "GP*SR DEADLY COMBO"
-    ("[WATCH - not yet confirmed]",         "rsi_div_forming"),
+    # Must check [WATCH] prefixes before "GP" so approaching-GP watch strings
+    # ("[WATCH — approaching GP] GP zone ...") don't misfire as gp_sr_combo.
+    # Dexter emits em-dash (—) not hyphen (-), so both variants are listed.
+    ("[WATCH — not yet confirmed]",         "rsi_div_forming"),
+    ("[WATCH - not yet confirmed]",         "rsi_div_forming"),  # hyphen fallback
     ("[WATCH",                             "watch_signal"),   # other [WATCH] tags
+    ("GP",                                 "gp_sr_combo"),   # "GP×SR DEADLY COMBO"
     # ── Golden Pocket ────────────────────────────────────────────────────────
     ("GOLDEN POCKET",                      "gp"),
     # ── Fib levels — specific before generic ────────────────────────────────

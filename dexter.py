@@ -4072,6 +4072,7 @@ _PLAYBOOK_SECTION_NAMES = {
     "CONFLUENCE CONDITIONS", "MARKET STRUCTURE RULES", "ENTRY QUALITY STANDARDS",
     "TRADE MANAGEMENT PATTERNS", "REASONING QUALITY", "ASSET NOTES",
     "JANE'S PATTERNS", "STRUCTURAL RISK FACTORS", "WIN/LOSS INSIGHT",
+    "SHADOW COMBO INTELLIGENCE",
     "DURABLE LESSONS (HUMAN-CURATED)",
 }
 
@@ -4089,7 +4090,7 @@ _PLAYBOOK_SECTION_NAMES = {
 # analysis cap from 400 to 350 chars -- both cost less signal than shrinking
 # this reference block further, which is the piece doing the long-term-
 # learning work.
-_REFERENCE_BLOCK_CHAR_CAP = 1200
+_REFERENCE_BLOCK_CHAR_CAP = 1350
 
 
 def _is_section_heading(line):
@@ -4610,6 +4611,30 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
         combo_lines.append(f"  {combo}: {st['w']}W/{st['l']}L ({wr}% WR{r_str})")
     combo_summary = "\n".join(combo_lines) if combo_lines else "  No data yet"
 
+    # Shadow combo intelligence: qualifying combos from skipped setups, with real confirmed
+    # outcomes from journal entries that matched them. Kept clearly labelled as shadow data.
+    shadow_combo_block = ""
+    try:
+        _sc_qualifying = counterfactual_report.get_qualifying_shadow_combos()
+        if _sc_qualifying:
+            _sc_lines = []
+            for _sc in sorted(_sc_qualifying, key=lambda x: -x["total_r"]):
+                _wr_str = f"{_sc['shadow_wr']:.0f}%" if _sc.get("shadow_wr") is not None else "n/a"
+                _matched = [e for e in asset_journal if e.get("shadow_combo_match") == _sc["combo"]]
+                _won  = sum(1 for e in _matched if e.get("outcome") == "WIN")
+                _lost = sum(1 for e in _matched if e.get("outcome") == "LOSS")
+                _real_str = f" | confirmed real: {_won}W/{_lost}L (n={len(_matched)})" if _matched else " | confirmed real: none yet"
+                _sc_lines.append(
+                    f"  {_sc['combo']}: shadow_wr={_wr_str} shadow_total_R={_sc['total_r']:+.2f} "
+                    f"(n={_sc['n']} shadow){_real_str}"
+                )
+            shadow_combo_block = (
+                "SHADOW COMBO INTELLIGENCE (skipped setups that would have won — unconfirmed until real trades accumulate):\n"
+                + "\n".join(_sc_lines) + "\n\n"
+            )
+    except Exception as _scb_e:
+        print(f"[Playbook] Shadow combo block failed: {_scb_e}")
+
     # Management pattern stats across last 30 trades (asset-filtered)
     trades_30    = asset_journal[-30:]
     with_moves   = [(e, e.get("chev_moves", [])) for e in trades_30 if e.get("chev_moves")]
@@ -4738,6 +4763,7 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
         f"{jane_text}\n"
         f"CONFLUENCE COMBO WIN-RATE (last 30 trades — use this as statistical evidence):\n"
         f"{combo_summary}\n\n"
+        f"{shadow_combo_block}"
         f"MANAGEMENT PATTERN STATS (last 30 trades):\n"
         f"{mgmt_summary}\n\n"
         f"REASONING QUALITY (last 30 trades):\n"
@@ -4785,6 +4811,9 @@ def _run_learning_session(journal, jane_journal=None, asset_type=None):
         f"Any patterns in how crypto, forex, or stocks behaved differently?\n\n"
         f"JANE'S PATTERNS (only if she has data above)\n"
         f"What setup types is Jane consistently profitable on? Where do her instincts diverge from your models — and who was right?\n\n"
+        f"SHADOW COMBO INTELLIGENCE (only if shadow combo data appears above)\n"
+        f"Which shadow combos have now been confirmed by real trades, and did the real win rate match the shadow prediction? "
+        f"Which combos still have no real-trade confirmation? Label every claim 'tentative (shadow only)' until n >= 3 real confirmed trades.\n\n"
         f"IMPORTANT: Build statistical understanding — not a list of prohibitions. A setup that failed once can be valid in different conditions. "
         f"Think in conditions, not outcomes.\n\n"
         f"HARD RULE — NO ENTRY-TIMING GATES: Never write advice telling future-you to wait for a "
@@ -5220,6 +5249,7 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
         "open_ts":          trade.get("open_ts", ""),
         "forensics":        _forensics,
         "system_era":       SYSTEM_ERA,
+        "shadow_combo_match": trade.get("shadow_combo_match", ""),
     }
     try:
         journal = _load_journal()
@@ -13459,6 +13489,27 @@ while True:
                     new_trade["setup_grade"]     = _g
                     new_trade["session_quality"] = _sq
                     new_trade["heat_at_entry"]   = _heat
+                    # Shadow combo match: check if this setup's Dexter features are a superset
+                    # of any qualifying shadow combo (combos that were skipped but would have won).
+                    # Uses Dexter's own feature vocabulary end-to-end — never touches Chev's tags.
+                    try:
+                        _setup_features = set(labeller.normalize_reasons(result.get("reasons", [])))
+                        _qualifying = counterfactual_report.get_qualifying_shadow_combos()
+                        # Among all matching combos, pick the one with the highest total_r
+                        _best_match = None
+                        _best_r     = -float("inf")
+                        for _sc in _qualifying:
+                            _combo_tags = set(_sc["combo"].split(","))
+                            if _combo_tags and _combo_tags.issubset(_setup_features):
+                                if _sc["total_r"] > _best_r:
+                                    _best_match = _sc["combo"]
+                                    _best_r     = _sc["total_r"]
+                        new_trade["shadow_combo_match"] = _best_match or ""
+                        if _best_match:
+                            print(f"[ShadowCombo] {result['symbol']} matched '{_best_match}' (shadow total_R={_best_r:+.2f})")
+                    except Exception as _sce:
+                        print(f"[ShadowCombo] Match check failed for {result['symbol']}: {_sce}")
+                        new_trade["shadow_combo_match"] = ""
                     # Persist metadata into the sheet's conf_json cell (col 18) so it survives restarts
                     try:
                         _gauntlet_meta = {}
