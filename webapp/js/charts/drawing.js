@@ -1321,6 +1321,26 @@
       `).join('');
     }
 
+    // LEAD-ARCHITECT (2026-07-14): display names for classify_chev_skip_reason()'s
+    // categories (dexter.py, /api/strategy/funnel's skip_reason_categories) -- a
+    // separate small registry rather than folding into watchlist.js's REASON_REGISTRY,
+    // since these are a new taxonomy over Chev's free-text reasoning, not decision
+    // types or gate codes.
+    const SKIP_CATEGORY_LABELS = {
+      INVALIDATION_TOO_CLOSE:     "Stop would sit inside normal noise",
+      INVALIDATION_MISSING:       "No clear invalidation level found",
+      CONFLUENCE_BELOW_THRESHOLD: "Confluence too weak",
+      RISK_REWARD_OR_SIZING:      "Reward too small for the required stop (R:R / cost / ATR floor)",
+      CONFIRMATION_MISSING:       "Waiting on confirmation",
+      STRUCTURAL_SUPPORT_MISSING: "No structural level to anchor the trade",
+      TREND_CONTEXT:              "Fighting the higher-timeframe trend",
+      PRICE_NOT_AT_ZONE:          "Price hasn't reached the zone yet",
+      OTHER:                      "Other / not yet categorized",
+    };
+    function friendlySkipCategory(code) {
+      return SKIP_CATEGORY_LABELS[String(code || '').trim()] || String(code || 'unknown');
+    }
+
     async function loadFunnel() {
       try {
         const r = await _apiFetch('/api/strategy/funnel?hours=24');
@@ -1355,6 +1375,24 @@
               </div>
             `).join('')
           : '<div class="stratEmptyState">No rejections in this window.</div>';
+
+        // LEAD-ARCHITECT (2026-07-14): distinct from stratReasonBars above -- that block
+        // is the coarse "which pipeline stage killed it" breakdown (pre-escalation filter
+        // reasons + decision TYPE counts). This is Chev's own free-text SKIP reasoning,
+        // bucketed by classify_chev_skip_reason() (dexter.py, /api/strategy/funnel) into a
+        // stable category -- answers "why does Chev himself keep saying no," which the
+        // block above never could (it only counted decision type, never read the reason).
+        const skipCats = Object.entries(d.skip_reason_categories || {}).sort((a,b) => b[1]-a[1]);
+        const scMax = Math.max(1, ...skipCats.map(([,v]) => v));
+        document.getElementById('stratSkipCategoryBars').innerHTML = skipCats.length
+          ? skipCats.map(([k,v]) => `
+              <div class="stratBarRow">
+                <div class="stratBarLabel" title="${esc(k)}">${esc(friendlySkipCategory(k))}</div>
+                <div class="stratBarTrack"><div class="stratBarFill" style="width:${(v/scMax*100).toFixed(1)}%;background:#b39ddb"></div></div>
+                <div class="stratBarVal">${v}</div>
+              </div>
+            `).join('')
+          : '<div class="stratEmptyState">No Chev skips in this window.</div>';
       } catch (e) { console.warn('[Strategy] funnel load failed', e); }
     }
 

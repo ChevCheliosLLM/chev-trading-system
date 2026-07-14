@@ -9565,5 +9565,215 @@ code, not hot-reloaded). DEPLOY: NO (local webapp files + dexter.py).
 RE-PASTE CHEV PROMPT: NO.
 
 ================================================================================
+2026-07-14 -- PHASE 1 of 3: consolidate the weight-table lookup logic
+(architecture cleanup requested after the "honest assessment" conversation)
+================================================================================
+
+CONTEXT: Kev asked me (Lead AI Quant Strategist hat) to fix 3 things I'd
+criticized: (1) two overlapping confluence-weight tables causing repeated
+bugs, (2) Chev's skip reasoning being free-text-only with no stable
+category, (3) the Weight Lab's freeze window being global instead of
+per-tag. Explicit instructions: don't assume anything, read handoff.txt,
+search the code, verify nothing breaks, keep the strategy safe.
+
+IMPORTANT REVERSAL, found via deep research (2 parallel Explore agents +
+direct code/data reads) BEFORE touching any code: two of my three original
+diagnoses were wrong, and I told Kev so before proceeding.
+
+- CONFLUENCE_SCORES is NOT a redundant duplicate of SCAN_WEIGHTS. It's dead
+  everywhere except 2 read-only display endpoints and one zero-caller
+  function (_calc_confluence_score) -- EXCEPT it is also the exact
+  vocabulary all 131 real historical trades in chev_journal.json are
+  tagged with (confirmed by directly sampling the file: entries like
+  "sr_4h,fib_1h,gp,dv,ema_55,ema_21,ema_13,bbsq,rsi_form_1h"). SCAN_WEIGHTS
+  is the live vocabulary driving scan_pair_tf(), Chev's real prompt, and
+  the real escalation gate. These are two legitimately different,
+  both-still-needed vocabularies (live scan vs. historical journal
+  tagging) -- merging the DATA would risk breaking real historical
+  trade-tag display. Kev agreed: don't merge the tables.
+- The Weight Lab's freeze window is NOT a design flaw. weight_proposal.py's
+  Ridge regression fits ALL tags in ONE joint multivariate design matrix
+  (build_design_matrix/ridge_fit) -- coefficients are not independent per
+  tag. Changing any one tag's live weight changes scan_pair_tf()'s total
+  score, which changes which setups get escalated/recorded for EVERY tag
+  going forward, not just the changed one. A per-tag freeze window would
+  let the regression mix data from different selection regimes -- it
+  would be statistically unsound, not an improvement. Kev agreed: no
+  structural change to the freeze window (see Phase 3 entry, still to
+  come, for the write-up).
+
+WHAT WAS ACTUALLY WRONG (and is what this phase fixes): the "check
+SCAN_WEIGHTS first, fall back to CONFLUENCE_SCORES" rule was independently
+re-implemented in THREE places (_build_weight_proposal_payload,
+_preview_weight_change, _validate_weight_approval) instead of living in
+one place. One of those three copies drifting out of sync is exactly how
+yesterday's _preview_weight_change bug happened.
+
+FIX: new pure helper _resolve_weight_tag(tag) added at dexter.py ~line 2971
+(right after _SCAN_WEIGHTS_BASELINE is defined) -- single source of truth
+returning {"baseline":..., "current":...} with SCAN_WEIGHTS-first
+precedence, or None if the tag is in neither table. All three call sites
+now delegate to it instead of re-implementing the check:
+  - _build_weight_proposal_payload's current_weight lookup (~line 934-940)
+  - _preview_weight_change's baseline/current_effective lookup (~line 1108)
+  - _validate_weight_approval's "is this tag known" check (~line 1022)
+
+EXPLICITLY NOT TOUCHED: _reload_weight_overrides()'s _WEIGHT_TABLES apply
+loop -- it correctly applies a delta to EVERY table containing the tag
+(gp/rsi_ob/rsi_os live in both), which is different semantics from "resolve
+one display value" and was never a source of any bug. Also not touched:
+/api/weight_manual's editor route (~line 1249) -- it's deliberately scoped
+to CONFLUENCE_SCORES only (Kev's manual override editor for the legacy
+vocabulary specifically), not one of the three drifting copies.
+
+VERIFICATION: `python -c "import ast; ast.parse(open('dexter.py',
+encoding='utf-8').read())"` -> OK. Manual trace of all three refactored
+call sites against their prior inline logic confirms byte-identical
+behavior for the 3 shared tags (gp/rsi_ob/rsi_os) and the 16 SCAN_WEIGHTS-
+only verified tags. Grepped for any remaining inline duplicate of the old
+pattern -- none found outside the untouched routes named above. No
+dexter.py execution (never run the bot).
+
+RESTART: REQUIRED for this refactor to take effect. DEPLOY: NO.
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+2026-07-14 -- PHASE 2 of 3: structured reject codes (additive, analytics-only)
+================================================================================
+
+CONTEXT: second of the 3 issues from the "honest assessment" -- Chev's own
+skip/reject reasoning was free-text only (3,082 distinct strings across
+4,981 SKIPs, confirmed by direct frequency count), making trend questions
+like "why does Chev keep skipping on X" require an ad hoc grep instead of a
+real number. Separately, risk_gauntlet.py's gate rejections already compute
+a stable reject_code (ATR_FLOOR, NET_RR, COST_GATE, ... 12 codes total) but
+it was silently discarded before logging.
+
+2a. STOP DISCARDING THE GATE'S OWN REJECT_CODE. _log_chev_decision()
+(dexter.py ~line 4129) gained one new optional kwarg reject_code=None,
+added to the logged entry dict -- same additive-field pattern as the
+existing ev_advisory_rr/enforced_rr_floor params (old log lines simply
+won't have it). Both risk_gauntlet REJECT call sites (~13756 and ~13767)
+already had _g_rc in scope and now pass reject_code=_g_rc. Only affects NEW
+records going forward -- it's a log field, not a gate input, so this cannot
+change any trading decision. The other REJECT-family decisions
+(GATE_REJECT/STRUCT_REJECT/MTF_TAX_REJECT/HALLUCINATED_LEVELS) were NOT
+touched -- their `decision` value already IS a stable code by itself
+(confirmed via counterfactual_report.py's DECISION_DIRECT_MAP), so there
+was nothing being discarded for those.
+
+2b. NEW pure classifier classify_chev_skip_reason(reason) (dexter.py, right
+before /api/strategy/funnel ~line 582) buckets Chev's own SKIP free-text
+into 9 stable categories: INVALIDATION_TOO_CLOSE, INVALIDATION_MISSING,
+RISK_REWARD_OR_SIZING, CONFLUENCE_BELOW_THRESHOLD, PRICE_NOT_AT_ZONE,
+CONFIRMATION_MISSING, STRUCTURAL_SUPPORT_MISSING, TREND_CONTEXT, OTHER.
+Same ordered-substring-check style as counterfactual_report.py's existing
+classify_reject_reason(). RISK_REWARD_OR_SIZING was NOT in the original
+plan -- added after testing against real data showed it's a genuinely
+large, distinct category (~18% of all skips: R:R/round-trip-cost/ATR-floor
+language), not noise. Never touches Chev's prompt or parse_chev_reply() --
+purely a post-hoc read of the already-logged reason string, analytics only.
+
+VERIFICATION OF 2b (before wiring in): tested standalone in a scratch
+script against the REAL, FULL chev_decisions.jsonl SKIP population (4,981
+records) before touching dexter.py. Coverage: INVALIDATION_TOO_CLOSE 21.1%,
+CONFLUENCE_BELOW_THRESHOLD 18.9%, INVALIDATION_MISSING 18.2%,
+RISK_REWARD_OR_SIZING 16.8%, CONFIRMATION_MISSING 8.5%,
+STRUCTURAL_SUPPORT_MISSING 4.8%, TREND_CONTEXT 2.2%, PRICE_NOT_AT_ZONE
+0.9%, OTHER 8.5% -- manually eyeballed the top 25 OTHER examples twice
+(iterating the category rules once) to confirm nothing large or coherent
+was being missed; the remaining OTHER residual is genuinely miscellaneous
+(rare "invalidation too far" phrasing, one malformed "<one sentence>"
+artifact, assorted one-off phrasings) rather than an uncaught large bucket.
+Confirmed the function actually committed to dexter.py is byte-identical
+to the tested scratch version.
+
+2c. /api/strategy/funnel (dexter.py ~line 582) now also returns
+skip_reason_categories: a Counter of classify_chev_skip_reason() over the
+same 24h SKIP population it was already scanning for decisions (reused the
+existing loop, no new file read) -- purely additive, existing fields
+(not_escalated/decisions/opened/etc.) unchanged in shape.
+
+2d. Frontend: new "🗣️ Why Chev Himself Skips (last 24h)" section
+(webapp/index.html, right under the existing "Skip/Reject Reasons"
+section) + #stratSkipCategoryBars rendering in loadFunnel()
+(webapp/js/charts/drawing.js) -- reuses the existing .stratBarRow/
+.stratBarTrack/.stratBarFill classes, new friendlySkipCategory() display-
+name lookup (drawing.js, separate small registry from watchlist.js's
+REASON_REGISTRY since this is a new taxonomy over free text, not decision
+types or gate codes). Explicitly distinct from the existing "Skip/Reject
+Reasons" block above it, which only ever counted decision TYPE and
+pre-escalation filter reasons -- it never read Chev's own reason text, so
+this is genuinely new information, not a duplicate view. Also added a
+scoped CSS override (#stratSkipCategoryBars .stratBarLabel, 210px + wrap
+instead of ellipsis) since category labels run longer than a typical tag
+name -- same wrap-not-truncate treatment as yesterday's combo-leaderboard
+fix, applied proactively here since the labels are long from day one.
+
+VERIFICATION: `python -c "import ast; ast.parse(open('dexter.py',
+encoding='utf-8').read())"` -> OK. `node --check
+webapp/js/charts/drawing.js` -> OK. Re-extracted the committed
+classify_chev_skip_reason() from dexter.py and diffed it against the
+tested scratch version -- identical. Cache-bust bumped: strategy.css
+20260716-7 -> -8, drawing.js 20260721-6 -> -7.
+NOT independently tested live this session (no dexter.py restart run).
+
+RESTART: REQUIRED for reject_code logging and the new
+skip_reason_categories field to go live (dexter.py, not hot-reloaded).
+Frontend half (2d) needs no restart, just the cache-bust (already done).
+DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+2026-07-14 -- PHASE 3 of 3: freeze-window review -- NO CODE CHANGE
+================================================================================
+
+CONTEXT: third of the 3 issues from the "honest assessment" -- the Weight
+Lab's freeze window (_build_weight_proposal_payload, dexter.py) computes
+ONE global freeze_epoch from the most recent applied_at/approved_at across
+ALL entries in weight_overrides.json, then requires FREEZE_MIN_RECORDS=200
+fresh records before ANY tag gets a new proposal. This looked, from the
+outside, like it should be scoped per-tag instead -- approving one small
+change to one tag currently freezes proposals for every OTHER tag too,
+which reads as an unnecessary slowdown.
+
+RESEARCH FINDING (before writing any code, per Kev's explicit "don't
+assume, verify" instruction): this is NOT a design flaw, and a per-tag
+freeze window would actually make the statistics worse, not better. Two
+independent reasons, both confirmed by reading weight_proposal.py in full:
+
+1. build_design_matrix()/ridge_fit() fit ALL tags in ONE joint multivariate
+   regression over a single design matrix (one X, one y, one beta vector).
+   Tag coefficients are NOT independent -- each tag's fitted coefficient is
+   conditional on every other tag's column in the SAME fit. Bootstrap CIs
+   refit the full joint model per resample too. There is no mechanism in
+   ridge_fit for "tag A uses rows 1-500, tag B uses rows 200-700 of the
+   same regression" -- a per-tag freeze window isn't something the current
+   math could even express, let alone safely.
+2. More fundamentally: changing ANY tag's live weight changes
+   scan_pair_tf()'s total_score, which is the number that decides which
+   setups get escalated to Chev and recorded to labels_closed.jsonl in the
+   first place. So a weight change to tag A shifts the SELECTION of which
+   setups show up in the shadow ledger for EVERY tag going forward, not
+   just tag A. A per-tag freeze would let the regression silently mix
+   evidence drawn from two different selection regimes for other tags --
+   exactly the kind of contamination the freeze window exists to prevent.
+   The global scope is the correct scope, not a limitation of it.
+
+DECISION (Kev, in-session): no structural change. This finding was
+presented plainly (including that it reversed my own earlier stated
+opinion) before any code was touched, alongside the parallel finding that
+Issue 1 (CONFLUENCE_SCORES vs SCAN_WEIGHTS) also wasn't what it first
+looked like -- see the PHASE 1 entry above for that one. Recorded here so
+this doesn't get re-flagged as an unfixed bug in a future session.
+
+NO FILES TOUCHED. NO VERIFICATION NEEDED. RESTART: N/A. DEPLOY: N/A.
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+This closes out all 3 items from the "honest assessment" conversation:
+  Issue 1 (weight-table duplication)  -> fixed via lookup consolidation (Phase 1)
+  Issue 2 (no structured reject codes) -> fixed, additive + retroactive (Phase 2)
+  Issue 3 (global freeze window)       -> reviewed, correct as designed (Phase 3)
+================================================================================
 END OF HANDOFF
 ================================================================================

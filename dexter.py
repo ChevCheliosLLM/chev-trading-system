@@ -579,6 +579,39 @@ def api_strategy_feed():
     return jsonify({"count": len(out), "decisions": out})
 
 
+def classify_chev_skip_reason(reason):
+    """Sub-classifies Chev's own free-text SKIP reasoning into a stable category --
+    analytics-only, read-only. Never touches Chev's prompt or parse_chev_reply();
+    purely a post-hoc bucketing of the 'reason' string already logged. Mirrors
+    counterfactual_report.py's classify_reject_reason() pattern (ordered substring
+    checks, order matters). Verified against the real chev_decisions.jsonl SKIP
+    population (4,981 records / 3,082 distinct strings) during discovery -- this
+    ordering covers ~91% of that population, with the remainder falling to OTHER
+    rather than being force-fit into a wrong bucket."""
+    r = (reason or "").lower()
+    if ("too close" in r or "too tight" in r or "too near" in r
+            or "noise floor" in r or "within the required distance" in r):
+        return "INVALIDATION_TOO_CLOSE"
+    if "invalidation" in r and ("lack" in r or "missing" in r or "no clear" in r or "not " in r):
+        return "INVALIDATION_MISSING"
+    if "r:r" in r or "round-trip cost" in r or "atr floor" in r:
+        return "RISK_REWARD_OR_SIZING"
+    if "confluence" in r and ("threshold" in r or "below" in r or "does not meet" in r
+                              or "weak" in r or "insufficient" in r or "not strong enough" in r
+                              or "not enough" in r):
+        return "CONFLUENCE_BELOW_THRESHOLD"
+    if "reach" in r and ("zone" in r or "level" in r or "price" in r):
+        return "PRICE_NOT_AT_ZONE"
+    if "confirmation" in r or "not yet confirmed" in r or "forming" in r:
+        return "CONFIRMATION_MISSING"
+    if ("structural support" in r or "structural anchor" in r or "validated sr" in r
+            or "structural backstop" in r or "structural level" in r or "higher timeframe support" in r):
+        return "STRUCTURAL_SUPPORT_MISSING"
+    if "trend" in r or "counter-trend" in r:
+        return "TREND_CONTEXT"
+    return "OTHER"
+
+
 @flask_app.route("/api/strategy/funnel")
 def api_strategy_funnel():
     """Pipeline attrition for the window: pre-escalation NOT_ESCALATED reasons (from
@@ -599,11 +632,14 @@ def api_strategy_funnel():
             not_esc[r.get("chev_reason") or "unknown"] += 1
 
     dec_counts = Counter()
+    skip_reason_categories = Counter()
     for r in _read_jsonl(_CHEV_DECISIONS_LOG, max_lines=8000):
         ts = _parse_dt(r.get("ts", ""))
         if ts is None or ts < cutoff_dt:
             continue
         dec_counts[r.get("decision") or "unknown"] += 1
+        if r.get("decision") == "SKIP":
+            skip_reason_categories[classify_chev_skip_reason(r.get("reason"))] += 1
 
     opened = 0
     for t in _load_journal():
@@ -620,6 +656,7 @@ def api_strategy_funnel():
         "not_escalated":      dict(not_esc),
         "not_escalated_total": sum(not_esc.values()),
         "decisions":          dict(dec_counts),
+        "skip_reason_categories": dict(skip_reason_categories),
         "escalated_total":    sum(dec_counts.values()) + opened,
         "opened":             opened,
     })
@@ -931,8 +968,11 @@ def _build_weight_proposal_payload():
         # the shadow-ledger evidence actually measures (labels_closed.jsonl features come
         # from scan_pair_tf()'s own reason strings, never from Chev's manually-typed tags),
         # so for any tag present in both it is the truthful "current weight" to display.
+        # LEAD-ARCHITECT (2026-07-14): delegates to _resolve_weight_tag() -- same
+        # precedence as before, now one shared implementation instead of three.
         if mapping == "verified":
-            current_weight = SCAN_WEIGHTS.get(tag, CONFLUENCE_SCORES.get(tag))
+            _resolved = _resolve_weight_tag(tag)
+            current_weight = _resolved["current"] if _resolved else None
         else:
             current_weight = None
         row = {
@@ -1016,7 +1056,7 @@ def _validate_weight_approval(tag, delta, entries):
         return False, "delta must be an integer", None
     if abs(delta) != 1:
         return False, "delta must be exactly +1 or -1", None
-    if tag not in SCAN_WEIGHTS and tag not in CONFLUENCE_SCORES:
+    if _resolve_weight_tag(tag) is None:
         return False, f"'{tag}' is not a known SCAN_WEIGHTS/CONFLUENCE_SCORES tag (unmapped)", None
     if tag not in WEIGHT_LAB_VERIFIED_TAGS:
         return False, f"'{tag}' shares a name with a CONFLUENCE_SCORES key but its mechanic has not been verified (unverified) — see handoff PHASE 16 no-aliasing rule", None
@@ -1117,17 +1157,13 @@ def _preview_weight_change(tag, delta=None, new_value=None):
     _CONFLUENCE_BASELINE, so previewing any of the 16 verified tags whose name
     lives in SCAN_WEIGHTS but not CONFLUENCE_SCORES (ema13, sweep, sr_multi,
     etc.) returned None, and the /api/weight_preview route turned that into a
-    400 at the CONFIRM step. Mirrors the SCAN_WEIGHTS-first precedence
-    _build_weight_proposal_payload() and _reload_weight_overrides() already
-    use: SCAN_WEIGHTS is what the shadow-ledger evidence actually measures."""
-    if tag in _SCAN_WEIGHTS_BASELINE:
-        baseline = _SCAN_WEIGHTS_BASELINE[tag]
-        current_effective = SCAN_WEIGHTS.get(tag)
-    elif tag in _CONFLUENCE_BASELINE:
-        baseline = _CONFLUENCE_BASELINE[tag]
-        current_effective = CONFLUENCE_SCORES.get(tag)
-    else:
+    400 at the CONFIRM step. Now delegates to _resolve_weight_tag() (single
+    source of truth for this SCAN_WEIGHTS-first precedence, see its own
+    docstring) instead of re-implementing the lookup inline."""
+    resolved = _resolve_weight_tag(tag)
+    if resolved is None:
         return None
+    baseline, current_effective = resolved["baseline"], resolved["current"]
     requested = float(new_value) if new_value is not None else baseline + float(delta or 0)
     clamped = max(0, min(2 * baseline + 2, requested))
     return {
@@ -2968,6 +3004,31 @@ _CONFLUENCE_BASELINE = dict(CONFLUENCE_SCORES)
 # point values from THIS, never by compounding on the live dict. Never mutate.
 _SCAN_WEIGHTS_BASELINE = dict(SCAN_WEIGHTS)
 
+
+def _resolve_weight_tag(tag):
+    """Single source of truth for 'which table does this tag belong to, and
+    what is its baseline/current display value' -- SCAN_WEIGHTS-first
+    precedence, matching _reload_weight_overrides' own established rule
+    (SCAN_WEIGHTS is what the shadow-ledger evidence actually measures, see
+    the PHASE 6B comment on _build_weight_proposal_payload). Returns None if
+    tag is in neither table.
+
+    LEAD-ARCHITECT NOTE (2026-07-14): this replaces three independent inline
+    copies of the same "check SCAN_WEIGHTS then CONFLUENCE_SCORES" rule that
+    had drifted out of sync with each other (_build_weight_proposal_payload,
+    _preview_weight_change, _validate_weight_approval) -- one copy missing an
+    update is exactly how the _preview_weight_change bug happened. This does
+    NOT change _reload_weight_overrides' own apply-time loop (below), which
+    correctly applies a delta to EVERY table containing the tag (gp/rsi_ob/
+    rsi_os live in both) -- that is different semantics (apply to all matches)
+    from this function's (resolve one authoritative display value), and it
+    was not a source of any known bug, so it is left exactly as it was."""
+    if tag in _SCAN_WEIGHTS_BASELINE:
+        return {"baseline": _SCAN_WEIGHTS_BASELINE[tag], "current": SCAN_WEIGHTS.get(tag)}
+    if tag in _CONFLUENCE_BASELINE:
+        return {"baseline": _CONFLUENCE_BASELINE[tag], "current": CONFLUENCE_SCORES.get(tag)}
+    return None
+
 # Least-invasive wiring so derivs.classify_derivs() can read the SAME table
 # (avoids a circular import; derivs keeps its own `SCAN_WEIGHTS = {}`
 # default so its standalone self-test still runs with no Dexter present).
@@ -4104,7 +4165,7 @@ def _trade_metrics_for_log(parsed):
 
 def _log_chev_decision(symbol, primary_tf, dexter_score, dexter_reasons, decision, reason, regime_4h=None, detail="",
                         planned_rr=None, stop_pct=None, tp_pct=None, cost_r=None, trade_type_chosen=None,
-                        ev_advisory_rr=None, enforced_rr_floor=None, deliberation_secs=None):
+                        ev_advisory_rr=None, enforced_rr_floor=None, deliberation_secs=None, reject_code=None):
     """Append one JSON-line to the Chev decision log for post-session review.
     PHASE 11: the fields after `detail` are additive/optional (default None -- absent data
     stays null, nothing is guessed). planned_rr/stop_pct/tp_pct/cost_r/trade_type_chosen are
@@ -4112,7 +4173,14 @@ def _log_chev_decision(symbol, primary_tf, dexter_score, dexter_reasons, decisio
     no trade numbers to report). ev_advisory_rr/enforced_rr_floor are only ever passed by
     call sites downstream of risk_gauntlet.run_gauntlet(). deliberation_secs is passed at
     every escalation call site (including SKIP) -- it times the Chev round-trip itself, not
-    the trade proposal, so it applies regardless of what Chev ultimately said."""
+    the trade proposal, so it applies regardless of what Chev ultimately said.
+
+    LEAD-ARCHITECT (2026-07-14): reject_code is risk_gauntlet.run_gauntlet()'s own stable
+    code (ATR_FLOOR, NET_RR, COST_GATE, ...) for REJECT-decision call sites -- it was already
+    being computed at the call site but silently discarded before this point. Only ever
+    passed for "REJECT" (gauntlet-level) decisions; SKIP is Chev's own free-text call and has
+    no equivalent stable code yet (see classify_chev_skip_reason() near /api/strategy/funnel
+    for the analytics-only, retroactive substitute for that side)."""
     import json as _json
     entry = {
         "ts":             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
@@ -4133,6 +4201,7 @@ def _log_chev_decision(symbol, primary_tf, dexter_score, dexter_reasons, decisio
         "ev_advisory_rr":    ev_advisory_rr,
         "enforced_rr_floor": enforced_rr_floor,
         "deliberation_secs": deliberation_secs,
+        "reject_code":       reject_code,
     }
     try:
         with open(_CHEV_DECISIONS_LOG, "a", encoding="utf-8") as _f:
@@ -13727,7 +13796,8 @@ while True:
                                 **_trade_metrics_for_log(parsed),
                                 cost_r=_g_res.get("cost_r"), ev_advisory_rr=_g_res.get("ev_advisory_rr"),
                                 enforced_rr_floor=_g_res.get("enforced_rr_floor"),
-                                deliberation_secs=round(time.time() - _esc_start_ts, 1)
+                                deliberation_secs=round(time.time() - _esc_start_ts, 1),
+                                reject_code=_g_rc
                             )
                             _last_escalated[esc_key] = time.time() + skip_cool
                             continue
@@ -13738,7 +13808,8 @@ while True:
                             **_trade_metrics_for_log(parsed),
                             cost_r=_g_res.get("cost_r"), ev_advisory_rr=_g_res.get("ev_advisory_rr"),
                             enforced_rr_floor=_g_res.get("enforced_rr_floor"),
-                            deliberation_secs=round(time.time() - _esc_start_ts, 1)
+                            deliberation_secs=round(time.time() - _esc_start_ts, 1),
+                            reject_code=_g_rc
                         )
                         _last_escalated[esc_key] = time.time() + skip_cool
                         continue
