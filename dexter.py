@@ -2591,6 +2591,85 @@ def api_analysis_engine():
         return jsonify({"error": str(e)}), 500
 
 
+@flask_app.route("/api/rays")
+def api_rays():
+    """
+    Trendline Ray registry — feeds the Arsenal TL card (Phase W1). READ-ONLY:
+    loads ray_registry.json under REGISTRY_LOCK and calls only existing pure
+    functions (select_live, horizon_bars, _project_value) -- never mutates
+    registry state, tallies, or the identity log. A chart refresh leaves zero
+    trace in trust data. All arithmetic (slope class, coordinates, the label,
+    staleness wording) happens here so the webapp only ever draws coordinates
+    and prints strings, per this build's core rule.
+    """
+    symbol = flask_request.args.get("symbol", "SOLUSDT")
+    tf     = flask_request.args.get("tf", "1h")
+    try:
+        with ray_registry.REGISTRY_LOCK:
+            registry = ray_registry.load_registry()
+        all_rays = [r for _rs in registry.values() for r in _rs]
+
+        # select_live() needs current_bar_ts and an ATR per (symbol, timeframe)
+        # for its distinctness check (Phase R2/R3's extended signature). This
+        # route never fetches candles (read-only, no recompute) -- current_bar_ts
+        # is wall-clock "now", the same choice already made for the read-only
+        # Chev-facing paths in ask_chev_to_judge/ask_chev_manage_trade (Phase
+        # R4). ATR is recovered FROM the registry records themselves rather
+        # than fetched live: slope_norm is already ATR-per-bar (baked in at
+        # reconcile() time by the scan side), so atr = |slope_raw / slope_norm|
+        # for any non-flat ray recovers the ATR that was in effect when it was
+        # last reconciled. Median across whatever rays already exist for this
+        # key -- close enough for a distinctness threshold on a display route,
+        # not something Chev's scoring depends on.
+        current_bar_ts = int(time.time())
+        _same_key = [r for r in all_rays if r.symbol == symbol and r.timeframe == tf]
+        _implied_atrs = sorted(abs(r.slope_raw / r.slope_norm) for r in _same_key if r.slope_norm != 0)
+        atr = _implied_atrs[len(_implied_atrs) // 2] if _implied_atrs else 0.0
+
+        selected = ray_registry.select_live(all_rays, current_bar_ts, atr_by_key={(symbol, tf): atr})
+        selected = [r for r in selected if r.symbol == symbol and r.timeframe == tf]
+
+        tf_seconds = ray_registry._TF_SECONDS.get(tf, ray_registry._TF_SECONDS["1h"])
+        # "One scan cycle" for staleness wording mirrors the scan side's own
+        # rescan gate (TF_SECONDS, ~3862 -- each (symbol, tf) pair is rescanned
+        # roughly once per its own bar interval, same table dexter.py already
+        # uses for that gate).
+        scan_cycle_seconds = TF_SECONDS.get(tf, 3600)
+
+        rays_out = []
+        for ray in selected:
+            side_word  = "resistance" if ray.side == "upper" else "support"
+            slope_class = ("rising" if ray.slope_norm > 0
+                           else "falling" if ray.slope_norm < 0 else "flat")
+
+            value_now = ray_registry._project_value(ray, current_bar_ts)
+            h_bars    = ray_registry.horizon_bars(ray)
+            t_horizon = int(current_bar_ts + h_bars * tf_seconds)
+            p_horizon = value_now + ray.slope_raw * h_bars
+            life_hours = round(ray.lifetime_span_bars * tf_seconds / 3600.0, 1)
+
+            label = f"{slope_class.capitalize()} {side_word} · respected {ray.respect_count}x · {life_hours:g}h"
+            age_seconds = current_bar_ts - ray.last_seen_ts
+            if age_seconds > scan_cycle_seconds:
+                label += f" · stale, last confirmed {round(age_seconds / 3600.0, 1):g}h ago"
+
+            rays_out.append({
+                "side": ray.side, "slope_class": slope_class, "state": ray.state,
+                "respect_count": ray.respect_count, "wick_rejection_count": ray.wick_rejection_count,
+                "lifetime_hours": life_hours, "horizon_bars": round(h_bars, 1),
+                "last_seen_ts": ray.last_seen_ts,
+                "t_anchor": ray.anchor_ts, "p_anchor": round(ray.value_at_anchor, 8),
+                "t_now": current_bar_ts, "p_now": round(value_now, 8),
+                "t_horizon": t_horizon, "p_horizon": round(p_horizon, 8),
+                "label": label,
+            })
+
+        return jsonify({"symbol": symbol, "tf": tf, "rays": rays_out})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @flask_app.route("/api/analysis/hypothetical", methods=["POST"])
 @require_key
 def api_analysis_hypothetical():

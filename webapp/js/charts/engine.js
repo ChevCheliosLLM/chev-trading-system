@@ -9,8 +9,13 @@
   // Expose so the isolated tab-switch script can read it for cache restore check
   Object.defineProperty(window, '_engineData', { get: () => _engineData, set: v => { _engineData = v; } });
   let _engineOverlayState = {
-    swings: true, legs: true, geometry: false, balance: true, hypothesis: false, patterns: false
+    swings: true, legs: true, geometry: false, balance: true, hypothesis: false, patterns: false,
+    rays: false
   };
+  // Trendline Ray registry data (Phase W1) -- /api/rays response for whichever
+  // symbol+tf the Arsenal "TL" card last fetched. Mirrors _engineData's pattern
+  // but is its own state: a separate endpoint, a separate cache-or-fetch check.
+  let _tlRaysData = null;
   // The ENGINE-tab overlays (swings/legs/balance) default to ON, but they should
   // only appear once the user actually engages the ENGINE tab ("Run Dexter" →
   // _applyEngineData). The Arsenal "PAT" tool loads _engineData purely to draw
@@ -126,6 +131,34 @@
 
       _drawPatternLine(pat.upper_trendline, true);
       _drawPatternLine(pat.lower_trendline, false);
+    }
+
+    // 5. Trendline Ray registry (Phase W1) — solid anchor->now, dashed now->horizon.
+    // Data is /api/rays' response (_tlRaysData): Dexter has already computed every
+    // coordinate, the slope class, and the label string -- this only draws
+    // coordinates and prints strings, per this build's core rule. BROKEN rays are
+    // never present here (select_live already excludes non-LIVE rays server-side).
+    if (_engineOverlayState.rays && _tlRaysData && _tlRaysData.rays) {
+      _tlRaysData.rays.forEach(ray => {
+        const xA = timeToX(ray.t_anchor),  yA = priceToY(ray.p_anchor);
+        const xN = timeToX(ray.t_now),     yN = priceToY(ray.p_now);
+        const xH = timeToX(ray.t_horizon), yH = priceToY(ray.p_horizon);
+        if (xA == null || yA == null || xN == null || yN == null || xH == null || yH == null) return;
+        const col = ray.side === 'upper' ? '#f23645' : '#089981';  // site convention: resistance=red, support=green
+        dctx.save();
+        dctx.strokeStyle = col;
+        dctx.lineWidth = 1.5;
+        dctx.beginPath(); dctx.moveTo(xA, yA); dctx.lineTo(xN, yN); dctx.stroke();
+        dctx.setLineDash([6, 4]);
+        dctx.beginPath(); dctx.moveTo(xN, yN); dctx.lineTo(xH, yH); dctx.stroke();
+        dctx.setLineDash([]);
+        if (ray.label) {
+          dctx.font = '9px Share Tech Mono, monospace';
+          dctx.fillStyle = col;
+          dctx.fillText(ray.label, xH + 4, yH);
+        }
+        dctx.restore();
+      });
     }
 
     dctx.restore();
@@ -828,6 +861,100 @@
     });
   })();
 
+  /* ============================================================
+     ARSENAL — Trendline Ray tool (Phase W1, ray_registry.json via /api/rays)
+     TL's primary click now shows Dexter's own tracked, trust-tallied rays
+     instead of the legacy client-side quick-TL detector (still reachable —
+     unchanged — from the dropdown, see "Quick TL (local)" wiring below).
+     Follows drawPatternLines()'s exact shape: toggle off if already showing;
+     otherwise use already-fetched data for this symbol+tf or fetch fresh;
+     friendly empty state, not an error, when Dexter has nothing tracked yet.
+     ============================================================ */
+  function _syncTlCardUI(on, label) {
+    const btn  = document.getElementById('lyrTlBtn');
+    const card = document.getElementById('lyrTlCard');
+    const vis  = document.getElementById('lyrTlVis');
+    if (btn)  btn.textContent = label || 'TL';
+    if (card) card.classList.toggle('active', on);
+    if (vis)  { vis.checked = on; vis.disabled = !on; }
+  }
+
+  function _tlCardLabel(data) {
+    if (!data || !data.rays || !data.rays.length) return 'TL';
+    return 'TL (' + data.rays.length + ')';
+  }
+
+  async function drawRegistryRays() {
+    const btn = document.getElementById('lyrTlBtn');
+    // Toggle OFF — hide the overlay, keep the data (same as drawPatternLines()).
+    if (_engineOverlayState.rays) {
+      _engineOverlayState.rays = false;
+      _syncTlCardUI(false, 'TL');
+      redrawAll();
+      return;
+    }
+    if (!currentCandles || !currentCandles.length) {
+      showNotification('No chart', 'Load a chart first', 'error', 'oh-no.png', 4000);
+      return;
+    }
+    const haveMatch = _tlRaysData && _tlRaysData.symbol === currentSymbol && _tlRaysData.tf === currentTf;
+    if (!haveMatch) {
+      btn.textContent = 'TL…'; btn.disabled = true;
+      try {
+        const r = await _apiFetch('/api/rays?symbol=' + encodeURIComponent(currentSymbol) + '&tf=' + currentTf);
+        let fresh = null;
+        try { fresh = await r.json(); } catch (_) {}
+        if (!r.ok) throw new Error((fresh && fresh.error) ? fresh.error : ('Dexter ' + r.status + ' — is Dexter running?'));
+        if (!fresh) throw new Error('Dexter returned no data');
+        if (fresh.error) throw new Error(fresh.error);
+        _tlRaysData = fresh;
+      } catch (e) {
+        _syncTlCardUI(false, 'TL');
+        showNotification('Trendline Ray error', e.message, 'error', 'oh-no.png', 6000);
+        return;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    if (!_tlRaysData.rays || !_tlRaysData.rays.length) {
+      _syncTlCardUI(false, 'TL');
+      showNotification('No tracked rays', 'Dexter has no live trendline ray for ' +
+        currentSymbol + ' ' + (currentTf || '').toUpperCase() + ' yet', 'info', 'lets-see.png', 5000);
+      return;
+    }
+    _engineOverlayState.rays = true;
+    _syncTlCardUI(true, _tlCardLabel(_tlRaysData));
+    redrawAll();
+    const res = _tlRaysData.rays.filter(r => r.side === 'upper').length;
+    const sup = _tlRaysData.rays.length - res;
+    showNotification('Trendline rays drawn', res + ' resistance · ' + sup + ' support', 'success', 'ruler.png', 3500);
+  }
+
+  // TL visibility checkbox — hide/show the registry-ray overlay without
+  // refetching. Additive alongside the existing generic
+  // _wireVisCheckbox('lyrTlVis', '_tl') call below (untouched) -- that one
+  // still correctly governs the legacy quick-TL drawings when THOSE are what
+  // is showing; this one governs the registry-ray overlay when THAT is
+  // showing. Only one is ever populated at a time in practice.
+  (function() {
+    const tv = document.getElementById('lyrTlVis');
+    if (tv) tv.addEventListener('change', function() {
+      if (!_tlRaysData) return;
+      _engineOverlayState.rays = tv.checked;
+      const card = document.getElementById('lyrTlCard');
+      if (card) card.classList.toggle('active', tv.checked);
+      redrawAll();
+    });
+  })();
+
+  // "Quick TL (local)" — the TL dropdown's escape hatch back to the legacy
+  // client-side detector (chat.js drawTrendlines(), unchanged). TL's primary
+  // click no longer calls it directly, but the old behaviour stays reachable.
+  (function() {
+    const qb = document.getElementById('ctpQuickTlBtn');
+    if (qb) qb.addEventListener('click', function() { drawTrendlines(); });
+  })();
+
   // Auto-run ENGINE toggle — re-runs Dexter every 5 minutes
   let _engAutoTimer = null;
   const _engAutoChk = document.getElementById('engChkAuto');
@@ -895,7 +1022,7 @@
       ['lyrFibBtn', function() { drawFibStack(); }],
       ['lyrRsiBtn', function() { showRSIDiv(); }],
       ['lyrPatBtn', function() { drawPatternLines(); }],
-      ['lyrTlBtn',  function() { drawTrendlines(); }],
+      ['lyrTlBtn',  function() { drawRegistryRays(); }],
       ['lyrTlArrow', function(e) { e.stopPropagation(); _ctpShow('tl'); }],
       ['lyrFibArrow', function(e) { e.stopPropagation(); _ctpShow('fib'); }],
       ['lyrRsiArrow', function(e) { e.stopPropagation(); _rsiArrowClick(); }],

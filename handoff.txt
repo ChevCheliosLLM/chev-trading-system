@@ -10852,5 +10852,190 @@ RESTART: REQUIRED (dexter.py and ray_registry.py both changed).
 DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
 
 ================================================================================
+*** PHASE W1 — REAL RAYS ON THE TL CARD — 2026-07-14 — RESTART: YES
+(dexter.py route added), DEPLOY: YES (frontend changes), RE-PASTE CHEV
+PROMPT: NO ***
+================================================================================
+
+CONTEXT: this phase opens a new build ("Webapp Rays & Named Patterns") that
+supersedes the prior build's "no webapp JS edits" rule. The Arsenal TL card's
+primary click (lyrTlBtn) called chat.js's drawTrendlines() — a client-side
+pivot detector on currentCandles, unrelated to Dexter. Meanwhile
+ray_registry.json holds the actual live, trust-tallied rays that reach Chev
+(Phases R2-R5). Goal: TL shows those real rays; the legacy detector survives,
+demoted to a dropdown option.
+
+TASK 1 (read before writing): api_analysis_engine() (dexter.py ~2459) is a
+plain, unauthenticated GET route (no @require_key — read-only analysis
+routes in this webapp don't carry it), symbol/tf from flask_request.args,
+try/except returning jsonify({"error": str(e)}), 500. Modeled the new route
+on this exactly. select_live()'s extended signature (Phase R3) needs
+current_bar_ts and atr_by_key. Neither is fetched live in the new route
+(read-only, no recompute, per the hard rules): current_bar_ts is wall-clock
+time.time(), the same choice already made for the read-only Chev-facing
+paths in Phase R4. atr_by_key is RECOVERED from the registry records
+themselves — slope_norm is already ATR-per-bar (baked in by the scan side at
+reconcile() time), so |slope_raw / slope_norm| recovers the ATR in effect
+when a ray was last reconciled; median across whatever rays already exist
+for the requested (symbol, tf) key. Confirmed by reading select_live()
+itself that it already excludes any ray whose state != "LIVE" before doing
+anything else — so BROKEN rays are excluded automatically, no extra
+filtering needed in the route.
+
+WHAT CHANGED AND WHY:
+
+1. dexter.py — GET /api/rays?symbol=...&tf=..., placed directly after
+   api_analysis_engine(). Loads the registry read-only under REGISTRY_LOCK
+   (an explicit instruction for this phase; note the lock is scoped to JUST
+   the load_registry() call, correctly, since this route does zero writes —
+   unlike Phase R5's read-modify-write case, there's no stale-snapshot race
+   to guard against here). Calls select_live() (unmodified) and, per ray,
+   ray_registry's own _project_value/horizon_bars/_TF_SECONDS (unmodified;
+   no new projection math written) to compute four coordinate pairs:
+   t_anchor/p_anchor (the ray's own anchor, no projection needed),
+   t_now/p_now (value at current_bar_ts), t_horizon/p_horizon (value at
+   horizon_bars(ray) bars ahead, timestamp extrapolated by the timeframe's
+   own bar-seconds — same value_now + slope_raw*h_bars formula already
+   established in Phase R4's format_ray_block_for_chev, reused a second
+   time, not reinvented). slope_class (rising/falling/flat) uses the exact
+   same sign-based classification as Phases R4/R5's Chev-facing text, so the
+   webapp and Chev describe the same ray the same way. Label composed
+   server-side, e.g. "Falling resistance · respected 4x · 44h" — JS never
+   words anything. Staleness: "one scan cycle" reuses dexter.py's own
+   TF_SECONDS table (~3862, the same table gating scan_pair_tf's own rescan
+   cadence) — if last_seen_ts is older than that, the label gets a
+   server-composed " · stale, last confirmed N.Nh ago" suffix. Empty/no-rays
+   -> {"rays": []}, HTTP 200 (plain jsonify, no error). Sanity-verified
+   offline against ray_registry.py directly (dexter.py can't be imported —
+   see Phase R5's handoff for why; same constraint applies here) with a
+   synthetic registry containing a LIVE upper ray, a LIVE stale lower ray,
+   a LIVE lower ray, and a BROKEN ray: the BROKEN ray was correctly excluded,
+   the stale ray correctly got the staleness suffix, and all three labels/
+   coordinates matched the expected shape exactly.
+
+2. webapp/js/charts/engine.js — new "5. Trendline Ray registry" section
+   inside _drawEngineOverlays() (mirrors section 4's Pattern-trendline
+   structure, NOT gated on _engineReadoutActive, same reasoning as patterns:
+   an Arsenal-tool overlay, not an ENGINE-tab one). Draws each ray as two
+   segments — solid anchor->now, dashed now->horizon — using timeToX/
+   priceToY directly (the same primitives _drawPatternLine uses; that
+   function itself is scoped locally inside section 4 and single-segment,
+   so a new function was written rather than calling it, per the phase's
+   own "_drawPatternLine or the primitives it uses" wording). Colors reuse
+   the site's existing convention exactly (#f23645 resistance / #089981
+   support — the same two hex values already hardcoded in this same file's
+   swing-dot and leg-line sections, and in chat.js's own trendline pusher —
+   no new palette invented). Label drawn near the horizon end. New
+   drawRegistryRays() function, drawPatternLines()'s exact shape: toggle off
+   if already active; use already-fetched data for a symbol+tf match or
+   fetch /api/rays fresh; friendly "No tracked rays" notification (not an
+   error) when the response is empty. New _syncTlCardUI(on, label), mirrors
+   _syncPatternCardUI precisely. lyrTlBtn's map entry rewired from
+   drawTrendlines() to drawRegistryRays(). New dedicated lyrTlVis change
+   listener added ADDITIONALLY alongside the existing generic
+   _wireVisCheckbox('lyrTlVis','_tl') call (left untouched) — the generic
+   one still correctly governs legacy quick-TL drawings when those are
+   showing (they still live in the shared `drawings` array, tagged _tl);
+   the new one governs the registry-ray overlay (_engineOverlayState.rays)
+   when that is showing instead. Only one is ever populated at a time in
+   practice. New ctpQuickTlBtn click listener calls drawTrendlines()
+   directly, unchanged.
+
+3. webapp/index.html — TL card's data-tip ("Dexter's tracked trendline
+   rays") and .ltbDesc ("Dexter's Rays") updated to describe the new
+   primary behaviour. New button #ctpQuickTlBtn ("Quick TL (local)") added
+   inside the EXISTING #ctpTlBody dropdown panel (which previously held only
+   the legacy detector's Lines-per-side/Sensitivity radio settings, with no
+   action button of its own) — relabeled the settings heading to "Lines per
+   side (Quick TL settings)" so it's clear those radios configure the
+   button above them, not the TL card's new primary behaviour. ?v= bumped
+   for engine.js and chart-popups.css (both to 20260722-1 — chosen to sit
+   past the highest existing stamp anywhere in the file, 20260721-7, since
+   several files already carry dates past this build's nominal "current
+   date" context; guarantees a real cache-bust regardless of which date is
+   actually current).
+
+4. webapp/css/components/chart-popups.css — minimal new .ctpQuickTlBtn
+   rule, matching #ctpTlBody's existing look-and-feel (same border-radius/
+   font conventions already used nearby) and its existing #ff9800 accent
+   color for this specific panel (not a new color introduced).
+
+BENEFIT: clicking TL now shows the same rays Dexter has been tracking and
+trusting all along — the ones with real touch/wick-trap history and a real
+projected future, not a fresh, memoryless pivot re-guess computed in the
+browser on every click. The legacy quick detector isn't removed, just
+correctly repositioned as a secondary, clearly-labelled option.
+
+SECOND-PASS REVIEW (Lead AI Quant Strategist / Senior Python Architect pass,
+re-reading the diff cold): traced every file touched directly (dexter.py's
+new route, engine.js's new state/functions/rewired map entry, index.html's
+card text + new button + version bumps, chart-popups.css's new rule) and
+indirectly (chat.js — confirmed via `git diff --stat` showing ZERO lines
+changed, the strongest possible proof of byte-identical, stronger than a
+manual text-diff since the file wasn't touched at all; _apiFetch/
+showNotification/redrawAll's wrapping structure — all reused unmodified;
+the existing _wireVisCheckbox('lyrTlVis','_tl') call — confirmed still
+present, untouched). ONE PRE-EXISTING, NOT NEWLY-INTRODUCED LIMITATION
+FOUND AND DELIBERATELY NOT FIXED: neither PAT's overlay (_engineData/
+_engineOverlayState.patterns) nor the new ray overlay (_tlRaysData/
+_engineOverlayState.rays) is reset on a symbol or timeframe switch — grepped
+the whole webapp/js tree and confirmed no such reset hook exists anywhere
+for PAT either. Switching symbols while either overlay is toggled on would
+leave stale coordinates from the old symbol in memory until the card is
+toggled off and back on. This is an existing PAT limitation, not something
+introduced here — the ray overlay was built to mirror PAT's exact behaviour
+per this phase's explicit instruction, and fixing cross-cutting symbol-
+switch invalidation for both together is a reasonable future phase, not an
+in-scope fix for this one. Flagged rather than silently inherited without
+comment.
+
+VERIFICATION: `python -m py_compile dexter.py` -> exit 0. `node --check
+webapp/js/charts/engine.js` -> exit 0 (parse-only, as expected for a script
+fragment sharing a global scope with its sibling files — does not, and
+should not, fail on the outer-scope globals it references). Existing self-
+tests re-run, all unaffected (none of them touch dexter.py's Flask routes
+or the webapp): `python -X utf8 derivs.py` 12/12, `python labeller.py`
+32/32, `python -X utf8 ray_registry.py` 28/28, `python -X utf8
+test_ray_break_alert.py` 15/15, `python test_ray_extension.py` 7/7, `python
+-X utf8 audit_context.py` exit 0. Grep-confirmed every new anchor (the
+route decorator + function, drawRegistryRays, _syncTlCardUI, the rewired
+lyrTlBtn map entry, ctpQuickTlBtn in both engine.js and index.html) appears
+exactly once. `git diff --stat -- webapp/js/ui/chat.js` -> empty output,
+proving chat.js (and therefore drawTrendlines()) is completely untouched.
+No dexter.py execution, bot never run.
+
+MANUAL /api/rays REQUEST/RESPONSE (documented per the gate — dexter.py
+cannot be imported to curl-test offline; the endpoint's arithmetic was
+instead verified by calling ray_registry.py's real functions directly
+against a synthetic registry, see WHAT CHANGED item 1 above; the actual
+HTTP route is Kev's to verify live):
+  GET /api/rays?symbol=BTCUSDT&tf=1h
+  -> 200 {"symbol":"BTCUSDT","tf":"1h","rays":[
+       {"side":"upper","slope_class":"falling","state":"LIVE",
+        "respect_count":4,"wick_rejection_count":1,"lifetime_hours":44.0,
+        "horizon_bars":14.7,"last_seen_ts":...,
+        "t_anchor":...,"p_anchor":61500.0,"t_now":...,"p_now":61497.5,
+        "t_horizon":...,"p_horizon":61490.17,
+        "label":"Falling resistance · respected 4x · 44h"}, ...]}
+  GET /api/rays?symbol=SOMETHING_NEVER_SCANNED&tf=1h
+  -> 200 {"symbol":"SOMETHING_NEVER_SCANNED","tf":"1h","rays":[]}
+
+REMAINING UNCERTAIN / MANUAL VERIFICATION FOR KEV (per the phase's own
+closing note): after restart + deploy, click TL on a symbol Dexter has been
+scanning for a while (needs real accumulated respect history to look
+meaningful) — confirm solid-then-dashed rays render with labels like
+"Rising support · respected 3x · 8h", confirm toggling off cleanly clears
+them, confirm the dropdown's "Quick TL (local)" still draws the old browser
+lines exactly as before, and confirm a symbol Dexter has never scanned shows
+the friendly "No tracked rays" notification rather than an error. Also worth
+deliberately testing the symbol-switch limitation flagged above (toggle TL
+on, switch symbol, see whether stale lines linger) to judge whether it's
+annoying enough in practice to warrant a dedicated future fix.
+
+RESTART: REQUIRED (dexter.py route added). DEPLOY: YES — frontend changes
+(engine.js, index.html, chart-popups.css) need push_dashboard.py; not run
+here, per the hard rule against self-deploying. RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
 END OF HANDOFF
 ================================================================================

@@ -70,6 +70,14 @@
 #ctpTlBody input[type=radio] { accent-color: #ff9800; cursor: pointer; width: 13px; height: 13px; }
 #ctpTlBody .drop-sep { border-top: 1px solid #1e222d; margin: 6px 0; }
 #ctpTlBody .ctpGroupLbl { font-size: 10px; color: #5d6068; text-transform: uppercase; letter-spacing: 0.06em; margin: 2px 0 4px; }
+/* Phase W1: TL's primary click now shows Dexter's tracked rays; this button
+   is the escape hatch back to the legacy client-side quick detector. */
+.ctpQuickTlBtn {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: 1px solid #2a2e39; border-radius: 4px;
+  color: #9598a1; padding: 6px 8px; font-family: inherit; font-size: 12px;
+}
+.ctpQuickTlBtn:hover { color: #ff9800; border-color: #ff9800; }
 .objEye, .objDel { background:none; border:none; color:#5d6068; cursor:pointer; padding:2px 4px; font-size:11px; line-height:1; }
 .objEye:hover { color:#d1d4dc; }
 .objDel:hover { color:#f23645; }

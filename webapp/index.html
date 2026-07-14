@@ -35,7 +35,7 @@
 <link rel="stylesheet" href="css/components/trading-logs.css?v=20260719-1">
 <link rel="stylesheet" href="css/components/arsenal.css?v=20260716-2">
 <link rel="stylesheet" href="css/components/chart.css?v=20260718-1">
-<link rel="stylesheet" href="css/components/chart-popups.css?v=20260716-2">
+<link rel="stylesheet" href="css/components/chart-popups.css?v=20260722-1">
 <link rel="stylesheet" href="css/components/trade-pnl-card.css?v=20260720-1">
 <link rel="stylesheet" href="css/components/toasts.css?v=20260720-1">
 <link rel="stylesheet" href="css/components/intel.css?v=20260716-2">
@@ -950,7 +950,9 @@
           <label><input type="checkbox" id="vpCk4h"> 4h</label>
         </div>
         <div id="ctpTlBody">
-          <div class="ctpGroupLbl">Lines per side</div>
+          <button class="ctpQuickTlBtn" id="ctpQuickTlBtn" data-tip="Draws the old browser-side quick detector — separate from Dexter's tracked rays">Quick TL (local)</button>
+          <div class="drop-sep"></div>
+          <div class="ctpGroupLbl">Lines per side (Quick TL settings)</div>
           <label><input type="radio" name="tlPerSide" value="1"> 1</label>
           <label><input type="radio" name="tlPerSide" value="2" checked> 2</label>
           <label><input type="radio" name="tlPerSide" value="3"> 3</label>
@@ -1271,14 +1273,14 @@
             <button class="ltbName" id="lyrPatBtn">PAT</button>
             <div class="ltbDesc">Chart Patterns</div>
           </div>
-          <div class="layerToolBtn hasDropdown" id="lyrTlCard" data-tip="Trendlines">
+          <div class="layerToolBtn hasDropdown" id="lyrTlCard" data-tip="Dexter's tracked trendline rays">
             <input type="checkbox" class="toolVis" id="lyrTlVis" disabled data-tip="Show/hide">
             <span class="toolDot"></span>
             <div class="ltbDrop">
               <button class="ltbName" id="lyrTlBtn">TL</button>
               <span class="ltbArrow" id="lyrTlArrow" data-tip="TL options"><svg class="icon sm"><use href="#icon-chevron-down"/></svg></span>
             </div>
-            <div class="ltbDesc">Trendlines</div>
+            <div class="ltbDesc">Dexter's Rays</div>
           </div>
         </div>
       </div>
@@ -1439,7 +1441,7 @@
 <script src="js/ui/chat.js?v=20260717-1"></script>
 <script src="js/charts/timeframe-load.js?v=20260709-2"></script>
 <script src="js/charts/drawing.js?v=20260721-7"></script>
-<script src="js/charts/engine.js?v=20260718-1"></script>
+<script src="js/charts/engine.js?v=20260722-1"></script>
 <script src="js/ui/weight-lab.js?v=20260713-2"></script>
 <script src="js/ui/sparklines.js?v=20260709-2"></script>
 <script src="js/ui/radar.js?v=20260709-2"></script>
