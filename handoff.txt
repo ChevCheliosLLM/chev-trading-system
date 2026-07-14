@@ -11355,5 +11355,192 @@ push_dashboard.py must be run to deploy; not run by me per the standing
 rule). RE-PASTE CHEV PROMPT: NO (this phase changes nothing Chev receives).
 
 ================================================================================
+
+PHASE W3 -- "WHAT CHEV SEES": SCAN-ENGINE PATTERN VIEW
+
+CONTEXT: _run_pattern_engine (dexter.py) is the pattern engine that actually
+feeds Chev via scan_pair_tf's real scan loop -- a richer, independent detector
+(flags, pennants, channels, proper 5-point H&S, in addition to what
+patterns.py's "PAT" overlay already draws) that had no chart presence at all.
+Kev wanted to see, on the chart, exactly what THIS engine currently detects.
+This phase adds a read-only endpoint plus a new "SCAN" chart overlay, entirely
+separate from PAT, with zero changes to either engine's fit/detection math.
+
+WHAT CHANGED AND WHY:
+
+1. dexter.py -- _run_pattern_engine's `geometry` dict (shared across every
+   pattern entry a single call returns) gained 5 additive keys, appended after
+   the existing R3 keys, values only, nothing altered: window_len (n, the
+   tail-windowed df's length), upper_ref_idx/lower_ref_idx (the first pivot's
+   LOCAL bar index used by fit_tl -- exactly `ref_x = x[0]` already computed
+   inside fit_tl, just not previously returned), upper_ref_price/
+   lower_ref_price (that same fitted line's value at that index -- the
+   regression intercept `b`, not necessarily the raw pivot price). Combined
+   with the already-existing upper_line/lower_line (fitted value at the LAST
+   window bar) and upper_slope_raw/lower_slope_raw (R3), these fully describe
+   both boundary lines as two (t, p) endpoints without touching a single line
+   of the fit math itself. Grep-confirmed (see VERIFICATION) the function's
+   internals are otherwise byte-identical -- this is a pure append to one
+   dict literal.
+
+   New route: GET /api/scan_patterns?symbol=...&tf=... -- fetches candles the
+   same way api_analysis_engine() does (same fetch_candles(sym, atype, tf,
+   500) call, same clean/atype logic, not a new fetcher), calls
+   engines.run_survey(...) for the prior-trend signal (same call already
+   proven safe in api_analysis_engine, same argument shape) and
+   _run_pattern_engine(df) unchanged, then for the top 3 patterns (already
+   sorted best-first by the engine's own priority: breakout+volume >
+   breakout > confidence) converts each one's shared geometry into two
+   {t1,p1,t2,p2,slope_class,r2} endpoint objects using the additive fields
+   above (outer_idx = len(df) - window_len + local_idx, timestamp via
+   df.index[outer_idx].timestamp() -- the same bare convention already used
+   for anchor_ts elsewhere in this exact ray-wiring family, e.g.
+   primary_df.index[-1].timestamp() at the R3 site), and composes a Python-
+   side display object (name, confidence_pct, bias_text) by calling W2's
+   existing _pat_prior_trend_bucket/_pat_bias_text -- imported by reference,
+   not duplicated. Entries with name=="None" (the R3 sentinel) or missing
+   window_len (an older/partial geometry shape) are skipped, not erroneously
+   drawn. Purely additive to the pattern engine's return shape; no registry,
+   reason, or scoring code touched. Read-only, same try/except-to-{"error"}
+   contract as every other route in this build.
+
+2. webapp/js/charts/engine.js --
+     a. _engineOverlayState gained `scanPatterns: false`; a new module state
+        var `_scanPatternsData` (mirrors `_tlRaysData`'s shape: its own
+        endpoint, its own cache-or-fetch-by-symbol+tf check, never touching
+        `_engineData`).
+     b. _drawEngineOverlays() gained section 6 ("Scan-engine patterns"),
+        appended after section 5 (rays), before the function's closing
+        dctx.restore(). Draws each pattern's two boundary lines dotted
+        ([2,3] dash) in blue (#2962ff, the existing drawing-tool palette
+        accent already used for the ctxColors swatch) -- visually distinct
+        from section 4's PAT lines (dashed [6,4], red/green/gold) per the
+        phase's explicit requirement. Label (name + confidence + " (scan)",
+        then bias_text) reuses _lbl(), the same primitive W1/W2/S/R/VP/RSI
+        labels already use. Deliberately does NOT apply W2's last-real-
+        candle midpoint capping fix -- unlike patterns.py's R1-extended
+        lines, this engine's t2 is always the outer df's actual last row
+        (never future-projected), so the fix doesn't apply here; noted
+        explicitly rather than copied blindly.
+     c. New "SCAN" Arsenal tool, following drawPatternLines()/
+        drawRegistryRays()'s exact three-function shape:
+        _syncScanCardUI/_scanCardLabel/drawScanPatterns() (toggle off if
+        showing; use already-fetched data for this symbol+tf or fetch fresh;
+        friendly empty-state notification, not an error, when nothing is
+        detected) plus a `lyrScanVis` visibility-checkbox listener and a
+        `['lyrScanBtn', function() { drawScanPatterns(); }]` map entry.
+     d. ?v= bumped to 20260722-3 (this build's date-sequence convention).
+
+3. webapp/index.html -- one new Layers-tab grid row, `lyrScanCard`
+   ("SCAN"/"Chev's Patterns"), inserted immediately after `lyrPatCard`, using
+   the exact same simple-card markup pat/S-R/VP/ATR already use (`toolVis`
+   checkbox + `toolDot` + `ltbName` button + `ltbDesc`) -- NOT the
+   `hasDropdown`/`.ltbDrop`/`ltbArrow` variant TL and Fib use. Chosen over a
+   TL-style dropdown because PAT (the card SCAN sits beside) has no existing
+   arrow/popup infrastructure to extend, and _ctpShow (chat.js)'s shared
+   popup is hardcoded to four specific body ids (fib/rsi/tl/vp) with its own
+   titles map -- retrofitting a fifth would touch a shared function and add
+   new popup markup for a plain on/off toggle that doesn't need TF-style
+   sub-options. A third, self-contained layer card mirrors an already-proven
+   complete pattern (PAT itself) and is the smaller, more consistent diff.
+   ?v= bump covered under item 2d (same file, same version stamp).
+
+BENEFIT: Kev can now see, directly on the chart, exactly what the scan engine
+that actually reaches Chev is detecting -- flags, pennants, channels included
+-- with a plain-English bias read, independent of and visually distinct from
+patterns.py's PAT overlay. Confirms or surfaces the two engines' known,
+accepted divergence visually rather than leaving it invisible.
+
+SECOND-PASS REVIEW (Lead AI Quant Strategist / Senior Python Architect pass,
+re-reading the diff cold): traced everything touched directly (5 additive
+geometry keys, 1 new route, 3 new JS functions + 1 new overlay section + 1
+new state var + 1 checkbox listener + 1 map entry, 1 new HTML grid row, 1
+?v= bump) and indirectly:
+  - Grep-audited every consumer of `_run_pattern_engine`'s `geometry` dict
+    across the whole codebase: the R3 ray-wiring site (`_ray_geo["upper_
+    slope_raw"]` etc, dexter.py ~9841) and the legacy-fallback Chev prompt
+    builder (`_geo.get('upper_slope_norm')` etc, dexter.py ~10590) BOTH
+    access it by explicit named key only -- neither iterates or dumps the
+    dict wholesale. Confirmed my 5 new keys are read by nobody and appear in
+    no text ever sent to Chev -- consistent with audit_context.py's COMBINED
+    TOTAL being byte-for-byte unchanged at 10,197 tokens after this phase.
+  - Task 3's explicit requirement (no shared mutable state between the PAT
+    and SCAN overlay paths): confirmed on the backend -- fetch_candles()
+    returns df.copy() to every caller (its own cache dict is never handed
+    out by reference), and both _run_pattern_engine and patterns.run operate
+    on their own `.tail(...).copy()`/`.iloc[...].copy()` of that df with no
+    module-level mutable state in either file (grepped patterns.py and the
+    _run_pattern_engine function body for globals -- none). engines.py's
+    run_survey is likewise a pure function (grepped engines.py for module-
+    level mutable state -- none found at all). Confirmed on the frontend --
+    `_scanPatternsData`/`_engineOverlayState.scanPatterns` are their own
+    `let` bindings, never assigned from or read by `_engineData`/
+    `_tlRaysData`/`_engineOverlayState.patterns`; section 6 reads only its
+    own data.
+  - Verified my new route's call order (engines.run_survey(df=df,...) then
+    _run_pattern_engine(df) on the same df object) exactly mirrors
+    api_analysis_engine()'s own already-shipped, already-working order --
+    not a new risk, the same established sequence.
+  - Verified every appended `patterns_out` entry in the new route always
+    carries a non-null `display` object (built unconditionally before
+    appending, unlike patterns.py's single-pattern route which can return
+    `display: null`) -- `_scanCardLabel`'s and the drawing code's `pat.
+    display` accesses are safe; the drawing code's `if (pat.display)` guard
+    is kept anyway for consistency with the W2 precedent, not because it's
+    load-bearing here.
+  - Confirmed _pat_prior_trend_bucket/_pat_bias_text are called, not
+    redefined or copy-pasted (grep shows only new call sites, zero `-` lines
+    touching their bodies) -- satisfies "import/reuse it, don't duplicate."
+  - Offline-verified the local-bar-index -> outer-df-timestamp reconstruction
+    math (the core new arithmetic this phase adds) in a standalone script
+    against a synthetic 500-row DatetimeIndex df, before trusting the
+    in-file version: confirmed t1 (first pivot) and t2 (last bar) both land
+    exactly on the expected outer-df row's timestamp.
+No issues required a fix this phase -- the SCAN-side "should I cap tMid at
+the last real candle like W2 did" question was raised and deliberately
+answered NO (with reasoning recorded above), since it's a different
+underlying data shape, not a missed fix.
+
+VERIFICATION: `python -m py_compile dexter.py` -> exit 0. `node --check
+js/charts/engine.js` -> NODE_CHECK_OK. `python derivs.py` -> 12/12 PASS
+(unchanged). `python labeller.py` -> 32/32 PASS (unchanged). `python
+ray_registry.py` -> 41/41 PASS (unchanged). `python test_ray_break_alert.py`
+-> 15/15 PASS (unchanged). `python test_ray_extension.py` -> 7/7 PASS
+(unchanged). `python audit_context.py` -> exit 0, COMBINED TOTAL unchanged
+at 10,197 tokens (under 14k by 3,803 -- this phase touches no prompt/token-
+budget code). `git diff -- dexter.py` shows exactly two hunks, both purely
+additive (zero real `-` lines beyond the diff header); `git diff --stat --
+patterns.py ray_registry.py webapp/js/ui/chat.js` -> empty (byte-identical,
+confirms both the untouched pattern-fit math and the untouched legacy quick-
+TL detector). Grep-confirmed every new anchor (5 geometry keys, the new
+route, the JS state var/overlay section/three functions/checkbox listener/
+map entry, the HTML grid row, the ?v= bump) appears exactly once/where
+expected. No dexter.py execution, bot never run.
+
+REMAINING UNCERTAIN / MANUAL VERIFICATION FOR KEV: purely visual, eyeball-
+verified feature -- on a trending symbol, confirm the SCAN card shows named
+scan-engine patterns (the ones Chev actually gets: try to find a case with a
+bull flag or channel specifically, since patterns.py's PAT overlay can't show
+those at all) with bias text that reads sensibly; confirm PAT and SCAN can
+both be toggled on simultaneously and remain visually distinct (dashed red/
+green/gold vs dotted blue) without either drawing on top of the other
+illegibly; confirm SCAN gives the friendly "found nothing" notification
+(not an error) on a quiet/rangebound symbol/TF where the scan engine's
+stricter multi-detector gates (min_r2=0.50, is_converging/is_parallel,
+has_impulse for flags/pennants) don't clear. Also worth watching over time:
+because _run_pattern_engine's detectors are independent `if` blocks (not
+mutually exclusive branches), it's possible for e.g. a Symmetrical Triangle
+and a Bull/Bear Pennant to both qualify from the same geometry in one scan --
+the top-3 cap combined with the engine's own breakout+volume>breakout>
+confidence sort handles this as designed, but if it ever looks like visual
+clutter in practice, the cap (currently 3) is the only knob to adjust it.
+
+RESTART: REQUIRED (dexter.py changed).
+DEPLOY: YES (webapp/js/charts/engine.js and webapp/index.html changed --
+push_dashboard.py must be run to deploy; not run by me). RE-PASTE CHEV
+PROMPT: NO (this phase changes nothing Chev receives -- confirmed above via
+the geometry-consumer grep audit).
+
+================================================================================
 END OF HANDOFF
 ================================================================================

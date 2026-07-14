@@ -2754,6 +2754,94 @@ def api_rays():
         return jsonify({"error": str(e)}), 500
 
 
+@flask_app.route("/api/scan_patterns")
+def api_scan_patterns():
+    """
+    Scan-engine patterns (Phase W3) -- exposes _run_pattern_engine's own named
+    patterns (the richer set that actually feeds Chev via scan_pair_tf: flags,
+    pennants, channels, proper 5-point H&S, in addition to what patterns.py's
+    PAT overlay already shows). Feeds the webapp's "SCAN" chart overlay,
+    distinct from PAT. READ-ONLY: fetches candles the same way
+    api_analysis_engine() does, calls _run_pattern_engine(df) and
+    engines.run_survey(df, ...) unchanged, and reads their output only --
+    never touches ray_registry, reasons, or scoring, and mutates nothing.
+
+    The two pattern engines are a known, accepted divergence (5-pivot vs
+    3-pivot fits, recorded in the Phase R3 handoff) -- this route does not
+    reconcile them; it only ever serves what THIS engine (_run_pattern_engine)
+    currently sees, verbatim.
+    """
+    symbol = flask_request.args.get("symbol", "SOLUSDT")
+    tf     = flask_request.args.get("tf", "1h")
+    clean  = symbol.upper().replace("BINANCE:", "").replace(":", "").replace("/", "")
+    atype  = _an_asset_type(symbol)
+    try:
+        sym = clean if atype == "crypto" else symbol
+        df  = fetch_candles(sym, atype, tf, 500)
+        survey = engines.run_survey(
+            df=df, symbol=symbol, primary_tf=tf,
+            dexter_score=0.0, dexter_reasons=[],
+        )
+        prior_trend = _pat_prior_trend_bucket(
+            round(float(survey.state.direction), 1) if survey.state else None
+        )
+
+        raw_patterns = _run_pattern_engine(df)
+
+        def _slope_class(slope_raw):
+            return "rising" if slope_raw > 0 else ("falling" if slope_raw < 0 else "flat")
+
+        patterns_out = []
+        for pat in raw_patterns[:3]:
+            if pat.get("name") == "None":
+                continue
+            geom = pat.get("geometry") or {}
+            window_len = geom.get("window_len")
+            if window_len is None:
+                continue  # older/partial geometry shape -- nothing to draw safely
+            offset = len(df) - window_len
+
+            def _idx_to_ts(local_idx):
+                outer_idx = max(0, min(offset + local_idx, len(df) - 1))
+                return int(df.index[outer_idx].timestamp())
+
+            last_ts = _idx_to_ts(window_len - 1)
+            upper_ep = {
+                "t1": _idx_to_ts(geom["upper_ref_idx"]), "p1": geom["upper_ref_price"],
+                "t2": last_ts,                            "p2": geom["upper_line"],
+                "slope_class": _slope_class(geom["upper_slope_raw"]),
+                "r2": geom.get("upper_r2", 0.0),
+            }
+            lower_ep = {
+                "t1": _idx_to_ts(geom["lower_ref_idx"]), "p1": geom["lower_ref_price"],
+                "t2": last_ts,                            "p2": geom["lower_line"],
+                "slope_class": _slope_class(geom["lower_slope_raw"]),
+                "r2": geom.get("lower_r2", 0.0),
+            }
+
+            patterns_out.append({
+                "name":     pat["name"],
+                "bias":     pat.get("bias", "neutral"),
+                "category": pat.get("category", "neutral"),
+                "signal":   pat.get("signal", "NEUTRAL"),
+                "breakout": bool(pat.get("breakout")),
+                "upper_trendline": upper_ep,
+                "lower_trendline": lower_ep,
+                "display": {
+                    "name": pat["name"],
+                    "confidence_pct": round(pat.get("confidence", 0.0) * 100),
+                    "bias_text": _pat_bias_text(pat.get("category", "neutral"),
+                                                 pat.get("bias", "neutral"),
+                                                 prior_trend),
+                },
+            })
+
+        return jsonify({"symbol": symbol, "tf": tf, "patterns": patterns_out})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @flask_app.route("/api/analysis/hypothetical", methods=["POST"])
 @require_key
 def api_analysis_hypothetical():
@@ -8715,6 +8803,21 @@ def _run_pattern_engine(df, window=3, lookback=100, breakout_pct=0.012):
         # scan_pair_tf's ray-registry wiring only; no existing consumer reads these.
         "upper_slope_raw":  round(hi_slope, 8),
         "lower_slope_raw":  round(lo_slope, 8),
+        # Phase W3 (SCAN overlay): additive -- window_len/ref_idx/ref_price let a
+        # read-only route reconstruct both boundary lines as (t,p) coordinate
+        # pairs without altering the fit itself. hi_ref/lo_ref are exactly the
+        # first pivot's local bar index used by fit_tl (ref_x = x[0] above);
+        # hi_int/lo_int are that same fitted line's value at that index (the
+        # regression intercept, not necessarily the raw pivot price). Combined
+        # with upper_line/lower_line above (the fitted value at the LAST bar,
+        # x_last) and window_len (n, the length of this tail-windowed df),
+        # a caller holding the original un-windowed df can recover both real
+        # timestamps via: outer_idx = len(original_df) - window_len + local_idx.
+        "window_len":       n,
+        "upper_ref_idx":    int(hi_ref),
+        "lower_ref_idx":    int(lo_ref),
+        "upper_ref_price":  round(hi_int, 6),
+        "lower_ref_price":  round(lo_int, 6),
     }
 
     results = []

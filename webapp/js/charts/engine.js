@@ -10,12 +10,19 @@
   Object.defineProperty(window, '_engineData', { get: () => _engineData, set: v => { _engineData = v; } });
   let _engineOverlayState = {
     swings: true, legs: true, geometry: false, balance: true, hypothesis: false, patterns: false,
-    rays: false
+    rays: false, scanPatterns: false
   };
   // Trendline Ray registry data (Phase W1) -- /api/rays response for whichever
   // symbol+tf the Arsenal "TL" card last fetched. Mirrors _engineData's pattern
   // but is its own state: a separate endpoint, a separate cache-or-fetch check.
   let _tlRaysData = null;
+  // Scan-engine pattern data (Phase W3) -- /api/scan_patterns response, i.e.
+  // _run_pattern_engine's own named patterns (the richer set that actually
+  // feeds Chev via scan_pair_tf). Its own state, own endpoint, own cache-or-
+  // fetch check -- entirely independent of _engineData/patterns.py's PAT
+  // overlay. The two engines may disagree (known, accepted divergence, see
+  // R3 handoff); nothing here reads or merges with _engineData.
+  let _scanPatternsData = null;
   // The ENGINE-tab overlays (swings/legs/balance) default to ON, but they should
   // only appear once the user actually engages the ENGINE tab ("Run Dexter" →
   // _applyEngineData). The Arsenal "PAT" tool loads _engineData purely to draw
@@ -191,6 +198,60 @@
           dctx.fillText(ray.label, xH + 4, yH);
         }
         dctx.restore();
+      });
+    }
+
+    // 6. Scan-engine patterns (Phase W3) -- _run_pattern_engine's own named
+    // patterns (/api/scan_patterns), drawn distinctly from section 4's
+    // patterns.py lines: dotted instead of dashed, blue (#2962ff, an existing
+    // palette accent -- see the drawing-tool color swatches) instead of
+    // section 4's red/green/gold. Coexists with section 4 when both overlays
+    // are on; neither reads nor reconciles the other's data (two independent,
+    // accepted-divergent engines, see R3 handoff). Unlike section 4's lines,
+    // t2 here is never a future timestamp (it's the scan engine's own last
+    // window bar, i.e. the outer df's actual last row) -- so no last-real-
+    // candle capping is needed for the label midpoint, unlike W2's PAT fix.
+    if (_engineOverlayState.scanPatterns && _scanPatternsData && _scanPatternsData.patterns) {
+      _scanPatternsData.patterns.forEach(pat => {
+        function _drawScanLine(ep) {
+          if (!ep || ep.t1 == null || ep.p1 == null) return;
+          const x1 = timeToX(ep.t1), y1 = priceToY(ep.p1);
+          const x2 = timeToX(ep.t2), y2 = priceToY(ep.p2);
+          if (x1 == null || y1 == null || x2 == null || y2 == null) return;
+          dctx.save();
+          dctx.globalAlpha = 0.35 + (ep.r2 || 0) * 0.45;
+          dctx.strokeStyle = '#2962ff';
+          dctx.lineWidth = 1.5;
+          dctx.setLineDash([2, 3]);
+          dctx.beginPath();
+          dctx.moveTo(x1, y1);
+          dctx.lineTo(x2, y2);
+          dctx.stroke();
+          dctx.setLineDash([]);
+          dctx.restore();
+        }
+        _drawScanLine(pat.upper_trendline);
+        _drawScanLine(pat.lower_trendline);
+
+        if (pat.display) {
+          const uEp = pat.upper_trendline, lEp = pat.lower_trendline;
+          function _scanLineValueAt(ep, t) {
+            if (!ep || ep.t1 == null || ep.t2 == null || ep.t2 === ep.t1) return null;
+            return ep.p1 + (ep.p2 - ep.p1) * ((t - ep.t1) / (ep.t2 - ep.t1));
+          }
+          if (uEp && lEp) {
+            const tMid = (uEp.t1 + uEp.t2) / 2;
+            const pUpperMid = _scanLineValueAt(uEp, tMid), pLowerMid = _scanLineValueAt(lEp, tMid);
+            if (pUpperMid != null && pLowerMid != null) {
+              const xMid = timeToX(tMid), yMid = priceToY((pUpperMid + pLowerMid) / 2);
+              if (xMid != null && yMid != null) {
+                _lbl(dctx, pat.display.name + ' · ' + pat.display.confidence_pct + '% (scan)',
+                     xMid, yMid - 8, '#2962ff', 'center', 10);
+                _lbl(dctx, pat.display.bias_text, xMid, yMid + 8, '#2962ff', 'center', 8);
+              }
+            }
+          }
+        }
       });
     }
 
@@ -988,6 +1049,93 @@
     if (qb) qb.addEventListener('click', function() { drawTrendlines(); });
   })();
 
+  /* ============================================================
+     ARSENAL — Scan-engine Patterns tool (Phase W3, _run_pattern_engine
+     output via /api/scan_patterns). Dexter's OTHER pattern detector -- the
+     richer one that actually feeds Chev through scan_pair_tf (flags,
+     pennants, channels, proper 5-point H&S, in addition to the triangles/
+     wedges/rectangle/double-triple patterns.py's PAT card already shows).
+     Follows drawPatternLines()/drawRegistryRays()'s exact shape: toggle off
+     if already showing; otherwise use already-fetched data for this
+     symbol+tf or fetch fresh; friendly empty state, not an error, when the
+     scan engine finds nothing. Own card, own state -- never reads or merges
+     with PAT's data (see R3 handoff on the two engines' accepted divergence).
+     ============================================================ */
+  function _syncScanCardUI(on, label) {
+    const btn  = document.getElementById('lyrScanBtn');
+    const card = document.getElementById('lyrScanCard');
+    const vis  = document.getElementById('lyrScanVis');
+    if (btn)  btn.textContent = label || 'SCAN';
+    if (card) card.classList.toggle('active', on);
+    if (vis)  { vis.checked = on; vis.disabled = !on; }
+  }
+
+  function _scanCardLabel(data) {
+    if (!data || !data.patterns || !data.patterns.length) return 'SCAN';
+    const conf = Math.round(data.patterns[0].display ? data.patterns[0].display.confidence_pct : 0);
+    return 'SCAN ✓' + (conf ? ' ' + conf + '%' : '');
+  }
+
+  async function drawScanPatterns() {
+    const btn = document.getElementById('lyrScanBtn');
+    // Toggle OFF — hide the overlay, keep the data (same as drawPatternLines()).
+    if (_engineOverlayState.scanPatterns) {
+      _engineOverlayState.scanPatterns = false;
+      _syncScanCardUI(false, 'SCAN');
+      redrawAll();
+      return;
+    }
+    if (!currentCandles || !currentCandles.length) {
+      showNotification('No chart', 'Load a chart first', 'error', 'oh-no.png', 4000);
+      return;
+    }
+    const haveMatch = _scanPatternsData && _scanPatternsData.symbol === currentSymbol && _scanPatternsData.tf === currentTf;
+    if (!haveMatch) {
+      btn.textContent = 'SCAN…'; btn.disabled = true;
+      try {
+        const r = await _apiFetch('/api/scan_patterns?symbol=' + encodeURIComponent(currentSymbol) + '&tf=' + currentTf);
+        let fresh = null;
+        try { fresh = await r.json(); } catch (_) {}
+        if (!r.ok) throw new Error((fresh && fresh.error) ? fresh.error : ('Dexter ' + r.status + ' — is Dexter running?'));
+        if (!fresh) throw new Error('Dexter returned no data');
+        if (fresh.error) throw new Error(fresh.error);
+        _scanPatternsData = fresh;
+      } catch (e) {
+        _syncScanCardUI(false, 'SCAN');
+        showNotification('Scan patterns error', e.message, 'error', 'oh-no.png', 6000);
+        return;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    if (!_scanPatternsData.patterns || !_scanPatternsData.patterns.length) {
+      _syncScanCardUI(false, 'SCAN');
+      showNotification('No scan patterns', 'Scan engine found no named pattern on ' +
+        currentSymbol + ' ' + (currentTf || '').toUpperCase(), 'info', 'lets-see.png', 5000);
+      return;
+    }
+    _engineOverlayState.scanPatterns = true;
+    _syncScanCardUI(true, _scanCardLabel(_scanPatternsData));
+    redrawAll();
+    const top = _scanPatternsData.patterns[0];
+    showNotification('Scan patterns drawn',
+      top.name + (top.display ? ' · ' + top.display.confidence_pct + '% conf' : ''),
+      'success', 'ruler.png', 4500);
+  }
+
+  // SCAN visibility checkbox — hide/show the overlay without refetching
+  // (mirrors PAT/TL's own lyrPatVis/lyrTlVis listeners).
+  (function() {
+    const sv = document.getElementById('lyrScanVis');
+    if (sv) sv.addEventListener('change', function() {
+      if (!_scanPatternsData) return;
+      _engineOverlayState.scanPatterns = sv.checked;
+      const card = document.getElementById('lyrScanCard');
+      if (card) card.classList.toggle('active', sv.checked);
+      redrawAll();
+    });
+  })();
+
   // Auto-run ENGINE toggle — re-runs Dexter every 5 minutes
   let _engAutoTimer = null;
   const _engAutoChk = document.getElementById('engChkAuto');
@@ -1055,6 +1203,7 @@
       ['lyrFibBtn', function() { drawFibStack(); }],
       ['lyrRsiBtn', function() { showRSIDiv(); }],
       ['lyrPatBtn', function() { drawPatternLines(); }],
+      ['lyrScanBtn', function() { drawScanPatterns(); }],
       ['lyrTlBtn',  function() { drawRegistryRays(); }],
       ['lyrTlArrow', function(e) { e.stopPropagation(); _ctpShow('tl'); }],
       ['lyrFibArrow', function(e) { e.stopPropagation(); _ctpShow('fib'); }],
