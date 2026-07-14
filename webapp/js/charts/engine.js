@@ -131,6 +131,39 @@
 
       _drawPatternLine(pat.upper_trendline, true);
       _drawPatternLine(pat.lower_trendline, false);
+
+      // Phase W2: name + bias label, skip when no named pattern (pat.display is
+      // server-computed null in that case -- see api_analysis_engine). Both
+      // strings are verbatim from the API; nothing is worded here. Reuses _lbl()
+      // (drawing.js), the same text-on-chart primitive S/R/VP/RSI-projection
+      // labels already use -- not a new labeling system.
+      if (pat.pattern !== 'None' && pat.display) {
+        const uEp = pat.upper_trendline, lEp = pat.lower_trendline;
+        function _lineValueAt(ep, tMid) {
+          if (!ep || ep.t1 == null || ep.t2 == null || ep.t2 === ep.t1) return null;
+          return ep.p1 + (ep.p2 - ep.p1) * ((tMid - ep.t1) / (ep.t2 - ep.t1));
+        }
+        if (uEp && lEp) {
+          // Phase R1 extended these lines ~25 bars past the last real candle
+          // (so the ray keeps drawing forward) -- capping the far edge at the
+          // last real candle here, same idiom already used elsewhere for this
+          // exact situation (drawing.js's VP tool, "Math.min(t2, lastCandleTime)"),
+          // keeps the label centered on the pattern's actual historical shape
+          // instead of drifting into that future extrapolation.
+          const lastRealT = (typeof currentCandles !== 'undefined' && currentCandles.length)
+            ? currentCandles[currentCandles.length - 1].time : uEp.t2;
+          const tMid = (uEp.t1 + Math.min(uEp.t2, lastRealT)) / 2;
+          const pUpperMid = _lineValueAt(uEp, tMid), pLowerMid = _lineValueAt(lEp, tMid);
+          if (pUpperMid != null && pLowerMid != null) {
+            const xMid = timeToX(tMid), yMid = priceToY((pUpperMid + pLowerMid) / 2);
+            if (xMid != null && yMid != null) {
+              _lbl(dctx, pat.display.name + ' · ' + pat.display.confidence_pct + '%',
+                   xMid, yMid - 8, '#d4af37', 'center', 10);
+              _lbl(dctx, pat.display.bias_text, xMid, yMid + 8, '#d4af37', 'center', 8);
+            }
+          }
+        }
+      }
     }
 
     // 5. Trendline Ray registry (Phase W1) — solid anchor->now, dashed now->horizon.

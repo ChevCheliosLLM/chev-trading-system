@@ -11218,5 +11218,142 @@ RESTART: REQUIRED (dexter.py and ray_registry.py both changed).
 DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
 
 ================================================================================
+
+PHASE W2 -- NAMES AND BIAS ON THE PAT OVERLAY
+
+CONTEXT: The webapp's PAT overlay (patterns.py, api_analysis_engine, the
+"Pattern trendlines" section of engine.js's _drawEngineOverlays) was drawing
+the two boundary lines of a detected pattern with no name or read on-chart --
+Kev had to already know what a "descending triangle" looks like and reason
+out its bias himself. This phase adds a short name + confidence + one plain-
+English bias sentence directly on the chart, computed server-side from data
+Dexter already has (patterns.py's own category/bias fields, plus engines.py's
+existing state.direction), with zero new pattern-detection or market math and
+zero changes to patterns.py itself.
+
+WHAT CHANGED AND WHY:
+
+1. dexter.py -- two new small pure functions placed immediately before
+   @flask_app.route("/api/analysis/engine") (line ~2468):
+     a. _pat_prior_trend_bucket(direction) -- buckets state_out["direction"]
+        into "up"/"down"/"range" using the SAME +25/-25 threshold engine.js's
+        own mood-emoji logic already uses, for consistency with an existing
+        convention rather than inventing a new one.
+     b. _pat_bias_text(category, pattern_bias, prior_trend) -- maps pattern.
+        category ("continuation"/"reversal"/"neutral") x pattern.bias
+        ("bullish"/"bearish"/"neutral") x prior_trend to one descriptive (never
+        directive -- no "buy"/"long"/"short") sentence. Verified against
+        Kev's own worked example: a descending triangle in an uptrend reads
+        as "against the prior trend -- consolidation, not a clean
+        continuation"; the same triangle in a downtrend reads as "aligned --
+        continuing it."
+   Inside api_analysis_engine(), right after the existing patterns.run()
+   try/except block and before the route's return jsonify(...): when
+   patterns_out has a real named pattern, patterns_out["display"] = {name,
+   confidence_pct (rounded from the existing value*100), bias_text} is added;
+   otherwise patterns_out["display"] = None. Every existing key (pattern,
+   bias, category, value, upper_trendline, lower_trendline) is read, never
+   altered -- patterns.py itself was not opened for editing.
+
+2. webapp/js/charts/engine.js -- inside _drawEngineOverlays()'s existing
+   section 4 ("Pattern trendlines"), immediately after the two established
+   _drawPatternLine() calls: when pat.display is non-null, compute the
+   pattern's horizontal midpoint and draw two _lbl() calls (name + confidence
+   above, bias sentence below) at that point -- reusing the same on-chart
+   text primitive S/R, VP, and RSI-projection labels already use, not a new
+   labeling system. Both strings are printed verbatim from the API; nothing
+   is worded in JS.
+   SECOND-PASS FINDING, FIXED BEFORE SHIPPING: the first draft computed the
+   midpoint as (uEp.t1 + uEp.t2) / 2 directly. But Phase R1 (this same
+   build's earlier fix) made patterns.py's boundary lines extend ~25 bars
+   PAST the last real candle so the ray keeps drawing forward -- meaning
+   uEp.t2 is now genuinely a future timestamp, and using it unmodified would
+   drag the label away from the pattern's actual historical shape and toward
+   that future extrapolation. Found the exact same problem already solved
+   elsewhere in this codebase (drawing.js:2850/2910, the VP drawing tool):
+   capping the far endpoint at currentCandles' last real timestamp via
+   Math.min(). Applied the identical idiom here rather than inventing a new
+   one -- the label now sits within the pattern's visible historical body.
+
+3. webapp/index.html -- engine.js's ?v= bumped to 20260722-2 (single bump
+   covers both this phase's engine.js edits).
+
+Nothing else touched. patterns.py, _run_pattern_engine, ray_registry.py,
+chat.js, and every prior phase's code are untouched (confirmed below).
+
+BENEFIT: Kev sees the pattern's name, Dexter's confidence in it, and a plain-
+English read of whether it's likely to continue or reverse given the actual
+prior trend -- directly on the chart, without having to recall pattern theory
+himself or cross-reference the state engine's direction number by hand.
+No new detection logic, no directive language, no change to what Chev
+receives (this phase is chart-only, matching the build's global scope).
+
+SECOND-PASS REVIEW (Lead AI Quant Strategist / Senior Python Architect pass,
+re-reading the diff cold): traced everything touched directly (2 new
+functions, 1 route's additive display key, 1 JS label-drawing block, 1 ?v=
+bump) and indirectly:
+  - Grep-audited every consumer of /api/analysis/engine's response
+    (engine.js's two _apiFetch call sites, radar.js) -- radar.js stores the
+    raw response object wholesale with no key-by-key destructuring, so an
+    additive "display" key is inert there; engine.js's own consumer is the
+    code this phase wrote. No consumer does strict/closed-shape validation
+    that an added key could break.
+  - Confirmed pat.pattern / pat.upper_trendline / pat.lower_trendline (read
+    by the new code) are the exact same property names the pre-existing
+    _drawPatternLine() calls two lines above already use on the same `pat`
+    object -- not a guess.
+  - Confirmed dctx (used by the new _lbl() calls) is the same canvas context
+    variable already in scope and used by every other draw call in this same
+    _drawEngineOverlays() function.
+  - The midpoint/future-extrapolation issue above -- found, root-caused (R1's
+    ray extension), fixed with a proven existing idiom, re-verified via
+    node --check.
+  - patterns.py confirmed untouched: this phase reads patterns_out's
+    existing fields only, never edits patterns.py's fit/classification code.
+  - Offline-verified _pat_bias_text/_pat_prior_trend_bucket in a standalone
+    script (dexter.py cannot be imported -- no __main__ guard, live scan
+    loop at module level) reproducing Kev's own descending-triangle example
+    both directions (uptrend -> consolidation read, downtrend -> continuation
+    read) before trusting the in-file version.
+No other issues found. No test-authoring bugs this phase (no new Python
+self-tests were needed -- the two new functions are simple enough that the
+offline reproduction script plus the worked example served as sufficient
+proof, and dexter.py's existing self-tests don't cover Flask routes).
+
+VERIFICATION: `python -m py_compile dexter.py` -> exit 0. `node --check
+js/charts/engine.js` -> NODE_CHECK_OK (run twice: once right after the label
+code was added, again after the midpoint fix). `python derivs.py` -> 12/12
+PASS (unchanged). `python labeller.py` -> 32/32 PASS (unchanged -- this phase
+never touches labeller.py). `python ray_registry.py` -> 41/41 PASS
+(unchanged -- this phase never touches ray_registry.py). `python
+test_ray_break_alert.py` -> 15/15 PASS (unchanged). `python
+test_ray_extension.py` -> 7/7 PASS (unchanged). `python audit_context.py` ->
+exit 0, COMBINED TOTAL unchanged at 10,197 tokens (under 14k by 3,803 --
+this phase touches no prompt/token-budget code at all). Grep-confirmed both
+new dexter.py functions are defined exactly once each, and
+patterns_out["display"] is assigned exactly twice (the two branches of one
+if/else, both intentional). Grep-confirmed engine.js's pat.display,
+_lineValueAt, and the capped tMid line all appear exactly where expected.
+No dexter.py execution, bot never run.
+
+REMAINING UNCERTAIN / MANUAL VERIFICATION FOR KEV: this is a purely visual,
+eyeball-verified feature -- open the webapp, load a symbol/TF with an active
+named pattern on the PAT overlay, and confirm by eye that (a) the name +
+confidence label and the bias sentence both render legibly and don't overlap
+the candles or each other, (b) the label sits over the pattern's actual
+historical shape rather than drifting toward the extended ray's future end,
+and (c) the bias sentence's wording matches your own read of the setup for a
+few different pattern/prior-trend combinations. Font sizes (10px/8px) and the
+8px vertical offsets were chosen to match this file's existing label
+conventions but were never rendered in a live browser by me -- worth a look
+on a cluttered chart (many overlays on at once) to confirm no visual
+collision with S/R or VP labels sharing the same screen area.
+
+RESTART: REQUIRED (dexter.py changed).
+DEPLOY: YES (webapp/js/charts/engine.js and webapp/index.html changed --
+push_dashboard.py must be run to deploy; not run by me per the standing
+rule). RE-PASTE CHEV PROMPT: NO (this phase changes nothing Chev receives).
+
+================================================================================
 END OF HANDOFF
 ================================================================================

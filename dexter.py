@@ -2456,6 +2456,68 @@ def api_analysis_rsi_div():
         return jsonify({"symbol": symbol, "tf": tf, "divergences": _calc_for_tf(tf)})
 
 
+# ── Pattern bias text (Phase W2) — server-side only, feeds api_analysis_engine ──
+# Read first, used here: MarketState.direction (engines.py run_state_engine
+# ~905) is a continuous -100..+100 weighted-directional score over the recent
+# legs -- already computed for every /api/analysis/engine call as state_out
+# ["direction"]. This is a genuine prior-trend signal already present in the
+# payload; no new trend math was invented for this phase. The +-25 cutoff
+# below is not a new threshold either -- it is the exact same split engine.js
+# already uses to pick Dexter's own mood emoji off this same field
+# (runDexterEngine's fire.png/furious.png/lets-see.png branch, engine.js).
+def _pat_prior_trend_bucket(direction):
+    """direction: state_out["direction"] or None. Returns "up" / "down" / "range"."""
+    if direction is None:
+        return "range"
+    if direction > 25:
+        return "up"
+    if direction < -25:
+        return "down"
+    return "range"
+
+
+def _pat_bias_text(category, pattern_bias, prior_trend):
+    """
+    One short, descriptive (never directive -- no "buy"/"long"/"short") sentence
+    from pattern type + prior trend. `category` ("continuation"/"reversal"/
+    "neutral") and `pattern_bias` ("bullish"/"bearish"/"neutral") are patterns.py's
+    own fields (unchanged, read not re-derived) -- this only combines THOSE with
+    prior_trend; it never re-classifies the pattern itself.
+
+    Example this reproduces exactly: a descending triangle (category=
+    "continuation", bias="bearish") following an uptrend -> pattern_bias
+    ("bearish") opposes prior_trend ("up") -> "against the prior trend" branch
+    -> reads as consolidation. The same shape in a downtrend -> pattern_bias
+    matches prior_trend -> "aligned" branch -> continuation-bearish.
+    """
+    if pattern_bias not in ("bullish", "bearish"):
+        return "No clear directional lean yet — still forming."
+
+    direction_word   = "upward" if pattern_bias == "bullish" else "downward"
+    matches_bias     = (pattern_bias == "bullish" and prior_trend == "up") or \
+                        (pattern_bias == "bearish" and prior_trend == "down")
+    opposes_bias      = (pattern_bias == "bullish" and prior_trend == "down") or \
+                        (pattern_bias == "bearish" and prior_trend == "up")
+
+    if category == "continuation":
+        if matches_bias:
+            return f"Aligned with the prior trend — often resolves {direction_word}, continuing it."
+        if opposes_bias:
+            return "Against the prior trend — often reads as consolidation rather than a clean continuation."
+        return "No strong prior trend — typically just consolidation here."
+
+    if category == "reversal":
+        if opposes_bias:
+            return f"Follows a prior trend running the other way — a classic setup for a {pattern_bias} reversal."
+        if matches_bias:
+            return "Prior trend already runs the same direction as this pattern's own bias — reads more as continuation than reversal."
+        return "No clear prior trend to reverse — a tentative signal."
+
+    # category == "neutral" (wedges): structurally directional but historically
+    # resolve either way regardless of prior-trend context.
+    return f"Structurally {pattern_bias}, but this shape can resolve either way — a lean, not a signal."
+
+
 @flask_app.route("/api/analysis/engine")
 def api_analysis_engine():
     """Full Dexter engine survey — feeds the ENGINE tab overlays in the webapp."""
@@ -2573,6 +2635,22 @@ def api_analysis_engine():
                             "breakout": False, "volume_confirmed": False,
                             "volume_notes": [], "all_patterns": [],
                             "upper_trendline": None, "lower_trendline": None}
+
+        # Phase W2 -- additive display object, computed here (NOT in patterns.py,
+        # which stays untouched). Existing keys (pattern/bias/category/value)
+        # are read, never altered. None when there's no named pattern, mirroring
+        # this route's own convention for the other *_out variables above.
+        if patterns_out.get("pattern") and patterns_out["pattern"] != "None":
+            _pat_prior_trend = _pat_prior_trend_bucket((state_out or {}).get("direction"))
+            patterns_out["display"] = {
+                "name": patterns_out["pattern"],
+                "confidence_pct": round(patterns_out.get("value", 0.0) * 100),
+                "bias_text": _pat_bias_text(patterns_out.get("category", "neutral"),
+                                            patterns_out.get("bias", "neutral"),
+                                            _pat_prior_trend),
+            }
+        else:
+            patterns_out["display"] = None
 
         return jsonify({
             "symbol": symbol, "tf": tf,
