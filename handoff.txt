@@ -10152,5 +10152,148 @@ RESTART: REQUIRED (patterns.py changed, imported by dexter.py).
 DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
 
 ================================================================================
+*** PHASE R2 — RAY REGISTRY (PURE MODULE, NO WIRING) — 2026-07-14 —
+RESTART: NO (new module, nothing imports it yet), DEPLOY: NO,
+RE-PASTE CHEV PROMPT: NO ***
+================================================================================
+
+CONTEXT: patterns.py refits trendlines from scratch every scan (last-3-pivot
+OLS) with no memory that "this specific line has been respected N times over
+its life." This phase builds that memory as a standalone module, modeled on
+derivs.py (constants at top with WHY comments, pure logic functions, offline
+self-test under __main__). Nothing imports it yet — wiring is Phase R3+.
+The trendline fit math, the horizontal S/R system, and SCAN_WEIGHTS/
+WEIGHT_LAB_VERIFIED_TAGS were all read but not touched, per this build's
+hard rules.
+
+WHAT CHANGED AND WHY: new file ray_registry.py (C:\ChevTools\). Implements,
+exactly per the phase design and no more:
+- RayRecord dataclass with the listed fields (id, symbol, timeframe, side,
+  slope_raw/norm, anchor_ts, value_at_anchor, born_ts, last_seen_ts,
+  lifetime_span_bars, respect_count, wick_rejection_count, state,
+  last_break_ts, alerted_trade_ids) PLUS four internal bookkeeping fields
+  not in the phase's listed set (touch_open, pending_break, first_touch_ts,
+  last_touch_ts) — added because update_touches/update_break_state must
+  persist state across separate calls (a touch or a pending break can span
+  a call boundary) and the listed field set had nowhere to put it. Flagged
+  clearly in the dataclass's own comment for whoever wires this in R3.
+- reconcile(): the identity function. Same-line test is normalized-slope
+  delta <= SLOPE_MATCH_TOL AND the EXISTING ray's own value projected
+  forward to the new current bar within VALUE_MATCH_TOL_ATR x ATR of the
+  new fit's value at that bar. Re-anchors to (current_bar_ts,
+  value_at_current_bar) on every call (match or mint) rather than adopting
+  patterns.py's own intercept convention — sidesteps the "intercept means a
+  different bar index every refit" trap entirely, since this module never
+  reads patterns.py's raw intercept, only slope + a value-at-a-known-time
+  pair it defines itself. Retires LIVE rays idle >= RAY_STALE_BARS (own
+  timeframe's bar count) BEFORE attempting a match. A non-match does NOT
+  evict the old ray — it stays LIVE, a new one is minted alongside it; the
+  >2-per-side cap is enforced later, at select_live() (render time), not
+  here — the registry can remember more than it shows. NOTE: the phase's
+  listed signature didn't include a registry argument; added one as an
+  explicit parameter (matching derivs.py's style of explicit inputs over
+  hidden module state) since reconcile() has nothing to reconcile against
+  without it. Every decision (MATCHED/MINTED/RETIRED, with the numbers that
+  drove it) is appended as one JSON line to ray_identity_log.jsonl.
+- update_touches(): touch opens within TOUCH_TOL_ATR, stays open across
+  hugging bars (counts once), closes on release (>= TOUCH_RELEASE_ATR away)
+  or on a wick-through-and-reject (closes AND increments
+  wick_rejection_count — a trap counts as evidence FOR the line). See
+  SECOND-PASS REVIEW below for a same-bar edge case considered and
+  deliberately NOT changed.
+- update_break_state(): replicates patterns.py's _atr_breakout_pct formula
+  (patterns.py ~line 59-68) rather than importing it, to keep this module
+  standalone — same tradeoff labeller.py already accepts for its own local
+  COST_R_CAP copy. BROKEN requires two CONSECUTIVE qualifying closes; one
+  alone sets a persisted pending_break flag and leaves the ray LIVE; a
+  non-qualifying follow-up resets the flag (a reclaim does not resurrect a
+  BROKEN id — a later matching fit mints a fresh line with fresh tallies,
+  per the phase's explicit instruction).
+- horizon_bars(): direction always comes from the current local fit
+  (untouched, lives in patterns.py); only REACH is earned by lifetime —
+  lifetime_span_bars x 1/3, capped at 40 bars, floored at 5.
+- time_to_cross(): pure, direction-aware (levels behind the ray's path are
+  excluded), filtered to horizon_bars(). Takes a flat (price, label) list
+  supplied by the caller — this function computes nothing about what those
+  levels are, so adding a future static tool means only appending to that
+  list, no change here.
+- select_live(): per (symbol, timeframe, side) group, keeps at most
+  MAX_LIVE_PER_SIDE=2 LIVE rays ranked by respect_count (r² tiebreak
+  supplied by caller). A candidate is dropped as a near-duplicate only if
+  BOTH its value is within DISTINCT_MIN_ATR x ATR of an already-kept ray's
+  AND its slope is within SLOPE_MATCH_TOL — otherwise a distinct ray is
+  kept even if a higher-ranked duplicate had to be dropped to make room for
+  it. NOTE: extended beyond the phase's one-argument select_live(rays)
+  signature to also take current_bar_ts and atr_by_key, since the
+  described distinctness/ranking behavior is not computable without them.
+- load_registry()/save_registry(): atomic write (temp file + os.replace),
+  same crash-safe pattern as dexter.py's _atomic_write_json (dexter.py
+  ~line 844), replicated rather than imported to keep this module
+  standalone. Missing/corrupt file -> empty registry, warning printed,
+  never raises.
+
+SECOND-PASS REVIEW (Lead AI Quant Strategist / Senior Python Architect pass,
+re-reading the diff cold): the one real finding was in update_touches(). A
+candidate improvement was drafted to also recognize a wick-through-and-
+reject within a SINGLE bar (no prior bar having opened the touch) — e.g. a
+one-candle stop-hunt spike that pierces the ray and snaps back. That draft
+was rejected after tracing it through: without requiring a PRIOR bar to have
+already registered "within tolerance," the same-bar check ("extreme beyond
+tolerance on the wrong side, close on the correct side") would also fire on
+any ordinary bar that has nothing to do with the ray at all — e.g. price
+trading in a completely different range that scan, whose low happens to sit
+far past the line while its unrelated close happens to land on the "correct"
+side. That's a false positive, not a trap. The shipped version deliberately
+requires touch_open to already be True (i.e., a previous bar was observed
+within TOUCH_TOL_ATR) before a wick-through-and-reject can be recognized —
+this means a genuine single-candle spike-and-reject with NO prior in-
+tolerance bar is not currently counted. Traced every consumer this module
+could affect: none, since it is not imported anywhere (confirmed by repo-
+wide grep) — this review was entirely about correctness of the module's own
+internal logic and forward-compatibility for R3's wiring, not about any
+live blast radius. No fix applied because the SHIPPED code was already the
+safe version; the flawed variant was never committed to the file.
+
+VERIFICATION: `python -m py_compile ray_registry.py` -> exit 0. New self-
+test `python -X utf8 ray_registry.py` -> 21/21 PASS, covering: identity
+match vs mint at both tolerance boundaries; a non-matching scan does NOT
+evict the old ray; retire-on-stale (99 bars idle = not yet, 100 = retired);
+hugging for 5 bars then releasing = exactly one respected touch; wick-
+through-snap-back increments both respect_count and wick_rejection_count;
+two-close break confirmation (one qualifying close alone stays LIVE with a
+pending flag; a non-qualifying follow-up resets it; two CONSECUTIVE
+qualifying closes -> BROKEN); horizon floor/growth/cap across a young, mid-
+life, and old ray; time_to_cross excludes a level behind the ray's path and
+one beyond its horizon, keeps the one within it; select_live drops a near-
+duplicate ray in favor of keeping a lower-ranked-but-distinct one;
+persistence round-trip; corrupt-file and missing-file recovery (both ->
+empty registry, no exception). Existing self-tests re-run for regression
+(expected unaffected, verified anyway per the floor): `python -X utf8
+derivs.py` -> 12/12 PASS, `python labeller.py` -> 26/26 PASS, both unchanged.
+Grep-confirmed zero imports of ray_registry anywhere in the repo. Confirmed
+by design that running the self-test never touches the real
+C:\ChevTools\ray_registry.json / ray_identity_log.jsonl production paths —
+every test I/O path is redirected to a temp directory. No dexter.py
+execution, bot never run.
+
+REMAINING UNCERTAIN / FOR R3 TO DECIDE: (1) thread-safety — save_registry/
+load_registry have no lock, unlike dexter.py's _lock around its own JSON
+saves; a non-issue while nothing calls this module, but R3 must add locking
+if reconcile()/save_registry() end up called from more than one thread
+(Dexter's BOS-alert path already fires background threads) — deliberately
+not designed here since the call pattern doesn't exist yet. (2) the same-
+bar wick-reject gap documented above — worth watching in the real
+ray_identity_log.jsonl once wired, to see how often a genuine single-candle
+spike-and-reject gets missed in practice before deciding whether a safer,
+range-aware version of that check is worth building. (3) reconcile()'s and
+select_live()'s signatures both grew beyond the phase's literal one-line
+form (a registry arg; current_bar_ts + atr_by_key) — necessary for the
+described behavior, documented in-code and here, but worth double-checking
+against whatever R3 was already planning to pass in.
+
+RESTART: NO (new module, nothing imports it yet). DEPLOY: NO.
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
 END OF HANDOFF
 ================================================================================
