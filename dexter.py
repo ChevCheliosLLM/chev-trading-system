@@ -2628,6 +2628,12 @@ def api_rays():
 
         selected = ray_registry.select_live(all_rays, current_bar_ts, atr_by_key={(symbol, tf): atr})
         selected = [r for r in selected if r.symbol == symbol and r.timeframe == tf]
+        # Phase R6: select_live() only DEMOTES non-narratable (flat/pierced) rays in
+        # ranking, it doesn't exclude them -- one could still fill a slot with no
+        # narratable candidate available. The chart must not show a ray as if it
+        # were narrated when Chev never received a reason about it -- same gate
+        # applied to scan_pair_tf's reason emission and format_ray_block_for_chev.
+        selected = [r for r in selected if ray_registry.is_narratable(r)]
 
         tf_seconds = ray_registry._TF_SECONDS.get(tf, ray_registry._TF_SECONDS["1h"])
         # "One scan cycle" for staleness wording mirrors the scan side's own
@@ -9705,6 +9711,16 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                         if _ray_bars:
                             ray_registry.update_touches(_ray_obj, _ray_bars, _ray_atr)
                             ray_registry.update_break_state(_ray_obj, _ray_bars, _ray_atr)
+                            # Phase R6: boundary purity gate. A parallel pure step, not
+                            # merged into update_touches -- same "walk the same small bar
+                            # slice via independent functions" pattern already used above
+                            # for touches vs break-state. count_boundary_pierces() takes a
+                            # projection callable rather than the ray itself and mutates
+                            # nothing, so the increment happens here, the one place that
+                            # already holds the ray reference.
+                            _ray_obj.pierce_count += ray_registry.count_boundary_pierces(
+                                _ray_bars, lambda ts: ray_registry._project_value(_ray_obj, ts),
+                                _ray_obj.side, _ray_atr)
 
                     ray_registry.save_registry(_ray_reg)
 
@@ -9726,6 +9742,12 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
 
                 for _ray_obj in _ray_selected:
                     if _ray_obj.symbol != symbol or _ray_obj.timeframe != primary_tf:
+                        continue
+                    # Phase R6 boundary purity gate: NARRATION only. Identity, touches,
+                    # break-state, and (Phase R5) break alerts all continue for a gated
+                    # ray regardless -- only "Ray respected"/"Ray confluence ahead"
+                    # reason emission is skipped here.
+                    if not ray_registry.is_narratable(_ray_obj):
                         continue
                     _side_word  = "resistance" if _ray_obj.side == "upper" else "support"
                     _dir_word   = "bearish" if _ray_obj.side == "upper" else "bullish"

@@ -93,6 +93,31 @@ RAY_STALE_BARS = 100
 # retired. Bar-count, not wall-clock hours, so a 15m ray and a 4h ray aren't
 # held to the same clock.
 
+# ── Boundary purity gate (Phase R6) ──────────────────────────────────────────
+# Adapted from the client-side TL validator in webapp/js/ui/chat.js
+# (_computeTrendlines) -- ports its pierce test and trending filter as a
+# NARRATION gate, not a tracking gate: a gated ray is still fully tracked
+# (identity, touches, break state, break ALERTS) -- it is only excluded from
+# reason emission, format_ray_block_for_chev, and demoted (not excluded) in
+# select_live. See is_narratable() below.
+
+PIERCE_TOL_ATR = 0.6
+# Matches chat.js's own default tolerance (`opts.tolAtr || 0.6`, chat.js
+# ~587) -- the two systems agree on what "pierced" means, even though what
+# they measure differs (see count_boundary_pierces()'s docstring).
+
+PIERCE_MAX = 0
+# Any confirmed pierce disqualifies narration. A constant, not a hardcoded
+# literal at the call site, specifically so a future loosening is a
+# deliberate, visible edit here -- not a silent drift.
+
+TRENDING_MIN_SLOPE_NORM = 0.15
+# Same threshold as _run_pattern_engine's flat_thr = atr * 0.15 (dexter.py
+# ~8514) -- slope_norm is already expressed in ATR-per-bar, the same units
+# that threshold uses, so this is the identical bar for "is this line
+# actually trending" as the pattern engine's own flat/rising/falling split.
+# Cited here so the two never drift apart silently.
+
 # ── Breakout threshold (replicated, not imported) ───────────────────────────
 # Same formula as patterns.py's _atr_breakout_pct (patterns.py ~line 59-68):
 # dynamic = 0.5 * ATR / price, clamped to [0.5%, 2.5%]. Replicated here rather
@@ -130,6 +155,7 @@ class RayRecord:
     lifetime_span_bars: float = 0.0
     respect_count: int = 0
     wick_rejection_count: int = 0
+    pierce_count: int = 0     # Phase R6 -- boundary purity gate, see is_narratable()
     state: str = "LIVE"       # "LIVE" / "BROKEN" / "RETIRED"
     last_break_ts: Optional[int] = None
     alerted_trade_ids: List[str] = field(default_factory=list)
@@ -197,7 +223,8 @@ def _retire_stale(rays_for_key: List[RayRecord], current_bar_ts: int) -> List[di
             ray.state = "RETIRED"
             logs.append({"decision": "RETIRED", "id": ray.id, "symbol": ray.symbol,
                           "timeframe": ray.timeframe, "side": ray.side,
-                          "bars_idle": round(bars_idle, 2)})
+                          "bars_idle": round(bars_idle, 2),
+                          "pierce_count": ray.pierce_count, "narratable": is_narratable(ray)})
     return logs
 
 
@@ -233,7 +260,8 @@ def reconcile(registry: Dict[str, List[RayRecord]], symbol: str, timeframe: str,
         matched.last_seen_ts = current_bar_ts
         result = matched
         log_lines.append({"decision": "MATCHED", "id": matched.id, "symbol": symbol,
-                           "timeframe": timeframe, "side": side, **info})
+                           "timeframe": timeframe, "side": side, **info,
+                           "pierce_count": matched.pierce_count, "narratable": is_narratable(matched)})
     else:
         new_ray = RayRecord(
             id=str(uuid.uuid4()), symbol=symbol, timeframe=timeframe, side=side,
@@ -246,7 +274,8 @@ def reconcile(registry: Dict[str, List[RayRecord]], symbol: str, timeframe: str,
         log_lines.append({"decision": "MINTED", "id": new_ray.id, "symbol": symbol,
                            "timeframe": timeframe, "side": side,
                            "slope_norm": round(slope_norm, 6),
-                           "value_at_current_bar": round(value_at_current_bar, 6)})
+                           "value_at_current_bar": round(value_at_current_bar, 6),
+                           "pierce_count": new_ray.pierce_count, "narratable": is_narratable(new_ray)})
 
     try:
         with open(log_path, "a", encoding="utf-8") as f:
@@ -362,6 +391,66 @@ def update_break_state(ray: RayRecord, recent_bars: List[dict], atr: float) -> R
     return ray
 
 
+# ── Boundary purity gate (Phase R6) ──────────────────────────────────────────
+
+def count_boundary_pierces(bars: List[dict], ray_value_at, side: str, atr: float) -> int:
+    """
+    Pure. Adapted from the client-side TL validator in webapp/js/ui/chat.js
+    (_computeTrendlines) -- its pierce test rejects a candidate line if any
+    HIGH/LOW between the anchors crosses beyond an ATR-scaled tolerance
+    (chat.js ~621-627). This ports the same idea with one deliberate
+    divergence: it counts CLOSES, not wicks. A wick beyond the line is
+    already trap evidence FOR the line elsewhere in this module (update_
+    touches' wick_rejection_count) -- counting the same wick again here as a
+    strike against the line would directly contradict that. Only a bar whose
+    CLOSE actually landed beyond the line on the wrong side, by more than
+    PIERCE_TOL_ATR x ATR, counts as a pierce.
+
+    `bars` is the SAME incremental "bars since last scan" slice the caller
+    already passes to update_touches/update_break_state -- this function
+    does not re-walk the ray's whole lifetime; the caller accumulates
+    ray.pierce_count += count_boundary_pierces(...) once per scan, same
+    incremental pattern as every other per-scan tally in this module.
+
+    `ray_value_at` is a callable(ts) -> float (the caller's own projection,
+    e.g. lambda ts: _project_value(ray, ts)) rather than a RayRecord -- this
+    function never touches a ray directly and has nothing to mutate; the
+    caller owns accumulating the returned count.
+    """
+    tol = PIERCE_TOL_ATR * atr
+    count = 0
+    for bar in bars:
+        line_value = ray_value_at(bar["ts"])
+        if side == "upper":
+            if bar["close"] > line_value + tol:
+                count += 1
+        else:
+            if bar["close"] < line_value - tol:
+                count += 1
+    return count
+
+
+def is_narratable(ray: RayRecord) -> bool:
+    """
+    Pure. A ray qualifies for narration (reason emission, format_ray_block_
+    for_chev, top ranking in select_live) only if it has never closed beyond
+    its own line (pierce_count <= PIERCE_MAX), is actually trending rather
+    than flat (|slope_norm| >= TRENDING_MIN_SLOPE_NORM -- flat lines belong
+    to the horizontal S/R system, not here), and is currently LIVE.
+
+    This is a NARRATION gate only. A gated ray keeps everything else this
+    module already does for it -- identity, touch tallies, break-state,
+    and (Phase R5) break alerts -- untouched. A flat or pierced ray breaking
+    during an open trade is still tradeable information and must still
+    alert; R5's select_break_alert_candidate() does not call this function
+    (verified by reading it -- it gates only on state == "BROKEN" and the
+    caller's own already-alerted set).
+    """
+    return (ray.pierce_count <= PIERCE_MAX
+            and abs(ray.slope_norm) >= TRENDING_MIN_SLOPE_NORM
+            and ray.state == "LIVE")
+
+
 # ── Horizon / future-crossing ─────────────────────────────────────────────────
 
 def horizon_bars(ray: RayRecord) -> float:
@@ -415,7 +504,14 @@ def select_live(rays: List[RayRecord], current_bar_ts: int,
     for key, group in groups.items():
         symbol, timeframe, _side = key.split("|")
         atr = atr_by_key.get((symbol, timeframe), 0.0)
-        ranked = sorted(group, key=lambda r: (r.respect_count, r_squared_by_id.get(r.id, 0.0)),
+        # Phase R6: narratable rays rank strictly above non-narratable ones
+        # (is_narratable() sorts as True > False), existing respect-count/
+        # r-squared ordering preserved within each group -- a gated ray can
+        # still fill a remaining slot if there aren't enough narratable ones,
+        # it's demoted, never excluded (identity/touches/breaks are
+        # untouched by this gate regardless of rank).
+        ranked = sorted(group, key=lambda r: (is_narratable(r), r.respect_count,
+                                              r_squared_by_id.get(r.id, 0.0)),
                          reverse=True)
         kept: List[RayRecord] = []
         for cand in ranked:
@@ -460,11 +556,18 @@ def format_ray_block_for_chev(rays: List[RayRecord], current_price: float,
     takes; omit it (checkpoint caller) to skip the crossing line entirely.
     Returns "" when `rays` is empty -- nothing at all, not a "none found" line.
 
+    Phase R6: non-narratable rays (flat or pierced, see is_narratable())
+    render nothing. select_live() only DEMOTES them, it doesn't exclude them
+    -- a gated ray can still be present in `rays` (e.g. filling a slot with
+    no narratable candidate available), so this function filters again as
+    its own safety net rather than trusting the caller already did.
+
     No ATR parameter: every value this renders (slope_norm, slope_raw,
     horizon_bars, time_to_cross) is already ATR-normalized on the RayRecord
     itself at reconcile() time by the caller -- there is nothing left here
     that needs a fresh ATR.
     """
+    rays = [r for r in rays if is_narratable(r)]
     if not rays:
         return ""
 
@@ -805,18 +908,21 @@ if __name__ == "__main__":
     check("12a: empty rays list -> empty string (nothing at all, not 'none found')",
           format_ray_block_for_chev([], current_price=100.0, timeframe="1h") == "")
 
+    # Phase R6: slopes must clear TRENDING_MIN_SLOPE_NORM (0.15 abs) to be
+    # narratable at all, and stay within SLOPE_MATCH_TOL (0.15) of each other
+    # for the channel line to render -- -0.2 and -0.15 satisfy both.
     _fmt_upper = RayRecord(id="fu", symbol="BTCUSDT", timeframe="15m", side="upper",
-                           slope_raw=-0.5, slope_norm=-0.05, anchor_ts=T0, value_at_anchor=61500.0,
+                           slope_raw=-2.0, slope_norm=-0.2, anchor_ts=T0, value_at_anchor=61500.0,
                            born_ts=T0, last_seen_ts=T0, respect_count=4, wick_rejection_count=1,
                            lifetime_span_bars=44)
     _fmt_lower = RayRecord(id="fl", symbol="BTCUSDT", timeframe="15m", side="lower",
-                           slope_raw=0.4, slope_norm=0.04, anchor_ts=T0, value_at_anchor=61200.0,
+                           slope_raw=-1.5, slope_norm=-0.15, anchor_ts=T0, value_at_anchor=61200.0,
                            born_ts=T0, last_seen_ts=T0, respect_count=3, wick_rejection_count=2,
                            lifetime_span_bars=40)
     # Levels chosen to be within EACH ray's own horizon and ahead of its path,
     # so both crossing lines actually render -- the true worst case (2 rays +
     # channel + 2 crossings), not an accidental best case.
-    _fmt_levels = [(61495.0, "Fib 61.8% (golden pocket)"), (61203.2, "VP POC 4h")]
+    _fmt_levels = [(61480.0, "Fib 61.8% (golden pocket)"), (61188.0, "VP POC 4h")]
     _worst_case_block = format_ray_block_for_chev(
         [_fmt_upper, _fmt_lower], current_price=61350.0,
         timeframe="15m", levels=_fmt_levels)
@@ -843,6 +949,105 @@ if __name__ == "__main__":
     _lower_block = _worst_case_block.lower()
     check("12f: fact-framing -- no banned suggestion/requirement/bias language",
           not any(p in _lower_block for p in _banned_phrases))
+
+    # ── 13. Boundary purity gate (Phase R6) ──────────────────────────────────
+    # A trending ray (slope_norm=0.2 >= TRENDING_MIN_SLOPE_NORM) used as the
+    # base case for pierce-specific checks, so flatness never confounds them.
+    _r6_atr = 10.0
+
+    def _fresh_trending_ray(**overrides):
+        base = dict(id="r6", symbol="X", timeframe="1h", side="lower",
+                    slope_raw=2.0, slope_norm=0.2, anchor_ts=T0, value_at_anchor=100.0,
+                    born_ts=T0, last_seen_ts=T0)
+        base.update(overrides)
+        return RayRecord(**base)
+
+    # 13a: mid-span close-through beyond tol -> pierce counted, ray non-narratable.
+    _r6_pierce_ray = _fresh_trending_ray()
+    _r6_line_at_T0 = _project_value(_r6_pierce_ray, T0)  # == 100.0
+    _r6_pierce_bar = [{"ts": T0, "high": 101.0, "low": 92.0,
+                        "close": _r6_line_at_T0 - PIERCE_TOL_ATR * _r6_atr - 1.0}]  # closed through
+    _r6_pierces = count_boundary_pierces(
+        _r6_pierce_bar, lambda ts: _project_value(_r6_pierce_ray, ts), "lower", _r6_atr)
+    check("13a: mid-span close beyond tolerance counts as exactly one pierce",
+          _r6_pierces == 1)
+    _r6_pierce_ray.pierce_count += _r6_pierces
+    check("13a-narratable: a pierced ray is not narratable", not is_narratable(_r6_pierce_ray))
+
+    # 13b: wick-through (trap) in the SAME scan -> zero pierces, wick_rejection
+    # still increments -- the two walks must not double-count or interfere.
+    # Flat (slope_raw=0) so the line's value doesn't drift between the two
+    # bars -- this test is about the touch/pierce interaction, not narratability.
+    _r6_wick_ray = _fresh_trending_ray(id="r6w", slope_raw=0.0, slope_norm=0.0)
+    _r6_wick_bars = [
+        {"ts": T0,        "high": 101.0, "low": 100.1,  "close": 100.5},  # opens touch (within TOUCH_TOL_ATR)
+        {"ts": T0 + 3600, "high": 101.0, "low": 92.0,   "close": 100.2},  # deep low-wick, close on correct side
+    ]
+    update_touches(_r6_wick_ray, _r6_wick_bars, _r6_atr)
+    _r6_wick_pierces = count_boundary_pierces(
+        _r6_wick_bars, lambda ts: _project_value(_r6_wick_ray, ts), "lower", _r6_atr)
+    check("13b: wick-through-and-reject registers zero pierces",
+          _r6_wick_pierces == 0)
+    check("13b-wick: the same bars still increment wick_rejection_count via update_touches",
+          _r6_wick_ray.wick_rejection_count == 1 and _r6_wick_ray.respect_count == 1)
+
+    # 13c: flat ray (|slope_norm| < 0.15) -> tracked, touch-tallied, non-narratable.
+    _r6_flat_ray = _fresh_trending_ray(id="r6f", slope_raw=0.0, slope_norm=0.05)
+    _r6_flat_bars = [
+        {"ts": T0,        "high": 101.0, "low": 100.1, "close": 100.5},   # opens touch
+        {"ts": T0 + 3600, "high": 108.0, "low": 106.0, "close": 107.0},   # releases far away
+    ]
+    update_touches(_r6_flat_ray, _r6_flat_bars, _r6_atr)
+    check("13c: flat ray still accumulates a respected touch",
+          _r6_flat_ray.respect_count == 1)
+    check("13c-narratable: a flat ray (pierce_count=0) is still not narratable",
+          _r6_flat_ray.pierce_count == 0 and not is_narratable(_r6_flat_ray))
+
+    # 13d: boundary values, exactly at each threshold.
+    _r6_boundary_ray = _fresh_trending_ray(id="r6b")
+    _exact_tol_bar   = [{"ts": T0, "high": 101.0, "low": 92.0,
+                          "close": 100.0 - PIERCE_TOL_ATR * _r6_atr}]        # exactly at tol -> not a pierce
+    _just_over_bar   = [{"ts": T0, "high": 101.0, "low": 92.0,
+                          "close": 100.0 - PIERCE_TOL_ATR * _r6_atr - 0.001}]  # just beyond -> a pierce
+    check("13d: a close exactly AT the tolerance boundary is not a pierce",
+          count_boundary_pierces(_exact_tol_bar, lambda ts: _project_value(_r6_boundary_ray, ts),
+                                  "lower", _r6_atr) == 0)
+    check("13d: a close just beyond the tolerance boundary IS a pierce",
+          count_boundary_pierces(_just_over_bar, lambda ts: _project_value(_r6_boundary_ray, ts),
+                                  "lower", _r6_atr) == 1)
+    _r6_exact_slope_ray = _fresh_trending_ray(id="r6s", slope_norm=TRENDING_MIN_SLOPE_NORM)
+    _r6_below_slope_ray = _fresh_trending_ray(id="r6s2", slope_norm=TRENDING_MIN_SLOPE_NORM - 0.001)
+    check("13d: slope_norm exactly AT the trending threshold IS narratable",
+          is_narratable(_r6_exact_slope_ray))
+    check("13d: slope_norm just below the trending threshold is NOT narratable",
+          not is_narratable(_r6_below_slope_ray))
+
+    # 13e: a pre-R6 JSON record (no "pierce_count" key at all) loads with 0 --
+    # dataclass default, not a load_registry() special case.
+    _r6_legacy_path = os.path.join(_tmp_dir, "pre_r6_registry.json")
+    _r6_legacy_dict = {"id": "legacy1", "symbol": "X", "timeframe": "1h", "side": "upper",
+                        "slope_raw": -1.0, "slope_norm": -0.2, "anchor_ts": T0,
+                        "value_at_anchor": 50.0, "born_ts": T0, "last_seen_ts": T0}
+    with open(_r6_legacy_path, "w", encoding="utf-8") as f:
+        json.dump({_key("X", "1h", "upper"): [_r6_legacy_dict]}, f)
+    _r6_legacy_loaded = load_registry(_r6_legacy_path)
+    _r6_legacy_ray = _r6_legacy_loaded[_key("X", "1h", "upper")][0]
+    check("13e: pre-R6 JSON record (no pierce_count key) loads with pierce_count=0",
+          _r6_legacy_ray.pierce_count == 0)
+
+    # 13f: select_live demotion -- narratable ranks above non-narratable even
+    # with a LOWER respect_count (existing ordering only applies within a group).
+    _r6_narratable  = _fresh_trending_ray(id="r6n",  value_at_anchor=100.0, respect_count=1)
+    _r6_gated       = _fresh_trending_ray(id="r6g",  value_at_anchor=130.0, respect_count=9,
+                                          slope_norm=0.05)  # flat -> gated despite far higher respect_count
+    _r6_selected = select_live([_r6_narratable, _r6_gated], current_bar_ts=T0,
+                               atr_by_key={("X", "1h"): _r6_atr})
+    check("13f: select_live ranks the narratable ray first despite a lower respect_count",
+          [r.id for r in _r6_selected] == ["r6n", "r6g"])
+
+    # 13g: formatter renders nothing for a non-narratable ray.
+    check("13g: format_ray_block_for_chev renders empty for a non-narratable ray",
+          format_ray_block_for_chev([_r6_gated], current_price=100.0, timeframe="1h") == "")
 
     failed = [n for n, ok in T if not ok]
     print(f"\n{len(T) - len(failed)}/{len(T)} tests passing")

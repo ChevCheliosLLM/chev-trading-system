@@ -11037,5 +11037,186 @@ RESTART: REQUIRED (dexter.py route added). DEPLOY: YES — frontend changes
 here, per the hard rule against self-deploying. RE-PASTE CHEV PROMPT: NO.
 
 ================================================================================
+*** PHASE R6 — BOUNDARY PURITY GATE (ADAPTED FROM PARTNER'S chat.js
+VALIDATION) — 2026-07-14 — RESTART: YES (dexter.py touched at the wiring
+point), DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ***
+================================================================================
+
+CONTEXT: the client-side TL tool (chat.js, _computeTrendlines) already has
+two validation ideas the ray registry lacked: a PIERCE TEST (reject a line
+price closed beyond) and a TRENDING FILTER (reject near-flat lines -- those
+belong to horizontal S/R). This phase ports both into ray_registry.py as a
+NARRATION gate, not a tracking gate: a gated ray keeps its identity, touch
+tallies, and break state exactly as before, and (critically) still fires
+Phase R5's break alert -- it is only excluded from reason emission, from
+format_ray_block_for_chev, and demoted (not excluded) in select_live.
+
+WHAT CHANGED AND WHY:
+
+1. ray_registry.py -- three new constants: PIERCE_TOL_ATR=0.6 (matches
+   chat.js's own default tolerance, `opts.tolAtr || 0.6`, chat.js ~587);
+   PIERCE_MAX=0 (any confirmed pierce disqualifies narration -- a constant
+   specifically so loosening it later is a deliberate, visible edit, not
+   drift); TRENDING_MIN_SLOPE_NORM=0.15 (identical bar to _run_pattern_
+   engine's flat_thr = atr * 0.15, dexter.py ~8514 -- slope_norm is already
+   ATR-per-bar, the same units that threshold uses, cited so the two never
+   drift apart silently). New RayRecord field pierce_count (int, default 0
+   -- a pre-R6 JSON record missing this key loads as 0 via the dataclass
+   default, no special-case load_registry() code needed; proved with a test
+   against a hand-built pre-R6-shaped JSON record, not just assumed).
+   New count_boundary_pierces(bars, ray_value_at, side, atr): pure, counts
+   bars whose CLOSE lands beyond the line by more than PIERCE_TOL_ATR x ATR
+   on the wrong side. Deliberately diverges from chat.js, which tests highs/
+   lows (wicks): a wick beyond the line is already trap evidence FOR the
+   line via update_touches' wick_rejection_count -- counting the same wick
+   again here as a strike against the line would directly contradict that.
+   Takes a projection CALLABLE rather than a RayRecord (matching the design
+   spec's exact signature) so it has nothing to mutate; the caller
+   accumulates ray.pierce_count += count_boundary_pierces(...) itself.
+   New is_narratable(ray): pierce_count <= PIERCE_MAX AND |slope_norm| >=
+   TRENDING_MIN_SLOPE_NORM AND state == "LIVE".
+   PLACEMENT DECISION (read update_touches first, as instructed): pierce-
+   counting is a PARALLEL pure step, not merged into update_touches's
+   internals. Reason: update_touches already mutates the ray directly (a
+   touch-open/close state machine); count_boundary_pierces is pure by design
+   (no ray reference at all) and simply returns a count for the SAME
+   incremental "bars since last scan" slice update_touches/update_break_
+   state already receive -- this is the exact same "walk the same small bar
+   list via independent functions, once each" pattern already established
+   in this module (update_touches and update_break_state already do this;
+   this is a third parallel walk, not a new idea). Does NOT re-walk the
+   ray's whole lifetime -- it only ever sees the same incremental bars the
+   other two functions see, accumulating incrementally scan over scan.
+   format_ray_block_for_chev now filters its input to is_narratable rays
+   before rendering anything (a safety net, not trusting the caller already
+   filtered -- select_live only demotes, doesn't exclude, so a gated ray can
+   still arrive here). select_live's sort key gained is_narratable as the
+   PRIMARY key (narratable sorts as True > False), existing respect_count/
+   r-squared ordering preserved as secondary/tertiary keys within each
+   narratable-or-not group -- a gated ray can still fill a remaining slot if
+   there's no narratable candidate, demoted, never excluded. reconcile()'s
+   MATCHED/MINTED log lines and _retire_stale()'s RETIRED log line each
+   gained pierce_count and narratable fields for observability.
+
+2. dexter.py -- three call sites, exactly as scoped, nothing else touched:
+     a. R3's per-scan ray wiring: right after update_touches/update_break_
+        state (same _ray_bars slice, same place), _ray_obj.pierce_count +=
+        ray_registry.count_boundary_pierces(...) using a
+        `lambda ts: ray_registry._project_value(_ray_obj, ts)` projection.
+     b. The "Ray respected"/"Ray confluence ahead" reason-emission loop:
+        one `if not ray_registry.is_narratable(_ray_obj): continue` added
+        at the top of the per-ray loop body -- skips reason emission only;
+        identity/touches/break-state/alerts for this same ray are computed
+        earlier in the SAME wiring block and are entirely unaffected.
+     c. /api/rays (Phase W1): one additional filter line after the existing
+        symbol/tf filter, since select_live() only demotes -- W1 HAS landed
+        (confirmed by reading it), and it was returning every selected ray
+        with no narratable filter, meaning it WOULD now show a gated ray on
+        the chart as if it were narrated. Fixed for consistency: the chart
+        must not show a ray Chev never received a reason about.
+   VERIFIED, NOT ASSUMED: R5's select_break_alert_candidate() does not call
+   is_narratable anywhere (read its full body -- it gates only on state ==
+   "BROKEN" and the caller's own already-alerted set) -- confirmed both by
+   reading the source AND empirically: test_ray_break_alert.py's existing
+   15 checks all still pass unmodified, using a broken_ray fixture whose
+   slope_norm (0.04) is flat/non-narratable, and it is still correctly
+   selected for alerting. A flat or pierced ray breaking during an open
+   trade is still tradeable information and still alerts.
+   Also verified: ask_chev_manage_trade's checkpoint call to format_ray_
+   block_for_chev (Phase R4) needed ZERO changes -- the gate lives inside
+   the shared formatter itself, so both of dexter.py's two call sites (the
+   escalation path and the checkpoint path) inherit it automatically.
+
+3. audit_context.py -- its worst-case ray-block sample (shared by both the
+   escalation and checkpoint sections) used the exact same synthetic slope
+   values (-0.05/0.04) that Phase R4's own ray_registry.py self-test used --
+   both were now sub-threshold under the new TRENDING_MIN_SLOPE_NORM=0.15
+   gate, which would have made format_ray_block_for_chev silently render ""
+   for what was supposed to demonstrate the WORST case. Bumped both files'
+   fixture slopes to -0.2/-0.15 (still within SLOPE_MATCH_TOL of each other
+   so the channel line still renders too) and recomputed the crossing
+   levels so both still land within each ray's horizon. Re-ran the audit:
+   token counts are essentially unchanged (113/105, same as before this
+   phase) and the COMBINED TOTAL is byte-for-byte the same verdict (10,197
+   tokens, under the 14k gate by 3,803) -- confirming the phase's own
+   expectation that "the block format didn't change, only which rays
+   qualify" held true once the fixtures were corrected to describe a
+   genuinely narratable ray again.
+
+BENEFIT: Chev (and now the webapp chart, via W1) only ever hears about or
+sees a diagonal line that has actually behaved like a real boundary -- one
+price has closed beyond never counts against a trap, but a real close
+through disqualifies the line from being narrated as clean, and a merely
+flat line never gets mistaken for a trending one. Nothing about the
+underlying fit, tracking, or alerting changed -- only which rays earn the
+right to be TALKED ABOUT.
+
+SECOND-PASS REVIEW (Lead AI Quant Strategist / Senior Python Architect pass,
+re-reading the diff cold): traced every function touched directly (the two
+new pure functions, the three call sites, the two log-line/self-test
+extensions) and indirectly (R5's alert path -- confirmed independent both
+by reading and by its unmodified tests still passing; the R4 checkpoint
+call site -- confirmed it needed no change; _run_pattern_engine and chat.js
+-- confirmed byte-identical, see VERIFICATION). One thing considered and
+deliberately NOT changed: count_boundary_pierces has no access to ray.state
+(its signature takes a projection callable, not a RayRecord, per the
+phase's exact spec), so dexter.py's wiring calls it unconditionally even
+for a ray that update_break_state may have JUST flipped to BROKEN earlier
+in the same bar list -- meaning pierce_count keeps accumulating on an
+already-broken ray. Traced whether this has any observable effect: none --
+is_narratable's state == "LIVE" check already excludes a BROKEN ray from
+narration regardless of its pierce_count, so this is inert bookkeeping, not
+a bug. Left as-is rather than adding a guard for a code path with zero
+behavioral consequence. One test-authoring bug caught and fixed during
+self-test construction itself (not a bug in shipped ray_registry.py logic):
+the first draft of the wick-through-vs-pierce interaction test (13b) used a
+trending (non-zero slope) ray, so the line's projected value drifted upward
+between the two test bars -- the second bar's hand-picked "close on the
+correct side" value was only correct for a flat line, causing a false test
+failure. Fixed by making that specific fixture flat (slope_raw=0), since
+13b tests the touch/pierce interaction, not narratability.
+
+VERIFICATION: `python -m py_compile dexter.py labeller.py ray_registry.py
+audit_context.py` -> exit 0 on all four. `python -X utf8 derivs.py` ->
+12/12 PASS (unchanged). `python labeller.py` -> 32/32 PASS (unchanged --
+this phase never touches labeller.py). `python -X utf8 ray_registry.py` ->
+41/41 PASS (28 existing + 13 new: mid-span close-through counts as exactly
+one pierce and disqualifies narration; wick-through-and-reject registers
+zero pierces while wick_rejection_count still increments via the SAME bars,
+proving the two walks don't double-count or interfere; a flat ray still
+accumulates a respected touch but stays non-narratable; a close exactly AT
+the pierce tolerance boundary is not a pierce, just beyond it is; slope_norm
+exactly AT the trending threshold IS narratable, just below is not; a
+pre-R6 JSON record with no pierce_count key at all loads with pierce_count
+=0; select_live ranks a narratable ray first despite a far lower respect_
+count than a gated one; format_ray_block_for_chev renders empty for a
+non-narratable ray). `python -X utf8 test_ray_break_alert.py` -> 15/15 PASS,
+unmodified (empirical proof R5 is unaffected). `python test_ray_extension.py`
+-> 7/7 PASS. `python -X utf8 audit_context.py` -> exit 0, COMBINED TOTAL
+unchanged at 10,197 tokens (under 14k by 3,803) after fixture correction.
+Grep-confirmed every new anchor (3 constants, 2 functions, the 3 gate call
+sites) appears exactly once. `git diff --stat -- webapp/js/ui/chat.js` ->
+empty (untouched). `git diff` of _run_pattern_engine's full function body
+against HEAD -> empty (byte-identical). No dexter.py execution, bot never
+run.
+
+REMAINING UNCERTAIN / MANUAL VERIFICATION FOR KEV: after restart and some
+real scans, open ray_identity_log.jsonl and look for narratable: false on
+flat or pierced lines vs true on clean trending ones -- compare a handful
+against the chart by eye and judge whether PIERCE_MAX=0's strictness
+matches your own read of "clean boundary." If it's gating lines you would
+have traded off of, the three constants at ray_registry.py's top are the
+only knobs, tune them from the log's real evidence rather than by feel, per
+the phase's own instruction. Also worth watching: whether pierce_count's
+permanent, non-decaying nature (once pierced, always non-narratable for
+that specific ray identity, until a genuinely new line is minted) feels
+right in practice, or whether a real trending line that had one early noisy
+close-through before settling into a clean boundary ends up unfairly
+silenced for its whole remaining life.
+
+RESTART: REQUIRED (dexter.py and ray_registry.py both changed).
+DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
 END OF HANDOFF
 ================================================================================

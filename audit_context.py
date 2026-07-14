@@ -195,16 +195,20 @@ validation_block = format_validation_candidates_for_chev(_vc_candidates)
 # Same synthetic numbers as ray_registry.py's own self-test worst-case check
 # (12b), reproduced here rather than imported so this audit measures the
 # real formatter's real output, not a hand-typed guess at its size.
+# Phase R6: slopes must clear TRENDING_MIN_SLOPE_NORM (0.15 abs) to be
+# narratable at all (format_ray_block_for_chev now filters non-narratable
+# rays to nothing) -- -0.2/-0.15 satisfy that AND stay within SLOPE_MATCH_TOL
+# of each other so the channel line still renders too.
 _ray_T0 = 1_700_000_000
 _ray_upper = RayRecord(id="au", symbol="BTCUSDT", timeframe="15m", side="upper",
-                       slope_raw=-0.5, slope_norm=-0.05, anchor_ts=_ray_T0, value_at_anchor=61500.0,
+                       slope_raw=-2.0, slope_norm=-0.2, anchor_ts=_ray_T0, value_at_anchor=61500.0,
                        born_ts=_ray_T0, last_seen_ts=_ray_T0, respect_count=4, wick_rejection_count=1,
                        lifetime_span_bars=44)
 _ray_lower = RayRecord(id="al", symbol="BTCUSDT", timeframe="15m", side="lower",
-                       slope_raw=0.4, slope_norm=0.04, anchor_ts=_ray_T0, value_at_anchor=61200.0,
+                       slope_raw=-1.5, slope_norm=-0.15, anchor_ts=_ray_T0, value_at_anchor=61200.0,
                        born_ts=_ray_T0, last_seen_ts=_ray_T0, respect_count=3, wick_rejection_count=2,
                        lifetime_span_bars=40)
-_ray_levels = [(61495.0, "Fib 61.8% (golden pocket)"), (61203.2, "VP POC 4h")]
+_ray_levels = [(61480.0, "Fib 61.8% (golden pocket)"), (61188.0, "VP POC 4h")]
 ray_block = format_ray_block_for_chev(
     [_ray_upper, _ray_lower], current_price=61350.0, timeframe="15m", levels=_ray_levels)
 
