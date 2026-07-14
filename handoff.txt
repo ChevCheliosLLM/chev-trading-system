@@ -9775,5 +9775,285 @@ This closes out all 3 items from the "honest assessment" conversation:
   Issue 2 (no structured reject codes) -> fixed, additive + retroactive (Phase 2)
   Issue 3 (global freeze window)       -> reviewed, correct as designed (Phase 3)
 ================================================================================
+
+================================================================================
+2026-07-14 -- "SECOND LOOK" FIX ROUND, PHASE 1 of 5: chev_journal.json race +
+non-atomic write
+================================================================================
+
+CONTEXT: Kev asked for a further "what else needs a second look" pass. I
+researched 3 angles (dead/discarded code, duplicated logic across files,
+concurrency safety) and reported 7 candidates in plain English. Kev asked
+to fix all of them -- same explicit instructions as the last round: don't
+assume, verify directly, ask if unsure, keep the strategy safe.
+
+BEFORE writing any code this round, I re-verified all 7 candidates against
+the LIVE code (not the earlier summarized research). Two turned out to be
+non-issues -- see the PHASE 4 entry (still to come) for the full writeup:
+COST_R_CAP's 3-way duplication is explicitly documented in all three files
+as "by design... stays standalone," not an accident; the frontend
+"Volume Profile vs Vol Profile" thing turned out to be two intentionally
+different registries (full name vs. compact chip label) and, separately,
+two entirely unrelated features that happen to share a 2-letter code
+(a confluence tag vs. a chart-drawing-tool button) -- not real
+inconsistencies once traced to their actual call sites.
+
+PROBLEM (verified real): chev_journal.json -- the real trade history file
+everything else (Weight Lab, win-rate stats, Learn tab) depends on -- had
+NO lock and NO atomic write anywhere. 6 places write it: /api/close_trade
+(Flask request thread, force-close), _do_postmortem (background thread),
+and 4 partial-TP sites inside the main scan loop. Every one did
+`journal = _load_journal()` -> mutate in memory -> plain `open(path,"w")`
++ `json.dump(...)`. Two writers reading the same "before" state at the
+same instant (e.g. a manual force-close landing at the same moment as an
+automatic partial-TP write) could silently clobber each other's addition,
+and a crash mid-write could truncate the whole file (no temp-file+replace
+like weight_overrides.json already gets via _atomic_write_json).
+
+FIX: new `_JOURNAL_LOCK = threading.Lock()` and `_save_journal_atomic(data)`
+(dexter.py, right after _load_journal(), ~line 4103) -- same temp-file +
+os.replace pattern as the existing _atomic_write_json, journal-specific by
+convention with _load_journal(). All 6 write sites now wrap their existing
+load -> mutate -> write sequence in `with _JOURNAL_LOCK:` and call
+_save_journal_atomic() instead of a raw open()/json.dump. No change to any
+site's dedupe-check logic or what gets written -- purely wraps the
+existing sequence. jane_journal.json is explicitly untouched (standing
+rule) -- confirmed via grep that its own separate write path
+(~line 11822) was not modified.
+
+VERIFICATION: `python -c "import ast; ast.parse(open('dexter.py',
+encoding='utf-8').read())"` -> OK. Grepped for any remaining raw
+`open(JOURNAL_PATH, "w")` -- none found, all 6 now go through
+_save_journal_atomic. Confirmed exactly 6 call sites of
+_save_journal_atomic (matching the 6 known write locations) and confirmed
+jane_journal.json's own write path is untouched. No dexter.py execution
+(never run the bot).
+
+RESTART: REQUIRED for this to take effect. DEPLOY: NO.
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+2026-07-14 -- "SECOND LOOK" FIX ROUND, PHASE 2 of 5: weight_overrides.json +
+CONFLUENCE_SCORES/SCAN_WEIGHTS races
+================================================================================
+
+PROBLEM (verified): 6 Flask routes (approve, approve_batch, mark_reviewed,
+weight_manual [2 write paths in one route], revert) and
+_reload_weight_overrides() itself all did read-modify-write on
+weight_overrides.json with no lock -- confirmed every span is fast, pure
+in-memory work (no network/slow I/O between the read and the write at any
+of them). Separately, _reload_weight_overrides() mutates the live
+CONFLUENCE_SCORES/SCAN_WEIGHTS dicts key-by-key with no lock.
+
+IMPORTANT SCOPE NARROWING (verified before writing code, not assumed): the
+dict-mutation race is narrower than it first looked. _reload_weight_overrides()
+and the scoring engine (scan_pair_tf) both only ever run on the background
+scan-loop thread, confirmed by checking every call site of each -- they are
+never concurrent with each other, so the hot live-scoring path was never
+actually at risk. The real exposure is exactly 2 Flask GET routes that
+iterate the FULL dict for one consistent snapshot: /api/weight_manual/tags
+and /api/tag_registry. _resolve_weight_tag()'s single-key reads (used by
+_build_weight_proposal_payload, _preview_weight_change,
+_validate_weight_approval) don't need protection either -- a single dict
+.get() can't return a torn/partial value regardless of threading.
+
+FIX: one new `_WEIGHT_STATE_LOCK = threading.Lock()` (dexter.py, right after
+WEIGHT_OVERRIDES_FILE's definition) covers BOTH the file and the in-memory
+tables, since they're the same conceptual state (file = durable copy, dicts
+= live cache). Wrapped in `with _WEIGHT_STATE_LOCK:`:
+  - All 6 Flask route bodies' existing read -> modify -> _atomic_write_json
+    span (api_weight_proposal_approve, approve_batch, mark_reviewed,
+    weight_manual, revert) -- no change to any route's logic, purely wraps
+    the existing sequence.
+  - _reload_weight_overrides()'s entire body (its own file read, both
+    CONFLUENCE_SCORES/SCAN_WEIGHTS mutation loops, and its conditional
+    applied_at write-back) -- one lock now covers the file and the dicts
+    together, which is what closes the dict-race too.
+  - The two dict-iterating comprehensions inside api_weight_manual_tags and
+    api_tag_registry (brief, read-only, no behavior change).
+  - scan_pair_tf and every other single-key reader of CONFLUENCE_SCORES/
+    SCAN_WEIGHTS deliberately left untouched (same-thread with the reload,
+    or single-key-atomic -- not a real risk, and locking the hot scoring
+    path would be needless overhead for zero safety gain).
+
+VERIFICATION: `python -c "import ast; ast.parse(open('dexter.py',
+encoding='utf-8').read())"` -> OK. Counted _WEIGHT_STATE_LOCK usages (9 =
+1 definition + 5 route/function wraps + 2 dict-reader wraps... plus the
+reload function itself, matching the intended 8 wrap sites). Re-checked
+every remaining unwrapped `_read_weight_overrides_file()` call site
+(api_weight_overrides, _build_weight_history_payload,
+build_elliot_suggestions, and the payload builder's own read) -- confirmed
+each is genuinely read-only for this file (docstrings say so and no write
+follows), so they're safe without the lock now that all writes are
+atomic. No dexter.py execution (never run the bot).
+
+RESTART: REQUIRED for this to take effect. DEPLOY: NO.
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+2026-07-14 -- "SECOND LOOK" FIX ROUND, PHASE 3 of 5: stop hiding real
+failures -- 3 silent scoring blocks + 1 discarded retry rejection reason
+================================================================================
+
+3a. THREE `except Exception: pass` BLOCKS IN THE LIVE SCORING PATH
+(scan_pair_tf, which computes dexter_score -- the number that gates
+escalation to Chev): chart pattern engine (~line 9434-9508, was
+`except Exception as _pe: pass` -- the exception was already being
+captured into a variable and then never used), Bollinger Band scoring
+(~line 9477-9551), Volume Profile scoring (~line 9519-9591). If any of
+these ever throws, that scoring component was silently contributing 0
+with zero visibility -- indistinguishable from "this signal genuinely
+wasn't present." Fixed to `except Exception as e: print(f"[Dexter] <block>
+scoring failed for {symbol}/{primary_tf}: {e}")` -- still doesn't crash,
+still zeroes out the score (NO behavior change to any trading decision),
+just now visible in the console/logs if it ever actually happens.
+
+(Note: ~37 other `except Exception: pass` blocks exist elsewhere in
+dexter.py. Sampled a few during research -- they're lower-stakes,
+cosmetic/logging paths, not scoring inputs. Auditing all 40 is a much
+bigger, differently-scoped task nobody asked for; only these 3 confirmed
+scoring-path ones were in scope this round.)
+
+3b. GAUNTLET RETRY WAS DISCARDING ITS OWN REJECTION REASON (~line
+13775-13840): when Chev revises a rejected trade and the gauntlet runs
+again on the revision, if the revision was ALSO rejected, the code fell
+through to the shared log call still using `_g_rc`/`_g_rr`/`_g_res` from
+the ORIGINAL (pre-revision) rejection -- the retry's own
+reject_code/reject_reason/cost_r/ev_advisory_rr/enforced_rr_floor were
+computed into `_g_res2` and then never used. A trade revised for one
+reason (e.g. ATR_FLOOR) that then failed for a completely different
+reason on the retry (e.g. NET_RR) was logged as if it failed for the
+first reason again.
+
+FIX: added an `else` branch right after `if _g_res2["verdict"] == "PASS":`
+that reassigns `_g_res = _g_res2`, `_g_rc = _g_res2["reject_code"]`,
+`_g_rr = _g_res2["reject_reason"]` before falling through to the shared
+log call -- this also fixes cost_r/ev_advisory_rr/enforced_rr_floor in
+that same log line, which had the identical "still describes the original
+attempt" problem since they're all read off `_g_res`. The PASS branch is
+completely untouched.
+
+VERIFICATION: `python -c "import ast; ast.parse(open('dexter.py',
+encoding='utf-8').read())"` -> OK. Grepped to confirm all 4 fixes landed
+exactly once each. Confirmed `symbol`/`primary_tf` (used in the 3 new
+print statements) are real parameters of scan_pair_tf, in scope at each
+except block. Confirmed the retry fix's reassignment happens before the
+shared `_log_chev_decision(...)` call that reads `_g_res`/`_g_rc`/`_g_rr`.
+No dexter.py execution (never run the bot).
+
+RESTART: REQUIRED for this to take effect. DEPLOY: NO.
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+2026-07-14 -- "SECOND LOOK" FIX ROUND, PHASE 4 of 5: one real constant
+dedup, and the two reversals
+================================================================================
+
+FIX: `MAX_LEVERAGE_BY_TYPE` (dexter.py ~line 2823) and risk_gauntlet.py's
+`LEV_CAPS` were two separately hand-typed literal dicts, verified
+byte-identical (crypto/forex/stock x scalp/day/swing) -- but unlike
+COST_R_CAP (see reversal below), neither carried a "deliberately
+standalone" comment, and dexter.py already imports risk_gauntlet directly
+(no new cross-import needed). Changed dexter.py's definition to
+`MAX_LEVERAGE_BY_TYPE = risk_gauntlet.LEV_CAPS` -- one line, name kept
+exactly the same (a docstring elsewhere says this name must not change),
+so all 3 existing read sites (~11694, ~11929, ~12824, all `.get()`/
+`.items()` calls) are completely unaffected. This removes the "two copies,
+keep in sync by hand" risk entirely rather than hoping it's remembered.
+
+TWO REVERSALS (verified before writing any code, not assumed -- same
+discipline as the freeze-window finding two rounds ago):
+
+- **COST_R_CAP is NOT accidental duplication.** It's a literal `0.50`
+  hand-typed in labeller.py, weight_proposal.py, and counterfactual_report.py.
+  I read the actual comment at each of the three definitions before touching
+  anything: labeller.py says "by design — both stay standalone, no
+  cross-file imports"; weight_proposal.py says "this script stays
+  standalone by design, same convention as counterfactual_report.py";
+  counterfactual_report.py says "deliberately standalone, not imported."
+  Confirmed via each file's own import block that none of these three
+  modules import each other or dexter.py at all -- this is a real,
+  repeatedly-documented, deliberate architectural convention (every
+  analysis/report module stays a standalone leaf with zero
+  interdependencies), not an oversight. Centralizing it would override
+  that choice without being asked to. NOT changed. Same reasoning covers
+  honest_sim.py's fallback cost-table mirror -- it's an explicit, already
+  self-documented resilience fallback for if the risk_gauntlet import ever
+  fails, not an accident either. NOT changed.
+
+- **The "VP: Volume Profile vs Vol Profile" frontend thing is not a bug.**
+  Traced both registries to their actual call sites: `TAG_NAMES` (webapp
+  state.js) is read only by chev-corner.js's one full-label spot;
+  `SHORT_TAG` is read only by the compact tag-pill-chip renderer
+  (`_tagLabel`) -- two intentionally different lookup tables for two
+  different UI contexts (full name vs. abbreviated chip label), not a
+  naming drift. Separately, the chat.js `vp: 'Volume Profile'` vs.
+  drawing.js `vp: 'Vol Profile'` pair I'd flagged turned out to be two
+  entirely unrelated features that just happen to share a 2-letter code:
+  chat.js's is the confluence indicator, drawing.js's is a chart
+  DRAWING-TOOL button label sitting alongside "H.Line," "Ray," "Rectangle"
+  -- toolbar buttons, not confluence tags. NOT changed either.
+
+VERIFICATION: `python -c "import ast; ast.parse(open('dexter.py',
+encoding='utf-8').read())"` -> OK. Confirmed `import risk_gauntlet`
+(dexter.py:24) precedes the new alias (line 2831) by ~2800 lines, so
+`risk_gauntlet.LEV_CAPS` is defined and importable at that point. Grepped
+all 3 MAX_LEVERAGE_BY_TYPE read sites to confirm they only ever call
+`.get()`/`.items()` on it -- fully compatible with the alias, zero other
+changes needed. No dexter.py execution (never run the bot).
+
+RESTART: REQUIRED for the MAX_LEVERAGE_BY_TYPE alias to take effect.
+DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+2026-07-14 -- "SECOND LOOK" FIX ROUND, PHASE 5 of 5: delete confirmed-dead
+code
+================================================================================
+
+Re-verified (repo-wide grep, excluding backup/ and an unrelated
+open-webui/ copy) that all 9 originally-flagged functions still have zero
+real callers, then deleted each outright -- matching this project's own
+stated convention (delete confirmed-unused code completely rather than
+leave it commented-out or flagged):
+
+dexter.py: `find_swing_points_indexed` (a 2-line dead wrapper -- its own
+name had zero callers; the DIFFERENT, live `_ca_find_swing_points_indexed`
+it delegated to was NOT touched, still called from 2 real sites),
+`_calc_confluence_score`, `_format_trade_signal`, `_an_find_last_impulse`,
+`_an_vp`, `_ca_find_structure_start`, `_fetch_binance_futures_data`.
+`_sim_trading_cost` was also removed -- and, since it was the ONLY reader
+of `_TRADE_COST_RATES` and `_FUNDING_RATE_8H` (confirmed by grep before
+removing them), those two now-orphaned constants were removed alongside it
+rather than left as dead weight next to a function that no longer exists.
+`_fmt_p()`, which `_format_trade_signal` also used, was confirmed to have
+3 OTHER live callers and was left untouched.
+
+labeller.py: `full_report()`, `_tf_to_seconds()`. The sub-functions
+`full_report()` called (fill_rate_report/chev_scoreboard/tag_lift_report/
+weight_suggestions/skip_reason_audit) were not touched -- only
+`full_report()` itself was confirmed dead.
+
+VERIFICATION: `python -c "import ast; ast.parse(open('dexter.py',
+encoding='utf-8').read())"` -> OK. Same for labeller.py -> OK. Repo-wide
+grep (excluding backup/, open-webui/) for every one of the 9 removed names
+plus the 2 removed constants -> zero remaining references anywhere. The
+only hits for "find_swing_points_indexed" as a substring are
+`_ca_find_swing_points_indexed`'s own name and its 2 real call sites --
+confirmed that live function was never touched. No dexter.py execution
+(never run the bot).
+
+RESTART: REQUIRED (dexter.py and labeller.py both changed). DEPLOY: NO.
+RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
+This closes out the "second look" fix round:
+  1. chev_journal.json race + non-atomic write  -> fixed (Phase 1)
+  2. weight_overrides.json + dict-mutation race -> fixed (Phase 2)
+  3. 3 silent scoring failures + 1 discarded retry reason -> fixed (Phase 3)
+  4. MAX_LEVERAGE_BY_TYPE/LEV_CAPS duplication   -> fixed (Phase 4)
+     COST_R_CAP / honest_sim fallback / VP-label -> reviewed, correct as
+     designed, not changed (Phase 4)
+  5. 9 confirmed-dead functions + 2 orphaned constants -> removed (Phase 5)
+================================================================================
 END OF HANDOFF
 ================================================================================

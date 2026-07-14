@@ -170,15 +170,6 @@ def _session_from_ts(epoch: int) -> str:
         return "GOOD"
     return "LOW"
 
-def _tf_to_seconds(tf: str) -> int:
-    tf = (tf or "1h").lower()
-    if "15m" in tf: return 900
-    if "30m" in tf: return 1800
-    if "4h"  in tf: return 14400
-    if "1d"  in tf: return 86400
-    return 3600
-
-
 def normalize_reasons(reasons_raw) -> list:
     """
     Map dexter scan strings to canonical feature tokens.
@@ -1001,26 +992,6 @@ def fill_rate_report() -> str:
         f"  Open:   {pending} PENDING  {active} ACTIVE\n"
         f"  Closed: {fills} filled  {no_fills} NO_FILL  {voids} VOID  fill_rate={fr}"
     )
-
-
-def full_report():
-    """Write combined report to REPORT_FILE."""
-    parts = [
-        f"LABEL REPORT -- {_now_iso()}",
-        "",
-        fill_rate_report(),
-        "",
-        chev_scoreboard(),
-        "",
-        tag_lift_report(),
-        "",
-        weight_suggestions(),
-        "",
-        skip_reason_audit(),
-    ]
-    with open(REPORT_FILE, "w", encoding="utf-8") as f:
-        f.write("\n".join(parts))
-    print(f"[labeller] report written -> {REPORT_FILE}")
 
 
 # ── Self-test ────────────────────────────────────────────────────────────────

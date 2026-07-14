@@ -320,37 +320,37 @@ def api_close_trade():
 
         # Write to journal so the closed-trades section of the monitor picks it up
         try:
-            journal = _load_journal()
-            _sym   = target["symbol"]
-            _entry = target["entry"]
-            _sl    = target["sl"]
-            _tp    = target["tp"]
-            if _is_duplicate_journal_entry(_sym, _entry, _sl, _tp, journal):
-                print(f"[Journal] Duplicate detected for {_sym} (entry={_entry} SL={_sl} TP={_tp}) — skipping write.")
-            else:
-                journal.append({
-                    "ts":               datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                    "symbol":           _sym,
-                    "asset_type":       target.get("asset_type", "crypto"),
-                    "direction":        target["direction"],
-                    "entry":            _entry,
-                    "sl":               _sl,
-                    "tp":               _tp,
-                    "exit_price":       price,
-                    "pnl":              exit_pnl,
-                    "outcome":          outcome,
-                    "close_type":       "MANUAL",
-                    "tags":             (target.get("tags", "") + " manual-close").strip(),
-                    "duration":         "manual",
-                    "reasoning":        target.get("reasoning", ""),
-                    "analysis":         "Closed manually by user.",
-                    "position_size_usd": target.get("position_size_usd", 0),
-                    "leverage":         target.get("leverage", 1),
-                    "chev_moves":       target.get("chev_moves", []),
-                    "system_era":       SYSTEM_ERA,
-                })
-                with open(JOURNAL_PATH, "w", encoding="utf-8") as f:
-                    json.dump(journal, f, indent=2)
+            with _JOURNAL_LOCK:
+                journal = _load_journal()
+                _sym   = target["symbol"]
+                _entry = target["entry"]
+                _sl    = target["sl"]
+                _tp    = target["tp"]
+                if _is_duplicate_journal_entry(_sym, _entry, _sl, _tp, journal):
+                    print(f"[Journal] Duplicate detected for {_sym} (entry={_entry} SL={_sl} TP={_tp}) — skipping write.")
+                else:
+                    journal.append({
+                        "ts":               datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                        "symbol":           _sym,
+                        "asset_type":       target.get("asset_type", "crypto"),
+                        "direction":        target["direction"],
+                        "entry":            _entry,
+                        "sl":               _sl,
+                        "tp":               _tp,
+                        "exit_price":       price,
+                        "pnl":              exit_pnl,
+                        "outcome":          outcome,
+                        "close_type":       "MANUAL",
+                        "tags":             (target.get("tags", "") + " manual-close").strip(),
+                        "duration":         "manual",
+                        "reasoning":        target.get("reasoning", ""),
+                        "analysis":         "Closed manually by user.",
+                        "position_size_usd": target.get("position_size_usd", 0),
+                        "leverage":         target.get("leverage", 1),
+                        "chev_moves":       target.get("chev_moves", []),
+                        "system_era":       SYSTEM_ERA,
+                    })
+                    _save_journal_atomic(journal)
         except Exception as je:
             print(f"[force-close] Journal write failed: {je}")
 
@@ -1083,22 +1083,23 @@ def api_weight_proposal_approve():
     delta = body.get("delta")
     evidence = body.get("evidence") or {}
 
-    data = _read_weight_overrides_file()
-    entries = data.get("entries", [])
-    ok, err, clean_delta = _validate_weight_approval(tag, delta, entries)
-    if not ok:
-        return jsonify({"ok": False, "error": err}), 400
+    with _WEIGHT_STATE_LOCK:
+        data = _read_weight_overrides_file()
+        entries = data.get("entries", [])
+        ok, err, clean_delta = _validate_weight_approval(tag, delta, entries)
+        if not ok:
+            return jsonify({"ok": False, "error": err}), 400
 
-    entry = {
-        "tag": tag, "delta": clean_delta,
-        "approved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-        "evidence": evidence, "source": "weight_lab",
-    }
-    entries.append(entry)
-    data["entries"] = entries
-    _mark_weight_lab_reviewed(data)
-    _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
-    return jsonify({"ok": True, "pending_overrides": entries})
+        entry = {
+            "tag": tag, "delta": clean_delta,
+            "approved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            "evidence": evidence, "source": "weight_lab",
+        }
+        entries.append(entry)
+        data["entries"] = entries
+        _mark_weight_lab_reviewed(data)
+        _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+        return jsonify({"ok": True, "pending_overrides": entries})
 
 
 @flask_app.route("/api/weight_proposal/approve_batch", methods=["POST"])
@@ -1116,32 +1117,33 @@ def api_weight_proposal_approve_batch():
     if not isinstance(items, list) or not items:
         return jsonify({"ok": False, "error": "items must be a non-empty list"}), 400
 
-    data = _read_weight_overrides_file()
-    entries = data.get("entries", [])
-    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    with _WEIGHT_STATE_LOCK:
+        data = _read_weight_overrides_file()
+        entries = data.get("entries", [])
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-    approved, rejected = [], []
-    for item in items:
-        if not isinstance(item, dict):
-            rejected.append({"tag": None, "error": "malformed item"})
-            continue
-        tag = item.get("tag")
-        delta = item.get("delta")
-        evidence = item.get("evidence") or {}
-        ok, err, clean_delta = _validate_weight_approval(tag, delta, entries)
-        if not ok:
-            rejected.append({"tag": tag, "error": err})
-            continue
-        entries.append({
-            "tag": tag, "delta": clean_delta, "approved_at": now_str,
-            "evidence": evidence, "source": "weight_lab",
-        })
-        approved.append(tag)
+        approved, rejected = [], []
+        for item in items:
+            if not isinstance(item, dict):
+                rejected.append({"tag": None, "error": "malformed item"})
+                continue
+            tag = item.get("tag")
+            delta = item.get("delta")
+            evidence = item.get("evidence") or {}
+            ok, err, clean_delta = _validate_weight_approval(tag, delta, entries)
+            if not ok:
+                rejected.append({"tag": tag, "error": err})
+                continue
+            entries.append({
+                "tag": tag, "delta": clean_delta, "approved_at": now_str,
+                "evidence": evidence, "source": "weight_lab",
+            })
+            approved.append(tag)
 
-    if approved:
-        data["entries"] = entries
-    _mark_weight_lab_reviewed(data)  # a batch attempt, even a partial one, counts as reviewed
-    _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+        if approved:
+            data["entries"] = entries
+        _mark_weight_lab_reviewed(data)  # a batch attempt, even a partial one, counts as reviewed
+        _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
     return jsonify({"ok": True, "approved": approved, "rejected": rejected, "pending_overrides": entries})
 
 
@@ -1216,9 +1218,10 @@ def api_weight_proposal_mark_reviewed():
     """Explicit 'I looked at the digest and chose not to approve anything this
     week' — the approve/approve_batch routes already stamp this as a side
     effect, this route covers the no-action week."""
-    data = _read_weight_overrides_file()
-    _mark_weight_lab_reviewed(data)
-    _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+    with _WEIGHT_STATE_LOCK:
+        data = _read_weight_overrides_file()
+        _mark_weight_lab_reviewed(data)
+        _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
     return jsonify({"ok": True, "last_reviewed_at": data["last_reviewed_at"]})
 
 
@@ -1229,17 +1232,18 @@ def api_weight_manual_tags():
     Deliberately NOT tied to /api/weight_proposal's cache or self-test gate —
     manual mode is Kev's own judgment by definition, it must work even if the
     regression engine is broken or the labels file is missing."""
-    tags = [
-        {
-            "tag": t,
-            "name": TAG_REGISTRY.get(t, {}).get("name", t),
-            "current_effective": CONFLUENCE_SCORES[t],
-            "baseline": _CONFLUENCE_BASELINE[t],
-            "min": 0,
-            "max": 2 * _CONFLUENCE_BASELINE[t] + 2,
-        }
-        for t in sorted(CONFLUENCE_SCORES.keys())
-    ]
+    with _WEIGHT_STATE_LOCK:
+        tags = [
+            {
+                "tag": t,
+                "name": TAG_REGISTRY.get(t, {}).get("name", t),
+                "current_effective": CONFLUENCE_SCORES[t],
+                "baseline": _CONFLUENCE_BASELINE[t],
+                "min": 0,
+                "max": 2 * _CONFLUENCE_BASELINE[t] + 2,
+            }
+            for t in sorted(CONFLUENCE_SCORES.keys())
+        ]
     return jsonify({"ok": True, "tags": tags})
 
 
@@ -1295,42 +1299,43 @@ def api_weight_manual():
     if not (lo <= new_value <= hi):
         return jsonify({"ok": False, "error": f"new_value must be within [{lo:g}, {hi:g}] for '{tag}' (baseline {baseline:g})"}), 400
 
-    data = _read_weight_overrides_file()
-    entries = data.get("entries", [])
+    with _WEIGHT_STATE_LOCK:
+        data = _read_weight_overrides_file()
+        entries = data.get("entries", [])
 
-    other_source_idx = next(
-        (i for i, e in enumerate(entries) if e.get("tag") == tag and e.get("source") != "manual"), None
-    )
-    if other_source_idx is not None:
-        return jsonify({
-            "ok": False,
-            "error": f"'{tag}' has an approved proposal pending — undo it in the pending list first; manual mode won't touch a statistics-driven entry",
-        }), 400
+        other_source_idx = next(
+            (i for i, e in enumerate(entries) if e.get("tag") == tag and e.get("source") != "manual"), None
+        )
+        if other_source_idx is not None:
+            return jsonify({
+                "ok": False,
+                "error": f"'{tag}' has an approved proposal pending — undo it in the pending list first; manual mode won't touch a statistics-driven entry",
+            }), 400
 
-    manual_idx = next(
-        (i for i, e in enumerate(entries) if e.get("tag") == tag and e.get("source") == "manual"), None
-    )
+        manual_idx = next(
+            (i for i, e in enumerate(entries) if e.get("tag") == tag and e.get("source") == "manual"), None
+        )
 
-    if new_value == baseline:
-        removed = manual_idx is not None
-        if removed:
-            entries.pop(manual_idx)
+        if new_value == baseline:
+            removed = manual_idx is not None
+            if removed:
+                entries.pop(manual_idx)
+            data["entries"] = entries
+            _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+            return jsonify({"ok": True, "removed": removed, "pending_overrides": entries})
+
+        entry = {
+            "tag": tag, "delta": new_value - baseline,
+            "approved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "manual", "set_to": new_value,
+        }
+        if manual_idx is not None:
+            entries[manual_idx] = entry  # replace, not append
+        else:
+            entries.append(entry)
         data["entries"] = entries
         _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
-        return jsonify({"ok": True, "removed": removed, "pending_overrides": entries})
-
-    entry = {
-        "tag": tag, "delta": new_value - baseline,
-        "approved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-        "source": "manual", "set_to": new_value,
-    }
-    if manual_idx is not None:
-        entries[manual_idx] = entry  # replace, not append
-    else:
-        entries.append(entry)
-    data["entries"] = entries
-    _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
-    return jsonify({"ok": True, "pending_overrides": entries})
+        return jsonify({"ok": True, "pending_overrides": entries})
 
 
 @flask_app.route("/api/weight_proposal/revert", methods=["POST"])
@@ -1341,15 +1346,16 @@ def api_weight_proposal_revert():
     if not isinstance(idx, int):
         return jsonify({"ok": False, "error": "index must be an integer"}), 400
 
-    data = _read_weight_overrides_file()
-    entries = data.get("entries", [])
-    if idx < 0 or idx >= len(entries):
-        return jsonify({"ok": False, "error": f"index {idx} out of range (0..{len(entries)-1})"}), 400
+    with _WEIGHT_STATE_LOCK:
+        data = _read_weight_overrides_file()
+        entries = data.get("entries", [])
+        if idx < 0 or idx >= len(entries):
+            return jsonify({"ok": False, "error": f"index {idx} out of range (0..{len(entries)-1})"}), 400
 
-    entries.pop(idx)
-    data["entries"] = entries
-    _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
-    return jsonify({"ok": True, "pending_overrides": entries})
+        entries.pop(idx)
+        data["entries"] = entries
+        _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+        return jsonify({"ok": True, "pending_overrides": entries})
 
 
 @flask_app.route("/api/weight_overrides")
@@ -1731,17 +1737,18 @@ def api_tag_registry():
         payload["cache_age_secs"] = round(now - _tag_registry_cache["ts"], 1)
         return jsonify(payload)
 
-    tags = {
-        code: {
-            "code":       code,
-            "name":       meta["name"],
-            "tooltip":    meta["tooltip"],
-            "definition": meta["definition"],
-            "how":        meta["how"],
-            "points":     CONFLUENCE_SCORES.get(code),
+    with _WEIGHT_STATE_LOCK:
+        tags = {
+            code: {
+                "code":       code,
+                "name":       meta["name"],
+                "tooltip":    meta["tooltip"],
+                "definition": meta["definition"],
+                "how":        meta["how"],
+                "points":     CONFLUENCE_SCORES.get(code),
+            }
+            for code, meta in TAG_REGISTRY.items()
         }
-        for code, meta in TAG_REGISTRY.items()
-    }
     payload = {"tags": tags, "cache_age_secs": 0.0}
     _tag_registry_cache["ts"] = now
     _tag_registry_cache["payload"] = payload
@@ -1998,48 +2005,6 @@ def _an_build_validated_levels(touches_by_tf, tolerance_pct=0.6, episode_gap_hou
                 results.append({"price": round(center, 5), "instances": sum(counts.values()), "tier": "A"})
                 break
     return sorted(results, key=lambda r: r["instances"], reverse=True)
-
-
-def _an_find_last_impulse(touches):
-    """Find the most recent swing-to-swing move (resistance→support or vice versa)."""
-    if len(touches) < 2:
-        return None
-    ts = sorted(touches, key=lambda t: t[0])
-    last = ts[-1]
-    for t in reversed(ts[:-1]):
-        if t[2] != last[2]:
-            return (t[0], t[1], last[0], last[1])
-    return None
-
-
-def _an_vp(df, bin_count=75):
-    """Volume Profile: POC, VAH, VAL (70% value area)."""
-    p_min, p_max = df["low"].min(), df["high"].max()
-    if p_max <= p_min:
-        return None
-    bw   = (p_max - p_min) / bin_count
-    bins = np.zeros(bin_count)
-    for _, row in df.iterrows():
-        lo_i = max(0, min(int((row["low"]  - p_min) / bw), bin_count - 1))
-        hi_i = max(0, min(int((row["high"] - p_min) / bw), bin_count - 1))
-        span = hi_i - lo_i + 1
-        bins[lo_i: hi_i + 1] += row["volume"] / span
-    poc_i = int(np.argmax(bins))
-    poc   = p_min + (poc_i + 0.5) * bw
-    total, target = bins.sum(), bins.sum() * 0.70
-    lo_i, hi_i, acc = poc_i, poc_i, bins[poc_i]
-    while acc < target and (lo_i > 0 or hi_i < bin_count - 1):
-        add_lo = bins[lo_i - 1] if lo_i > 0 else -1
-        add_hi = bins[hi_i + 1] if hi_i < bin_count - 1 else -1
-        if add_lo >= add_hi and lo_i > 0:
-            lo_i -= 1; acc += bins[lo_i]
-        elif hi_i < bin_count - 1:
-            hi_i += 1; acc += bins[hi_i]
-        else:
-            break
-    return {"poc": round(poc, 5),
-            "vah": round(p_min + (hi_i + 1) * bw, 5),
-            "val": round(p_min + lo_i * bw, 5)}
 
 
 def _an_atr_series(df, period=14):
@@ -2813,11 +2778,15 @@ TRADE_TYPE_EXPIRY_HOURS = {"scalp": 2, "day": 6, "swing": 48}
 # MODE-B pending and only catches numbers that plainly don't belong to this asset right now.
 HALLUCINATION_MAX_ENTRY_DIST = 0.03
 HALLUCINATION_MAX_SLTP_DIST  = 0.15
-MAX_LEVERAGE_BY_TYPE = {
-    "crypto": {"scalp": 10, "day": 10, "swing": 5},
-    "forex": {"scalp": 5, "day": 5, "swing": 2},
-    "stock": {"scalp": 5, "day": 5, "swing": 2},
-}
+# LEAD-ARCHITECT (2026-07-14): was a separately hand-typed literal dict, byte-identical
+# to risk_gauntlet.LEV_CAPS (verified key-by-key: crypto/forex/stock x scalp/day/swing)
+# but with no "deliberately standalone" rationale like weight_proposal.py/labeller.py/
+# counterfactual_report.py's COST_R_CAP has -- dexter.py already imports risk_gauntlet
+# directly, so aliasing costs nothing and removes the "two copies, keep in sync by hand"
+# risk entirely. Name kept exactly as MAX_LEVERAGE_BY_TYPE (see the docstring on
+# _normalize_asset_type_for_learning, ~line 2795, which says this name must not change --
+# other code and comments key off it) -- only the right-hand side changed.
+MAX_LEVERAGE_BY_TYPE = risk_gauntlet.LEV_CAPS
 
 # Google Sheets connection
 GOOGLE_CREDENTIALS_FILE = os.path.join(CHEV_TOOLS_ROOT, "google_credentials.json")
@@ -3075,6 +3044,19 @@ derivs.SCAN_WEIGHTS = SCAN_WEIGHTS
 # =============================================================================
 WEIGHT_OVERRIDES_FILE = os.path.join(CHEV_TOOLS_ROOT, "weight_overrides.json")
 
+# LEAD-ARCHITECT (2026-07-14): guards BOTH weight_overrides.json's read-modify-write
+# span (approve/approve_batch/mark_reviewed/weight_manual/revert routes, and
+# _reload_weight_overrides' own conditional write-back) AND the live CONFLUENCE_SCORES/
+# SCAN_WEIGHTS dicts' mutation during _reload_weight_overrides -- one lock, since the
+# file and the in-memory tables are the same conceptual state (the file is the durable
+# copy, the dicts are the live cache). scan_pair_tf's many single-key reads of these
+# dicts are NOT wrapped in this lock: verified _reload_weight_overrides and scan_pair_tf
+# only ever run on the same background scan-loop thread (never concurrently with each
+# other), and a single dict .get() can't observe a torn/partial value anyway -- only the
+# two Flask routes that iterate the FULL dict for a consistent snapshot need it
+# (api_weight_manual_tags, api_tag_registry).
+_WEIGHT_STATE_LOCK = threading.Lock()
+
 # The set of tags actually carrying a live-applied override as of the most
 # recent reload. /api/weight_overrides uses this (not "present at process
 # start") to flag each entry "active" -- true live-applied state, since
@@ -3103,88 +3085,89 @@ def _reload_weight_overrides():
     """
     global _weight_overrides_warned_once, _WEIGHT_OVERRIDES_LIVE_APPLIED_TAGS
 
-    data = None
-    entries = []
-    if os.path.exists(WEIGHT_OVERRIDES_FILE):
-        try:
-            with open(WEIGHT_OVERRIDES_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            entries = data.get("entries", [])
-            if not isinstance(entries, list):
-                raise ValueError("'entries' is not a list")
-        except Exception as e:
-            if not _weight_overrides_warned_once:
-                print(f"[WEIGHT OVERRIDES] malformed {WEIGHT_OVERRIDES_FILE}, applying nothing this cycle: {e}")
-                _weight_overrides_warned_once = True
-            return  # leave CONFLUENCE_SCORES exactly as it was -- never guess on a bad file
-        _weight_overrides_warned_once = False
+    with _WEIGHT_STATE_LOCK:
+        data = None
+        entries = []
+        if os.path.exists(WEIGHT_OVERRIDES_FILE):
+            try:
+                with open(WEIGHT_OVERRIDES_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                entries = data.get("entries", [])
+                if not isinstance(entries, list):
+                    raise ValueError("'entries' is not a list")
+            except Exception as e:
+                if not _weight_overrides_warned_once:
+                    print(f"[WEIGHT OVERRIDES] malformed {WEIGHT_OVERRIDES_FILE}, applying nothing this cycle: {e}")
+                    _weight_overrides_warned_once = True
+                return  # leave CONFLUENCE_SCORES exactly as it was -- never guess on a bad file
+            _weight_overrides_warned_once = False
 
-    deltas = {}
-    for entry in entries:
-        try:
-            tag = entry["tag"]
-            delta = float(entry["delta"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        deltas[tag] = deltas.get(tag, 0.0) + delta
-
-    # PHASE 6A: an override applies to EITHER table (CONFLUENCE_SCORES or
-    # SCAN_WEIGHTS) using the SAME baseline-relative clamp math. A tag present
-    # in BOTH tables is applied to both. A tag in neither baseline is ignored.
-    _WEIGHT_TABLES = ((CONFLUENCE_SCORES, _CONFLUENCE_BASELINE),
-                       (SCAN_WEIGHTS, _SCAN_WEIGHTS_BASELINE))
-
-    changed = []
-    applied_tags = set()
-    for tag, total_delta in deltas.items():
-        _baseline_for_tag = None
-        for _t, _b in _WEIGHT_TABLES:
-            if tag in _b:
-                _baseline_for_tag = _b
-                break
-        if _baseline_for_tag is None:
-            print(f"[WEIGHT OVERRIDES] tag '{tag}' not in CONFLUENCE_SCORES/SCAN_WEIGHTS -- ignored (never added as a new key)")
-            continue
-        applied_tags.add(tag)
-        for _t, _b in _WEIGHT_TABLES:
-            if tag not in _b:
-                continue
-            baseline = _b[tag]
-            clamped = max(0, min(2 * baseline + 2, baseline + total_delta))
-            if _t.get(tag) != clamped:
-                changed.append((tag, _t.get(tag), clamped))
-                _t[tag] = clamped
-
-    # Every baseline tag NOT covered by a valid entry this cycle must be
-    # restored to baseline -- this is what makes "remove the entry" (or delete
-    # the whole file) a clean revert rather than a stuck value.
-    for _t, _b in _WEIGHT_TABLES:
-        for tag, baseline in _b.items():
-            if tag in applied_tags:
-                continue
-            if _t.get(tag) != baseline:
-                changed.append((tag, _t.get(tag), baseline))
-                _t[tag] = baseline
-
-    if changed:
-        summary = ", ".join(f"{t} {o:g}->{c:g}" for t, o, c in changed)
-        print(f"[WEIGHT OVERRIDES] {len(changed)} tag(s) adjusted this cycle ({summary})")
-
-    # Stamp applied_at on any entry this cycle actually used but that doesn't
-    # have one yet (first live reload after approval, or migrating an entry
-    # written before this field existed).
-    if data is not None:
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        need_stamp = False
+        deltas = {}
         for entry in entries:
-            if entry.get("tag") in applied_tags and not entry.get("applied_at"):
-                entry["applied_at"] = now_str
-                need_stamp = True
-        if need_stamp:
-            data["entries"] = entries
-            _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+            try:
+                tag = entry["tag"]
+                delta = float(entry["delta"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            deltas[tag] = deltas.get(tag, 0.0) + delta
 
-    _WEIGHT_OVERRIDES_LIVE_APPLIED_TAGS = applied_tags
+        # PHASE 6A: an override applies to EITHER table (CONFLUENCE_SCORES or
+        # SCAN_WEIGHTS) using the SAME baseline-relative clamp math. A tag present
+        # in BOTH tables is applied to both. A tag in neither baseline is ignored.
+        _WEIGHT_TABLES = ((CONFLUENCE_SCORES, _CONFLUENCE_BASELINE),
+                           (SCAN_WEIGHTS, _SCAN_WEIGHTS_BASELINE))
+
+        changed = []
+        applied_tags = set()
+        for tag, total_delta in deltas.items():
+            _baseline_for_tag = None
+            for _t, _b in _WEIGHT_TABLES:
+                if tag in _b:
+                    _baseline_for_tag = _b
+                    break
+            if _baseline_for_tag is None:
+                print(f"[WEIGHT OVERRIDES] tag '{tag}' not in CONFLUENCE_SCORES/SCAN_WEIGHTS -- ignored (never added as a new key)")
+                continue
+            applied_tags.add(tag)
+            for _t, _b in _WEIGHT_TABLES:
+                if tag not in _b:
+                    continue
+                baseline = _b[tag]
+                clamped = max(0, min(2 * baseline + 2, baseline + total_delta))
+                if _t.get(tag) != clamped:
+                    changed.append((tag, _t.get(tag), clamped))
+                    _t[tag] = clamped
+
+        # Every baseline tag NOT covered by a valid entry this cycle must be
+        # restored to baseline -- this is what makes "remove the entry" (or delete
+        # the whole file) a clean revert rather than a stuck value.
+        for _t, _b in _WEIGHT_TABLES:
+            for tag, baseline in _b.items():
+                if tag in applied_tags:
+                    continue
+                if _t.get(tag) != baseline:
+                    changed.append((tag, _t.get(tag), baseline))
+                    _t[tag] = baseline
+
+        if changed:
+            summary = ", ".join(f"{t} {o:g}->{c:g}" for t, o, c in changed)
+            print(f"[WEIGHT OVERRIDES] {len(changed)} tag(s) adjusted this cycle ({summary})")
+
+        # Stamp applied_at on any entry this cycle actually used but that doesn't
+        # have one yet (first live reload after approval, or migrating an entry
+        # written before this field existed).
+        if data is not None:
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            need_stamp = False
+            for entry in entries:
+                if entry.get("tag") in applied_tags and not entry.get("applied_at"):
+                    entry["applied_at"] = now_str
+                    need_stamp = True
+            if need_stamp:
+                data["entries"] = entries
+                _atomic_write_json(WEIGHT_OVERRIDES_FILE, data)
+
+        _WEIGHT_OVERRIDES_LIVE_APPLIED_TAGS = applied_tags
 
 
 _reload_weight_overrides()
@@ -4098,6 +4081,25 @@ def _load_journal():
             return json.load(f)
     except Exception:
         return []
+
+
+_JOURNAL_LOCK = threading.Lock()  # LEAD-ARCHITECT (2026-07-14): see _save_journal_atomic
+
+
+def _save_journal_atomic(data):
+    """Crash-safe write for chev_journal.json -- same temp-file + os.replace pattern
+    as _atomic_write_json (dexter.py:844), duplicated here rather than reused because
+    that helper takes a path+data pair and this one is journal-specific by convention
+    with _load_journal(). Callers MUST hold _JOURNAL_LOCK across their own
+    _load_journal() -> mutate -> _save_journal_atomic() span -- this function alone
+    only makes the WRITE itself atomic (no half-written file on crash); the caller's
+    lock is what prevents two writers (a manual close + a background partial-TP/
+    post-mortem write, for example) from both reading the same 'before' state and one
+    silently clobbering the other's addition. Never touches jane_journal.json."""
+    tmp_path = JOURNAL_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp_path, JOURNAL_PATH)
 
 
 def _is_duplicate_journal_entry(symbol, entry_price, sl, tp, journal, lookback=30, tol=0.0005):
@@ -5619,13 +5621,13 @@ def _do_postmortem(trade, outcome, pnl, exit_price):
         "shadow_combo_match": trade.get("shadow_combo_match", ""),
     }
     try:
-        journal = _load_journal()
-        if _is_duplicate_journal_entry(trade["symbol"], trade["entry"], trade["sl"], trade["tp"], journal):
-            print(f"[Journal] Duplicate detected for {trade['symbol']} (entry={trade['entry']} SL={trade['sl']} TP={trade['tp']}) — skipping write.")
-            return
-        journal.append(entry)
-        with open(JOURNAL_PATH, "w", encoding="utf-8") as f:
-            json.dump(journal, f, indent=2)
+        with _JOURNAL_LOCK:
+            journal = _load_journal()
+            if _is_duplicate_journal_entry(trade["symbol"], trade["entry"], trade["sl"], trade["tp"], journal):
+                print(f"[Journal] Duplicate detected for {trade['symbol']} (entry={trade['entry']} SL={trade['sl']} TP={trade['tp']}) — skipping write.")
+                return
+            journal.append(entry)
+            _save_journal_atomic(journal)
         print(f"[Journal] Post-mortem saved for {trade['symbol']} ({outcome}). Total: {len(journal)} entries.")
         compute_validation_kpi()
         icon = "✓" if outcome == "WIN" else ("➖" if outcome == "SCRATCH" else "✗")
@@ -6330,10 +6332,6 @@ def _rsi_50_cross(df):
     return None
 
 
-def find_swing_points_indexed(df, window=3, threshold_pct=0.3, confirm_window=8):
-    return _find_swing_pivots(df)
-
-
 def detect_rsi_divergence(df):
     if "RSI" not in df.columns:
         return []
@@ -6649,23 +6647,6 @@ def _aggregate_orderbooks(symbol):
         "multi_exchange_bid_walls": multi_bid,
         "multi_exchange_ask_walls": multi_ask,
     }
-
-
-def _fetch_binance_futures_data(symbol):
-    """Fetch open interest and funding rate from Binance perpetual futures."""
-    try:
-        clean = symbol.replace("/", "").upper()
-        oi_r = requests.get("https://fapi.binance.com/fapi/v1/openInterest",
-                             params={"symbol": clean}, timeout=5)
-        fr_r = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex",
-                             params={"symbol": clean}, timeout=5)
-        return {
-            "open_interest": float(oi_r.json().get("openInterest", 0)),
-            "funding_rate":  float(fr_r.json().get("lastFundingRate", 0)),
-        }
-    except Exception:
-        return None
-
 
 
 
@@ -7440,12 +7421,6 @@ def _detect_vp_anchor(df, max_lookback=200, pivot_bars=5, recent_window=40):
         })
 
     return None
-
-
-def _ca_find_structure_start(df, **kwargs):
-    """Thin wrapper — returns candle index only. Call _detect_auction_anchor for the full dict."""
-    result = _detect_auction_anchor(df, **kwargs)
-    return result["idx"] if result else None
 
 
 def _ca_volume_profile(df, start_idx, end_idx, n_bins=24):
@@ -9465,7 +9440,7 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                         bias_tag += "+vol"
                     pattern_reasons.append(bias_tag)
         except Exception as _pe:
-            pass
+            print(f"[Dexter] pattern engine scoring failed for {symbol}/{primary_tf}: {_pe}")
 
         # ── Bollinger Band signals ────────────────────────────────────────────
         # Uses %B = (price - lower) / (upper - lower) — self-normalizing across
@@ -9507,8 +9482,8 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                 # Context only, like RSI 50-cross — the playbooks all say do NOT enter
                 # during a squeeze, so it must not argue for entry via the score.
                 bb_reasons.append(f"BB squeeze (width {_bbw:.2f}%, context, 0pt)")
-        except Exception:
-            pass
+        except Exception as _bbe:
+            print(f"[Dexter] Bollinger Band scoring failed for {symbol}/{primary_tf}: {_bbe}")
 
         # ── Volume Profile proximity (anchor-based: 4H + 1H only) ───────────────
         # Range starts at the structural first-anchor of each TF (same as Arsenal).
@@ -9547,8 +9522,8 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                         _unconf_note = "unconfirmed-anchor, " if not _anc_confirmed else ""
                         vp_score += _pts_awarded
                         vp_reasons.append(f"VP {_lbl} {_vp_tf} ({_dist:.2f}% away ≤{_vp_prox:.2f}% prox, {_unconf_note}{_pts_awarded}pt)")
-        except Exception:
-            pass
+        except Exception as _vpe:
+            print(f"[Dexter] Volume Profile scoring failed for {symbol}/{primary_tf}: {_vpe}")
 
         # ── Distance from level ───────────────────────────────────────────────
         # Find the dominant level being tested
@@ -9736,13 +9711,6 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
 # ============================================================
 # CHEV COMMUNICATION
 # ============================================================
-
-def _calc_confluence_score(tags_str):
-    """Return (score, [tags]) from a comma-separated confluence tag string."""
-    tags = [t.strip().lower() for t in tags_str.split(",") if t.strip()]
-    score = sum(CONFLUENCE_SCORES.get(t, 0) for t in tags)
-    return score, tags
-
 
 _CRYPTO_CORR_SYMBOLS = {
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "XLMUSDT",
@@ -10716,40 +10684,6 @@ def _maybe_send_bos_alert(trade, current_price):
         print(f"[BOS Alert] Error for {trade.get('symbol','?')}: {e}")
 
 
-# Binance Futures taker: 0.05% per side × 2 = 0.10% round-trip on notional
-# Slippage: ~0.02% per side on liquid Binance pairs = 0.04% round-trip
-# Forex: FXPro avg ~1 pip spread on major pairs + slippage (~0.01% per side = 0.02% RT)
-# Stocks: typical retail 0.01% per side = 0.02% RT + slippage
-# Funding: 0.01% per 8h (Binance standard interval: 00:00 / 08:00 / 16:00 UTC)
-_TRADE_COST_RATES = {
-    "crypto": {"fee_rt": 0.0010, "slip_rt": 0.0004},  # 0.10% Binance taker + 0.04% slip
-    "forex":  {"fee_rt": 0.0002, "slip_rt": 0.0002},  # FXPro ~1 pip avg + slippage = 0.04%
-    "stock":  {"fee_rt": 0.0002, "slip_rt": 0.0002},  # retail broker + slippage = 0.04%
-}
-_FUNDING_RATE_8H = 0.0001  # 0.01% per 8-hour Binance funding period
-
-
-def _sim_trading_cost(notional_usd, asset_type, trade_type="day", open_ts=None):
-    """Return simulated cost to deduct from PnL when closing `notional_usd` of a position.
-    Includes: round-trip fees + slippage + Binance funding for crypto swings."""
-    rates = _TRADE_COST_RATES.get(asset_type, _TRADE_COST_RATES["crypto"])
-    cost  = notional_usd * (rates["fee_rt"] + rates["slip_rt"])
-
-    # Funding: crypto perpetuals only, counted in whole 8h Binance settlement periods
-    if asset_type == "crypto" and trade_type == "swing" and open_ts:
-        try:
-            opened = datetime.fromisoformat(open_ts.replace("Z", "+00:00"))
-            if opened.tzinfo is None:
-                opened = opened.replace(tzinfo=timezone.utc)
-            hours_held      = (datetime.now(timezone.utc) - opened).total_seconds() / 3600
-            funding_periods = int(hours_held / 8)
-            cost += notional_usd * _FUNDING_RATE_8H * funding_periods
-        except Exception:
-            pass
-
-    return round(max(0.0, cost), 2)
-
-
 def _execute_partial_close(trade, price, fraction, close_type, r_at_milestone):
     """Close `fraction` of a running trade at current price (0.25 = TAKE25, 0.50 = TAKE50).
     Updates balance, shrinks position, logs a PARTIAL journal entry."""
@@ -10813,10 +10747,10 @@ def _execute_partial_close(trade, price, fraction, close_type, r_at_milestone):
         "open_ts":          trade.get("open_ts", ""),
     }
     try:
-        _j = _load_journal()
-        _j.append(_entry)
-        with open(JOURNAL_PATH, "w", encoding="utf-8") as _f:
-            json.dump(_j, _f, indent=2)
+        with _JOURNAL_LOCK:
+            _j = _load_journal()
+            _j.append(_entry)
+            _save_journal_atomic(_j)
     except Exception as _pe:
         print(f"[PARTIAL TP] Journal write failed: {_pe}")
 
@@ -11197,24 +11131,6 @@ def _fmt_p(price):
     if price >= 0.01:
         return f"{price:.5f}".rstrip("0").rstrip(".")
     return f"{price:.8f}".rstrip("0").rstrip(".")
-
-
-def _format_trade_signal(symbol, trade, chev_take=""):
-    """
-    Format a trade signal in Chev's voice — 3 clean lines, no fluff.
-    Optionally appends Chev's one-sentence take if it's short enough.
-    """
-    direction  = trade.get("direction", "long").capitalize()
-    entry      = trade.get("entry", 0)
-    sl         = trade.get("sl", 0)
-    tp         = trade.get("tp", 0)
-    trade_type = trade.get("trade_type", "day")
-    tags       = " · ".join(t.strip() for t in trade.get("tags", "").split(",") if t.strip())
-    line3      = f"{trade_type}. {tags}." if tags else f"{trade_type}."
-    msg = f"{symbol}. {direction}.\nEntry {_fmt_p(entry)} · SL {_fmt_p(sl)} · TP {_fmt_p(tp)}\n{line3}"
-    if chev_take and len(chev_take) <= 120:
-        msg += f"\n{chev_take}"
-    return msg
 
 
 # ── Economic calendar ────────────────────────────────────────────────────────
@@ -12195,10 +12111,10 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
                         "open_ts":          trade.get("open_ts", ""),
                     }
                     try:
-                        _j = _load_journal()
-                        _j.append(_partial_entry)
-                        with open(JOURNAL_PATH, "w", encoding="utf-8") as _f:
-                            json.dump(_j, _f, indent=2)
+                        with _JOURNAL_LOCK:
+                            _j = _load_journal()
+                            _j.append(_partial_entry)
+                            _save_journal_atomic(_j)
                     except Exception as _pe:
                         print(f"[PARTIAL TP] Journal write failed: {_pe}")
 
@@ -12351,10 +12267,10 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
                     "open_ts":          trade.get("open_ts", ""),
                 }
                 try:
-                    _j = _load_journal()
-                    _j.append(_partial_entry)
-                    with open(JOURNAL_PATH, "w", encoding="utf-8") as _f:
-                        json.dump(_j, _f, indent=2)
+                    with _JOURNAL_LOCK:
+                        _j = _load_journal()
+                        _j.append(_partial_entry)
+                        _save_journal_atomic(_j)
                 except Exception as _pe:
                     print(f"[PARTIAL TP] Journal write failed: {_pe}")
 
@@ -12600,10 +12516,10 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
                 "open_ts":          trade.get("open_ts", ""),
             }
             try:
-                _j = _load_journal()
-                _j.append(_partial_entry)
-                with open(JOURNAL_PATH, "w", encoding="utf-8") as _f:
-                    json.dump(_j, _f, indent=2)
+                with _JOURNAL_LOCK:
+                    _j = _load_journal()
+                    _j.append(_partial_entry)
+                    _save_journal_atomic(_j)
             except Exception as _pe:
                 print(f"[PARTIAL TP] Journal write failed: {_pe}")
 
@@ -13783,6 +13699,18 @@ while True:
                                     _g_res        = _g_res2
                                     _g_accepted   = True
                                     print(f"[{datetime.now()}] GAUNTLET RETRY -- {result['symbol']}: revision accepted.")
+                                else:
+                                    # LEAD-ARCHITECT (2026-07-14): the retry's OWN rejection was
+                                    # previously discarded here -- _g_res/_g_rc/_g_rr stayed pointed
+                                    # at the ORIGINAL (pre-revision) rejection, so a revision that
+                                    # fixed the first problem but failed a DIFFERENT gate check (e.g.
+                                    # widening the stop past ATR_FLOOR only to then fail NET_RR) was
+                                    # logged as if it failed for the first reason again. Update to the
+                                    # retry's real result before falling through to the shared log call.
+                                    _g_res = _g_res2
+                                    _g_rc  = _g_res2["reject_code"]
+                                    _g_rr  = _g_res2["reject_reason"]
+                                    print(f"[{datetime.now()}] GAUNTLET RETRY -- {result['symbol']}: revision also rejected ({_g_rc}): {_g_rr}")
                             elif _g_rp and not _g_rp.get("post"):
                                 # Chev chose to SKIP on the retry — let normal flow handle cooldown
                                 chev_response = _g_revised
