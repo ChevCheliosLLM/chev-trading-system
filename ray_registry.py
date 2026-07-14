@@ -438,6 +438,79 @@ def select_live(rays: List[RayRecord], current_bar_ts: int,
     return kept_all
 
 
+# ── Chev-facing formatting (Phase R4) ────────────────────────────────────────
+# FACT FRAMING ONLY: state where the ray is, where it will be, and its record.
+# No trade suggestions, no "this favours a long", no requirement language
+# ("wait for" / "must" / "confirm before"). The ray is information Chev MAY
+# use -- arithmetic is Dexter's, judgment is Chev's. Mirrors the style of
+# engines.py's format_invalidation_candidates_for_chev / format_validation_
+# candidates_for_chev: takes an already-computed list (the caller runs
+# select_live() and filters to one symbol/timeframe first -- this function
+# recomputes nothing), "none found"-style empty handling (here: nothing at
+# all -- a bare respected ray is common enough that a line on every single
+# escalation would be noise, unlike invalidation which the skip discipline
+# requires Chev to always see something for).
+
+def format_ray_block_for_chev(rays: List[RayRecord], current_price: float,
+                              timeframe: str, levels: Optional[List[Tuple[float, str]]] = None) -> str:
+    """
+    Build the "TRENDLINE RAY" text block. `rays` must already be select_live()-
+    filtered to a single (symbol, timeframe) -- at most 2 per side. `levels`
+    (optional) is the same flat (price, label) static-level list time_to_cross()
+    takes; omit it (checkpoint caller) to skip the crossing line entirely.
+    Returns "" when `rays` is empty -- nothing at all, not a "none found" line.
+
+    No ATR parameter: every value this renders (slope_norm, slope_raw,
+    horizon_bars, time_to_cross) is already ATR-normalized on the RayRecord
+    itself at reconcile() time by the caller -- there is nothing left here
+    that needs a fresh ATR.
+    """
+    if not rays:
+        return ""
+
+    now_ts = max(r.last_seen_ts for r in rays)
+    lines = ["TRENDLINE RAY:"]
+
+    for ray in rays:
+        side_word  = "resistance" if ray.side == "upper" else "support"
+        slope_word = ("rising" if ray.slope_norm > 0
+                      else "falling" if ray.slope_norm < 0 else "flat")
+        value_now  = _project_value(ray, now_ts)
+        h_bars     = horizon_bars(ray)
+        tf_seconds = _TF_SECONDS.get(timeframe, _TF_SECONDS["1h"])
+        h_hours    = round(h_bars * tf_seconds / 3600.0, 1)
+        value_h    = value_now + ray.slope_raw * h_bars
+        life_hours = round(ray.lifetime_span_bars * tf_seconds / 3600.0, 1)
+
+        lines.append(
+            f"  {slope_word} {side_word}: now {value_now:.5f}, ~{h_bars:.0f}c/{timeframe} "
+            f"(≈{h_hours}h) → {value_h:.5f}. Held {ray.respect_count}x, "
+            f"{ray.wick_rejection_count} wick-traps, {life_hours}h."
+        )
+
+        if levels:
+            crossings = time_to_cross(ray, value_now, levels)
+            if crossings:
+                nearest = crossings[0]
+                lines.append(f"    → {nearest['label']} in ~{nearest['bars']:.0f}c, tentative.")
+
+    upper = next((r for r in rays if r.side == "upper"), None)
+    lower = next((r for r in rays if r.side == "lower"), None)
+    if upper and lower and abs(upper.slope_norm - lower.slope_norm) <= SLOPE_MATCH_TOL:
+        u_now = _project_value(upper, now_ts)
+        l_now = _project_value(lower, now_ts)
+        u_h   = u_now + upper.slope_raw * horizon_bars(upper)
+        l_h   = l_now + lower.slope_raw * horizon_bars(lower)
+        pct_in = ((current_price - l_now) / (u_now - l_now) * 100.0) if (u_now - l_now) else 0.0
+        lines.append(
+            f"  channel: {l_now:.5f}-{u_now:.5f} now (price {pct_in:.0f}% through); "
+            f"horizon {l_h:.5f}-{u_h:.5f}."
+        )
+
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 # ── Concurrency ───────────────────────────────────────────────────────────────
 
 REGISTRY_LOCK = threading.Lock()
@@ -662,6 +735,51 @@ if __name__ == "__main__":
     check("11: concurrent independent load->mutate->save round trips under "
           "the lock lose no symbol's ray",
           set(_conc_loaded.keys()) == {_key(s, "1h", "upper") for s in _conc_symbols})
+
+    # ── 12. format_ray_block_for_chev (Phase R4) ─────────────────────────────
+    CHARS_PER_TOKEN = 3.5  # matches audit_context.py's own estimator exactly
+
+    check("12a: empty rays list -> empty string (nothing at all, not 'none found')",
+          format_ray_block_for_chev([], current_price=100.0, timeframe="1h") == "")
+
+    _fmt_upper = RayRecord(id="fu", symbol="BTCUSDT", timeframe="15m", side="upper",
+                           slope_raw=-0.5, slope_norm=-0.05, anchor_ts=T0, value_at_anchor=61500.0,
+                           born_ts=T0, last_seen_ts=T0, respect_count=4, wick_rejection_count=1,
+                           lifetime_span_bars=44)
+    _fmt_lower = RayRecord(id="fl", symbol="BTCUSDT", timeframe="15m", side="lower",
+                           slope_raw=0.4, slope_norm=0.04, anchor_ts=T0, value_at_anchor=61200.0,
+                           born_ts=T0, last_seen_ts=T0, respect_count=3, wick_rejection_count=2,
+                           lifetime_span_bars=40)
+    # Levels chosen to be within EACH ray's own horizon and ahead of its path,
+    # so both crossing lines actually render -- the true worst case (2 rays +
+    # channel + 2 crossings), not an accidental best case.
+    _fmt_levels = [(61495.0, "Fib 61.8% (golden pocket)"), (61203.2, "VP POC 4h")]
+    _worst_case_block = format_ray_block_for_chev(
+        [_fmt_upper, _fmt_lower], current_price=61350.0,
+        timeframe="15m", levels=_fmt_levels)
+    _worst_case_tokens = len(_worst_case_block) / CHARS_PER_TOKEN
+    check(f"12b: worst case (2 rays + channel + 2 crossings) <= 130 tokens "
+          f"(got {_worst_case_tokens:.0f})",
+          _worst_case_tokens <= 130)
+    check("12c: channel line renders (opposite sides, slopes within SLOPE_MATCH_TOL)",
+          "channel:" in _worst_case_block)
+    check("12d: both crossing lines render in the worst case",
+          _worst_case_block.count("tentative.") == 2)
+
+    # Checkpoint-style call: single ray, no levels -- no crossing/channel line,
+    # never crashes on the omitted optional argument.
+    _checkpoint_block = format_ray_block_for_chev([_fmt_lower], current_price=61250.0,
+                                                  timeframe="15m")
+    check("12e: single ray, no levels (checkpoint style) -> no crossing/channel line",
+          "tentative" not in _checkpoint_block and "channel:" not in _checkpoint_block)
+
+    # Fact-framing rule: no trade suggestions, no requirement language, no
+    # directional bias words -- this block states the ray's facts only.
+    _banned_phrases = ["must", "confirm before", "wait for", "favours", "should enter",
+                       "bullish", "bearish"]
+    _lower_block = _worst_case_block.lower()
+    check("12f: fact-framing -- no banned suggestion/requirement/bias language",
+          not any(p in _lower_block for p in _banned_phrases))
 
     failed = [n for n, ok in T if not ok]
     print(f"\n{len(T) - len(failed)}/{len(T)} tests passing")

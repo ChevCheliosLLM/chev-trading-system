@@ -10507,5 +10507,172 @@ RESTART: REQUIRED (dexter.py and labeller.py both changed).
 DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
 
 ================================================================================
+*** PHASE R4 — WHAT CHEV SEES (FACT FRAMING, BUDGETED) — 2026-07-14 —
+RESTART: YES, DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ***
+================================================================================
+
+CONTEXT: the ray registry (R2) and its wiring into the real scan loop (R3)
+give Dexter persistent ray identity and trust, but Chev never saw any of it
+-- this phase surfaces it, as plain stated fact, in the two places Chev
+reads: the escalation message (ask_chev_to_judge) and the 30-minute
+checkpoint (ask_chev_manage_trade). No ray tool exists for Chev to call, so
+the checkpoint gets an inline DATA block, not a tool instruction. A hard
+token budget already governs the escalation message (≤14k combined, ≤8k
+brief, proven by the standalone audit_context.py) -- this phase had to prove
+the new block fits inside it, not just claim it does.
+
+WHAT CHANGED AND WHY:
+
+1. ray_registry.py -- format_ray_block_for_chev(rays, current_price,
+   timeframe, levels=None), mirroring engines.py's format_invalidation_
+   candidates_for_chev / format_validation_candidates_for_chev style: takes
+   an already select_live()-filtered, single-(symbol,timeframe) list (this
+   function recomputes nothing), returns "" when empty -- not a "none
+   found" line, since a bare respected ray is common enough that a line on
+   every escalation would be noise (invalidation always shows something
+   because the skip discipline requires it; a ray doesn't). Per ray: slope
+   class + side, value now, value at horizon (in the timeframe's own bar
+   count with a wall-clock hour estimate), lifetime record (respected Nx,
+   M wick-traps, over Hh), and the nearest crossing if a `levels` list was
+   given. One additional channel line when both an upper and lower ray are
+   present with slope_norms within SLOPE_MATCH_TOL of each other -- both
+   boundary values now and at horizon, plus price's position within the
+   channel as a percentage, descriptive only. FACT FRAMING ONLY, verified by
+   a self-test check (12f) that greps the rendered block for a banned-word
+   list (must/confirm before/wait for/favours/bullish/bearish) and asserts
+   none appear -- not just asserted in a comment. CAUGHT BEFORE SHIPPING: the
+   function originally took an `atr` parameter that nothing in its body
+   actually used (every value it renders is already ATR-normalized on the
+   RayRecord at reconcile() time) -- removed rather than left as dead
+   weight, which simplified both call sites (no ATR fetch needed at all in
+   the checkpoint caller).
+
+2. dexter.py, ask_chev_to_judge() -- ray_block computed after validation_
+   block, injected via f"{ray_block}" immediately after f"{validation_
+   block}". Read the _near_sup/_near_res long/short/both selection logic
+   first (invalidation/validation build "(IF LONG)"/"(IF SHORT)" duplicate
+   variants because those candidates are PRICED FROM ENTRY, which differs
+   by direction when Chev hasn't committed to one yet) -- concluded, and
+   state here explicitly, that the ray block does NOT need that
+   duplication: ray facts (value/horizon/record) aren't priced from entry
+   and don't depend on which direction Chev eventually picks, so a single
+   block covering both sides is correct, not a shortcut. The static levels
+   for the crossing check reuse result["support"]/["resistance"]/["fibs"]
+   (already computed by scan_pair_tf for this exact symbol/timeframe, not
+   recomputed). Registry access is read-only (no lock -- save_registry's
+   atomic os.replace means a concurrent writer can never produce a torn
+   read); wrapped in try/except mirroring the existing failure-handling
+   style, never raises, falls back to "".
+
+3. dexter.py, ask_chev_manage_trade() -- ray_checkpoint_block computed once
+   (shared by both the SIP-active and normal branches) right after
+   tool_instructions is built, spliced into BOTH message variants via
+   f"{ray_checkpoint_block}" immediately after f"{tool_instructions}".
+   Explicitly labelled "DATA Dexter already fetched (no tool call needed for
+   this):" when non-empty -- never phrased as an instruction to call
+   anything, per the phase's explicit rule (no ray tool exists for Chev).
+   No `levels` passed (ask_chev_manage_trade doesn't have Fib/SR/VP in scope
+   the way scan_pair_tf does, and recomputing them for a periodic checkpoint
+   isn't worth it) -- format_ray_block_for_chev's optional argument already
+   handles that cleanly (ray facts still shown, no crossing line). ATR for
+   select_live()'s distinctness threshold comes from trade["atr_at_entry"]
+   (a real snapshot already stored at entry time, confirmed by grep -- NOT
+   an invented proxy; an earlier draft used abs(entry-original_SL) as a
+   stand-in for ATR before this was caught and replaced during
+   implementation, since risk distance is not ATR and that would have been
+   a genuinely unjustified approximation).
+
+4. audit_context.py -- extended per Task 4:
+     a. Added a worst-case ray_block sample (2 live rays, opposite sides,
+        slopes within SLOPE_MATCH_TOL so the channel line renders, 2
+        crossings -- levels deliberately chosen to sit within EACH ray's
+        own horizon so both crossing lines actually render, not an
+        accidental best case) using the real format_ray_block_for_chev,
+        imported from ray_registry.py (safe: that module has zero dexter
+        import, zero import-time side effects, confirmed by re-reading it).
+        Spliced into the escalation msg reproduction at the same relative
+        position as dexter.py's real change, and added to the existing
+        per-section token inventory.
+     b. Added a NEW "PHASE R4 -- CHECKPOINT COPY" section -- this did not
+        exist before this phase; the checkpoint message had never been
+        measured here at all. Reproduces tool_instructions verbatim plus
+        the checkpoint's ray block (same synthetic rays, no levels, wrapped
+        in the same "DATA Dexter already fetched" label dexter.py now
+        prepends) and prints its own token total. Stated explicitly: the
+        14k/8k gates are defined for the ESCALATION message specifically --
+        there is no separately-defined budget for the checkpoint message,
+        so this section makes its real cost visible without inventing a
+        gate nobody set.
+
+BENEFIT: Chev can now read, as plain stated fact with no framing pressure,
+where a trusted diagonal line sits, where it's projected to be by the time a
+typical trade plays out, how many times it's actually proven itself, and
+whether its path is heading toward another known level -- exactly the
+"predict the future" capability this whole build exists for -- without a
+single word of it being coded as a suggestion, a requirement, or a directive
+Chev is expected to obey.
+
+SECOND-PASS REVIEW (Lead AI Quant Strategist / Senior Python Architect pass,
+re-reading the diff cold): traced every module touched directly (ray_
+registry.py's new formatter, dexter.py's two injection points, audit_
+context.py's two new sections) and indirectly (nothing else reads ray_block/
+ray_checkpoint_block; grepped to confirm). Two real issues caught and fixed
+during implementation itself, before this was reported: (1) the dead `atr`
+parameter described above; (2) the checkpoint's first-draft ATR source
+(entry-to-stop distance) was not actually ATR and was replaced with the real
+trade["atr_at_entry"] snapshot once its existence was confirmed by grep
+rather than assumed. Re-checked after fixing: division-by-zero guarded in
+the channel percentage (u_now == l_now edge case); the escalation's and
+checkpoint's try/except blocks both fall back to "" on any failure, matching
+the existing failure-handling style exactly; confirmed result["support"]/
+["resistance"] shape (a dict with "price") matches what scan_pair_tf
+actually returns, not assumed from the key name. One pre-existing pattern
+reused as-is, not re-litigated: select_live() is still called against the
+whole registry then filtered to one symbol/timeframe (same known,
+documented, growing-but-not-yet-material inefficiency flagged in the R3
+handoff) -- not fixed here, out of scope for a "what Chev sees" phase.
+
+VERIFICATION: `python -m py_compile dexter.py labeller.py ray_registry.py
+audit_context.py` -> exit 0 on all four. `python -X utf8 derivs.py` ->
+12/12 PASS (unchanged). `python labeller.py` -> 32/32 PASS (unchanged --
+this phase never touches labeller.py). `python -X utf8 ray_registry.py` ->
+28/28 PASS (22 existing + 6 new formatter checks: empty-string case;
+worst-case token count <=130 -- measured at 113; channel line renders;
+both crossing lines render; single-ray/no-levels checkpoint-style call
+omits crossing/channel; fact-framing banned-word check). `python -X utf8
+audit_context.py` -> exit 0. Grep-confirmed f"{ray_block}" lands exactly
+once in ask_chev_to_judge's msg and exactly once in audit_context.py's msg
+reproduction; f"{ray_checkpoint_block}" lands exactly twice in dexter.py
+(both ask_chev_manage_trade branches, as intended).
+
+TOKEN BUDGET RESULT (audit_context.py, re-run after this phase's changes):
+  Ray block (escalation, worst case): 394 chars / 113 tokens (validation
+    block precedent was 134 -- comparable magnitude, real headroom to the
+    130-token gate this phase set for itself).
+  Brief (worst case, unaffected by this phase): 4,283 tokens -- under the
+    8,000 gate by 3,717.
+  COMBINED TOTAL: system_prompt (1,679) + wrapper (4,235, now including the
+    ray block) + brief (4,283) = 10,197 tokens -- under the 14,000 gate by
+    3,803. Both gates pass with real headroom, not a near-miss.
+  Checkpoint copy (new section, no separately-defined gate): tool_
+    instructions (280 tokens) + ray block, no levels (105 tokens) = 385
+    tokens for the two pieces this phase actually touches there
+    (market_brief itself is a separate live fetch, not measured, same
+    convention as the escalation's own candle-dump brief).
+
+REMAINING UNCERTAIN / MANUAL VERIFICATION FOR KEV: this phase proves the
+formatter's output, the budget math, and the wiring by reading and by
+offline self-test -- nobody has watched a real escalation or checkpoint
+message with an actual live ray in it yet. After restart, once a real ray
+has accumulated some respect history, worth reading one real escalation and
+one real checkpoint message end-to-end and judging whether the fact-framing
+actually reads as neutral in practice (not just passing a banned-word grep)
+and whether the wording is genuinely useful at a glance rather than just
+correct.
+
+RESTART: REQUIRED (dexter.py and ray_registry.py both changed).
+DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
 END OF HANDOFF
 ================================================================================

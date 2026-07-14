@@ -10442,6 +10442,44 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360, force_tak
             engines.format_validation_candidates_for_chev(_vc_candidates_for("short"), " (IF SHORT)")
         )
 
+    # ── Trendline Ray block (Phase R4) — FACT FRAMING ONLY ────────────────────
+    # Unlike invalidation/validation, ray facts (value now/at horizon, lifetime
+    # record) are NOT priced from entry -- they don't depend on which direction
+    # Chev eventually picks, so no _near_sup/_near_res "(IF LONG)"/"(IF SHORT)"
+    # duplication is needed here (that pattern exists specifically because
+    # invalidation/validation prices differ by direction; ray facts don't).
+    # The static levels for the crossing check reuse result["support"]/
+    # ["resistance"]/["fibs"] -- already computed by scan_pair_tf, same
+    # symbol/timeframe this escalation is about, not recomputed. Read-only
+    # registry access (no lock needed: save_registry's atomic os.replace means
+    # a concurrent writer can never produce a torn read). Never breaks an
+    # escalation: any failure here is caught and logged, ray_block falls back
+    # to "".
+    ray_block = ""
+    try:
+        _rb_atr = result.get("atr")
+        if _rb_atr and _rb_atr > 0:
+            _rb_registry = ray_registry.load_registry()
+            _rb_rays = ray_registry.select_live(
+                [r for _rs in _rb_registry.values() for r in _rs],
+                current_bar_ts=int(time.time()),
+                atr_by_key={(symbol, primary_tf): _rb_atr})
+            _rb_rays = [r for r in _rb_rays if r.symbol == symbol and r.timeframe == primary_tf]
+            if _rb_rays:
+                _rb_levels = (
+                    ([(result["support"]["price"], "Support")] if result.get("support") else [])
+                    + ([(result["resistance"]["price"], "Resistance")] if result.get("resistance") else [])
+                    + [(p, f"Fib {name}") for name, p in (result.get("fibs") or {}).items()]
+                )
+                ray_block = ray_registry.format_ray_block_for_chev(
+                    _rb_rays, current_price=result.get("current_price") or confluence_zone,
+                    timeframe=primary_tf, levels=_rb_levels)
+    except Exception:
+        import traceback
+        print(f"[ray_registry] FAILED (escalation block) for {symbol}/{primary_tf}:")
+        traceback.print_exc()
+        ray_block = ""
+
     msg = (
         f"Hey Chev, Dexter here with REAL computed numbers. I've given you the full market data above — candles, volume, all levels. Study it yourself and make your own read.\n\n"
         f"I've detected a confluence zone at {confluence_zone:.5f} with {result['count']} factor(s) aligning: {', '.join(result['reasons'])}.\n"
@@ -10451,6 +10489,7 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360, force_tak
         f"{pattern_block}"
         f"{invalidation_block}"
         f"{validation_block}"
+        f"{ray_block}"
         f"{geometry_block}"
         f"{playbook_block}"
         f"{journal_block}"
@@ -11172,6 +11211,40 @@ def ask_chev_manage_trade(trade, current_price, bos_paragraph=None):
         f"Call these tools. Base every decision on what they show — not on memory or assumptions.\n\n"
     )
 
+    # ── Trendline Ray checkpoint block (Phase R4) ─────────────────────────
+    # Inline DATA, not a tool instruction -- no ray tool exists for Chev to
+    # call, so this must be data Dexter already fetched, clearly labelled as
+    # such rather than phrased as "call this tool". Reuses the same
+    # formatter the escalation message uses; read-only registry access
+    # (save_registry's atomic os.replace means no lock is needed for a
+    # read). No static levels passed here -- ask_chev_manage_trade doesn't
+    # have Fib/SR/VP in scope the way scan_pair_tf does, and recomputing
+    # them here isn't worth it for a periodic checkpoint -- the formatter's
+    # optional `levels` argument already handles that (no crossing line,
+    # ray value/horizon/record still shown). Never breaks a checkpoint: any
+    # failure here is caught and logged, falls back to "".
+    ray_checkpoint_block = ""
+    try:
+        _rcb_atr = trade.get("atr_at_entry") or trade.get("atr") or 0
+        _rcb_registry = ray_registry.load_registry()
+        _rcb_rays = ray_registry.select_live(
+            [r for _rs in _rcb_registry.values() for r in _rs],
+            current_bar_ts=int(_now_ts),
+            atr_by_key={(symbol, primary_tf): _rcb_atr})
+        _rcb_rays = [r for r in _rcb_rays if r.symbol == symbol and r.timeframe == primary_tf]
+        if _rcb_rays:
+            ray_checkpoint_block = ray_registry.format_ray_block_for_chev(
+                _rcb_rays, current_price=current_price, timeframe=primary_tf)
+            if ray_checkpoint_block:
+                ray_checkpoint_block = (
+                    "DATA Dexter already fetched (no tool call needed for this):\n"
+                    + ray_checkpoint_block)
+    except Exception:
+        import traceback
+        print(f"[ray_registry] FAILED (checkpoint block) for {symbol}/{primary_tf}:")
+        traceback.print_exc()
+        ray_checkpoint_block = ""
+
     _breathe = round(0.5 * tp_range, 5) if tp_range else '?'
 
     if sip_active:
@@ -11186,6 +11259,7 @@ def ask_chev_manage_trade(trade, current_price, bos_paragraph=None):
             f"  TP target:      {trade['tp']}\n"
             f"  Live PnL:       ${trade.get('live_pnl', 0):+.2f}\n\n"
             f"{tool_instructions}"
+            f"{ray_checkpoint_block}"
             f"YOUR TWO INDEPENDENT LEVERS — decide each one separately:\n\n"
             f"  LEVER 1 — PROFIT FLOOR (currently {trade['sl']}):\n"
             f"    Your call: should the floor move {'higher' if is_long else 'lower'} to lock in more profit?\n"
@@ -11229,6 +11303,7 @@ def ask_chev_manage_trade(trade, current_price, bos_paragraph=None):
             )
         msg += (
             f"{tool_instructions}"
+            f"{ray_checkpoint_block}"
             f"YOUR TWO INDEPENDENT LEVERS — decide each one separately:\n\n"
             f"  LEVER 1 — STOP LOSS (currently {trade['sl']}):\n"
             f"    Your call: should the SL move to better protect this trade?\n"

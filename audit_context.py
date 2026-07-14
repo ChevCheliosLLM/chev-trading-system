@@ -23,6 +23,7 @@ import sys
 
 from engines import (compute_invalidation_candidates, format_invalidation_candidates_for_chev,
                      compute_validation_candidates, format_validation_candidates_for_chev)
+from ray_registry import RayRecord, format_ray_block_for_chev
 
 # Make stdout encoding-safe: the reproduced brief contains non-ASCII chars (⚠, →,
 # ★, box-drawing). On a non-UTF-8 console or when redirected to a file with the
@@ -187,6 +188,26 @@ _vc_candidates = compute_validation_candidates(
 )
 validation_block = format_validation_candidates_for_chev(_vc_candidates)
 
+# 5d) Trendline Ray block (Phase R4) — worst realistic case: 2 live rays
+# (upper+lower, opposite sides, slopes within SLOPE_MATCH_TOL so the channel
+# line also renders) + 2 crossings, one per ray, each level chosen to sit
+# within that ray's own horizon so both crossing lines actually render.
+# Same synthetic numbers as ray_registry.py's own self-test worst-case check
+# (12b), reproduced here rather than imported so this audit measures the
+# real formatter's real output, not a hand-typed guess at its size.
+_ray_T0 = 1_700_000_000
+_ray_upper = RayRecord(id="au", symbol="BTCUSDT", timeframe="15m", side="upper",
+                       slope_raw=-0.5, slope_norm=-0.05, anchor_ts=_ray_T0, value_at_anchor=61500.0,
+                       born_ts=_ray_T0, last_seen_ts=_ray_T0, respect_count=4, wick_rejection_count=1,
+                       lifetime_span_bars=44)
+_ray_lower = RayRecord(id="al", symbol="BTCUSDT", timeframe="15m", side="lower",
+                       slope_raw=0.4, slope_norm=0.04, anchor_ts=_ray_T0, value_at_anchor=61200.0,
+                       born_ts=_ray_T0, last_seen_ts=_ray_T0, respect_count=3, wick_rejection_count=2,
+                       lifetime_span_bars=40)
+_ray_levels = [(61495.0, "Fib 61.8% (golden pocket)"), (61203.2, "VP POC 4h")]
+ray_block = format_ray_block_for_chev(
+    [_ray_upper, _ray_lower], current_price=61350.0, timeframe="15m", levels=_ray_levels)
+
 exploration_note = (
     "EXPLORATION MODE — DATA-COLLECTION PHASE (paper account):\n"
     "  This is a deliberate data-collection phase. Losses are tuition here — silence teaches nothing.\n"
@@ -218,6 +239,7 @@ msg = (
     f"{pattern_block}"
     f"{invalidation_block}"
     f"{validation_block}"
+    f"{ray_block}"
     f"{geometry_block}"
     f"{playbook_block}"
     f"{journal_block}"
@@ -354,6 +376,7 @@ _sections = {
 }
 print("\nSECTION-BY-SECTION INVENTORY (candidates for a future, sign-off'd diet pass):")
 _sections["Validation candidates block (reward-side mirror, Phase 3b)"] = validation_block
+_sections["Trendline Ray block (Phase R4, escalation, worst case)"] = ray_block
 for name, text in _sections.items():
     print(f"  {name:55s} chars={len(text):6,}  est_tokens={est_tokens(text):6,.0f}")
 
@@ -703,3 +726,69 @@ print("\n" + "=" * 70)
 print("RENDERED SAMPLE BRIEF (crypto, post-cut: order book top-5/side, 1D = last-5-closes fallback)")
 print("=" * 70)
 print("\n".join(t for _, t in _brief_render))
+
+# =============================================================================
+# PHASE R4 -- CHECKPOINT COPY: the Trendline Ray block ALSO appears in
+# ask_chev_manage_trade's periodic checkpoint (dexter.py), a SEPARATE message
+# from the escalation this whole script otherwise measures. This section did
+# not exist before Phase R4 -- added now specifically because Task 3 puts the
+# ray block there too, and the handoff shows this file has lied before when
+# text moved without the audit following (2026-07-08 audit-truthfulness fix).
+# This is NOT the full checkpoint message (market_brief/_build_management_brief
+# is a separate live fetch, same convention as the escalation's own big candle
+# brief being measured separately above) -- just tool_instructions + the ray
+# block, reproduced verbatim from dexter.py's ask_chev_manage_trade, to show
+# where the ray block sits and what it costs in THIS context. NOTE: the 14k/
+# 8k gates below are defined for the escalation message specifically -- there
+# is no separately-defined budget gate for the checkpoint message; this
+# section exists to make its real cost visible, not to grade it against a
+# number nobody has set.
+# =============================================================================
+print("\n" + "=" * 70)
+print("PHASE R4 -- CHECKPOINT COPY (ask_chev_manage_trade)")
+print("=" * 70)
+
+_symbol_cp     = "BTCUSDT"
+_primary_tf_cp = "15m"
+_is_long_cp    = True
+
+# tool_instructions -- copied verbatim from dexter.py's ask_chev_manage_trade
+tool_instructions_cp = (
+    f"TOOLS — call these before deciding. You have NO memory of this trade's original setup.\n"
+    f"Form a fresh, data-backed view RIGHT NOW using live data:\n\n"
+    f"  get_support_resistance(\"{_symbol_cp}\", \"{_primary_tf_cp}\")\n"
+    f"    → For Stop placement: find the nearest confirmed {'support' if _is_long_cp else 'resistance'} level\n"
+    f"      {'below' if _is_long_cp else 'above'} current price — place your stop just {'below' if _is_long_cp else 'above'} it,\n"
+    f"      leaving at least 0.5× ATR of breathing room above that level.\n"
+    f"    → For TP: find the nearest confirmed {'resistance' if _is_long_cp else 'support'} level\n"
+    f"      {'above' if _is_long_cp else 'below'} current price — a valid new TP must sit AT or just before it.\n\n"
+    f"  get_volume_profile(\"{_symbol_cp}\", \"{_primary_tf_cp}\")\n"
+    f"    → Is price near POC, VAH, or VAL? Clusters cause reversals or act as magnets.\n"
+    f"      Volume INCREASING into the move = momentum. Volume FADING = exhaustion.\n\n"
+    f"  detect_rsi_divergence(\"{_symbol_cp}\", \"{_primary_tf_cp}\")\n"
+    f"    → Hidden {'bullish' if _is_long_cp else 'bearish'} divergence = continuation likely.\n"
+    f"      Regular {'bearish' if _is_long_cp else 'bullish'} divergence = reversal warning — tighten stop or close.\n\n"
+    f"Call these tools. Base every decision on what they show — not on memory or assumptions.\n\n"
+)
+
+# Checkpoint ray block -- SAME formatter call, SAME worst-case rays as the
+# escalation sample above, but WITHOUT levels (dexter.py's real checkpoint
+# call passes none, per Task 3 -- ask_chev_manage_trade doesn't have Fib/SR/VP
+# in scope the way scan_pair_tf does), wrapped in the same "DATA Dexter
+# already fetched" label dexter.py prepends.
+ray_block_checkpoint = format_ray_block_for_chev(
+    [_ray_upper, _ray_lower], current_price=61350.0, timeframe="15m")
+if ray_block_checkpoint:
+    ray_block_checkpoint = "DATA Dexter already fetched (no tool call needed for this):\n" + ray_block_checkpoint
+
+_cp_tool_tok = est_tokens(tool_instructions_cp)
+_cp_ray_tok  = est_tokens(ray_block_checkpoint)
+print(f"\n[tool_instructions]  chars={len(tool_instructions_cp):,}  est_tokens={_cp_tool_tok:,.0f}")
+print(f"[Trendline Ray block, checkpoint, worst case]  chars={len(ray_block_checkpoint):,}  est_tokens={_cp_ray_tok:,.0f}")
+print(f"\n[Checkpoint copy total: tool_instructions + ray block]  "
+      f"{_cp_tool_tok + _cp_ray_tok:,.0f} tokens (market_brief -- a separate live "
+      f"fetch via _build_management_brief -- NOT measured here, same convention "
+      f"as the escalation's own candle brief being measured separately above)")
+
+print("\n--- Rendered checkpoint ray block sample ---")
+print(ray_block_checkpoint.rstrip())
