@@ -32,7 +32,7 @@ import os
 import threading
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 # ── Persistence paths (mirrors labeller.py's DATA_DIR convention) ───────────
 DATA_DIR           = r"C:\ChevTools"
@@ -509,6 +509,69 @@ def format_ray_block_for_chev(rays: List[RayRecord], current_price: float,
 
     lines.append("")
     return "\n".join(lines) + "\n"
+
+
+# ── Ray break alert (Phase R5) ────────────────────────────────────────────────
+# Split into a pure selector + a pure formatter, same "logic separated from
+# I/O" split reconcile() uses internally (_reconcile_decision) and derivs.py
+# uses between classify_derivs (pure) and get_derivs (network) -- here for a
+# more direct reason too: dexter.py has no if __name__ == "__main__" guard
+# (confirmed by reading it -- its main loop is at true module level), so
+# `import dexter` starts the live bot immediately. The only way to write an
+# offline, no-bot-run test of the fire/skip/paragraph logic Phase R5's gate
+# requires is for that logic to live somewhere importable without side
+# effects -- here, exactly like every other module in this build.
+
+def select_break_alert_candidate(rays: List[RayRecord], already_alerted_ids: Set[str]) -> Optional[RayRecord]:
+    """
+    Pure. `rays` should already be filtered to one (symbol, timeframe) by the
+    caller (no side filter here -- a break on either side is equally alert-
+    worthy). Returns the first BROKEN ray whose id is NOT in
+    `already_alerted_ids`, or None. `already_alerted_ids` is the CALLER's
+    one-shot set (in dexter.py: trade["ray_alerts_sent"]) -- this function
+    does not read or write RayRecord.alerted_trade_ids; that field is a
+    separate, persisted record the caller may also choose to update.
+    """
+    for ray in rays:
+        if ray.state == "BROKEN" and ray.id not in already_alerted_ids:
+            return ray
+    return None
+
+
+def format_ray_break_paragraph_for_chev(ray: RayRecord, symbol: str, timeframe: str,
+                                         still_valid_line: str) -> str:
+    """
+    Pure. Builds the ray-break urgent paragraph in the same "what happened /
+    still valid if / watch for" shape as dexter.py's _bos_choch_label-driven
+    BOS paragraph, deliberately NOT using adjacent-string-literal-plus-
+    trailing-if concatenation (that construction in the BOS paragraph has a
+    real operator-precedence bug -- string literals concatenate before the
+    if/else binds, so one whole side of the ternary silently vanishes; left
+    untouched there since this build's rules require the BOS function stay
+    byte-identical, but not repeated here).
+    `still_valid_line` is a plain string the caller builds from whatever it
+    knows about the trade's stated invalidation/reasoning -- this function
+    is trade-dict-agnostic and only ever sees a string.
+    """
+    side_word  = "resistance" if ray.side == "upper" else "support"
+    slope_word = ("rising" if ray.slope_norm > 0
+                  else "falling" if ray.slope_norm < 0 else "flat")
+    tf_seconds  = _TF_SECONDS.get(timeframe, _TF_SECONDS["1h"])
+    life_hours  = round(ray.lifetime_span_bars * tf_seconds / 3600.0, 1)
+    break_value = _project_value(ray, ray.last_break_ts)
+
+    return (
+        f"⚠ TRENDLINE RAY BROKEN — {symbol}/{timeframe} {slope_word} {side_word}\n"
+        f"  What happened : confirmed break — closed beyond {break_value:.5f} on "
+        f"back-to-back candles. Respected {ray.respect_count}x, "
+        f"{ray.wick_rejection_count} wick-traps, over {life_hours}h before this.\n"
+        f"  Still valid if: {still_valid_line}\n"
+        f"  Watch for     : a retest of this line from the other side before treating "
+        f"the break as confirmed continuation — that is a common trap.\n\n"
+        f"This structural event was NOT present when you entered this trade. It does not\n"
+        f"automatically invalidate your position — but review whether it changes your premise.\n"
+        f"If your INVALIDATION condition has been met, that is your signal to act.\n"
+    )
 
 
 # ── Concurrency ───────────────────────────────────────────────────────────────

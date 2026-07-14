@@ -10875,6 +10875,85 @@ def _maybe_send_bos_alert(trade, current_price):
         print(f"[BOS Alert] Error for {trade.get('symbol','?')}: {e}")
 
 
+# Phase R5: BOS and this function are both urgent-bypass callers of
+# ask_chev_manage_trade (bos_paragraph not None skips its 30-min cooldown
+# check entirely, by design, for BOTH callers) -- that cooldown can't protect
+# one from firing seconds after the other, and BOS itself has no such guard
+# (until this phase there was only one urgent-bypass source). Minimal guard,
+# this function only, never added to BOS: skip if ANY management call
+# (routine or urgent, from any source) already touched this trade within the
+# last few seconds -- a "same breath" window, unrelated to the real 30-min
+# cooldown.
+RAY_ALERT_DEDUP_WINDOW_SEC = 10
+
+
+def _maybe_send_ray_break_alert(trade, current_price):
+    """Detect a newly-confirmed ray break (Phase R2's two-close rule) on the
+    trade's symbol+timeframe and, if unseen for this ray+trade pair, fire an
+    urgent management message. Same category of event, same call pattern, as
+    _maybe_send_bos_alert above -- modeled on it line-for-line."""
+    try:
+        symbol     = trade["symbol"]
+        primary_tf = trade.get("primary_tf", "1h")
+
+        if time.time() - trade.get("last_management_at", 0) < RAY_ALERT_DEDUP_WINDOW_SEC:
+            return
+
+        # One alert per unique ray, per trade, ever -- mirrors BOS's
+        # trade["bos_alerts_sent"] fingerprint-set pattern exactly. A reclaim
+        # never resurrects a BROKEN ray's id (Phase R2), so this id can never
+        # legitimately need a second alert for this trade; a later, DIFFERENT
+        # ray breaking has its own id and is new structure, not old news.
+        if "ray_alerts_sent" not in trade:
+            trade["ray_alerts_sent"] = set()
+
+        # Load -> check -> (maybe mutate) -> (maybe save) all under ONE lock
+        # acquisition, per ray_registry.py's own documented contract (its
+        # module docstring: "callers must hold this lock across their entire
+        # load -> ... -> save sequence"). Loading outside the lock and only
+        # locking the final save would re-open the exact lost-update race the
+        # lock exists to prevent: a concurrent scan_pair_tf write landing in
+        # the gap between this function's read and its write would be
+        # silently overwritten by this function's now-stale snapshot.
+        with ray_registry.REGISTRY_LOCK:
+            registry = ray_registry.load_registry()
+            rays_here = [r for _rs in registry.values() for r in _rs
+                         if r.symbol == symbol and r.timeframe == primary_tf]
+            target = ray_registry.select_break_alert_candidate(rays_here, trade["ray_alerts_sent"])
+            if target is None:
+                return
+            trade["ray_alerts_sent"].add(target.id)
+
+            # Secondary, persisted record on the ray itself (RayRecord.
+            # alerted_trade_ids, reserved for this exact purpose since Phase
+            # R2) -- NOT consulted for the fire/skip decision above (that
+            # gate is the trade-side set only, mirroring BOS precisely);
+            # this is bookkeeping that survives a restart even though
+            # trade["ray_alerts_sent"] doesn't.
+            trade_ref = str(trade.get("row", symbol))
+            if trade_ref not in target.alerted_trade_ids:
+                target.alerted_trade_ids.append(trade_ref)
+                ray_registry.save_registry(registry)
+
+        _still_valid = trade.get("invalidation") or trade.get("reasoning")
+        still_valid_line = (
+            f"your stated thesis/invalidation from entry: {_still_valid}"
+            if _still_valid else
+            "no invalidation or reasoning recorded at entry for this trade — "
+            "review whether this ray was part of your premise"
+        )
+        ray_paragraph = ray_registry.format_ray_break_paragraph_for_chev(
+            target, symbol, primary_tf, still_valid_line)
+
+        print(f"[Ray Break Alert] {symbol}/{primary_tf} {target.side} ray broken — firing management message")
+        threading.Thread(
+            target=lambda t=trade, p=current_price, bp=ray_paragraph: ask_chev_manage_trade(t, p, bos_paragraph=bp),
+            daemon=True
+        ).start()
+    except Exception as e:
+        print(f"[Ray Break Alert] Error for {trade.get('symbol','?')}: {e}")
+
+
 def _execute_partial_close(trade, price, fraction, close_type, r_at_milestone):
     """Close `fraction` of a running trade at current price (0.25 = TAKE25, 0.50 = TAKE50).
     Updates balance, shrinks position, logs a PARTIAL journal entry."""
@@ -12877,6 +12956,9 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
 
         # BOS/CHoCH structural alert — fires a management message if new structure event detected
         _maybe_send_bos_alert(trade, price)
+
+        # Trendline Ray break alert (Phase R5) — same cadence, same guards, same call pattern
+        _maybe_send_ray_break_alert(trade, price)
 
         still_open.append(trade)
 

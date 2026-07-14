@@ -10674,5 +10674,183 @@ RESTART: REQUIRED (dexter.py and ray_registry.py both changed).
 DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
 
 ================================================================================
+*** PHASE R5 — RAY BREAK = URGENT ALERT (PER-RAY ONE-SHOT) — 2026-07-14 —
+RESTART: YES, DEPLOY: NO, RE-PASTE CHEV PROMPT: NO ***
+================================================================================
+
+CONTEXT: R4 put ray status into the routine 30-minute checkpoint, but a ray
+breaking WHILE a trade is open — the moment Chev's stated thesis may actually
+be dying — had no path to reach him faster than the next scheduled check.
+_maybe_send_bos_alert already does exactly this for market-structure breaks:
+detects a new BOS/CHoCH, fires an urgent ask_chev_manage_trade call bypassing
+the 30-minute cooldown via a background thread. A confirmed ray break (Phase
+R2's two-close rule) is the same category of event.
+
+TASK 1 (read before writing, reported here): _maybe_send_bos_alert (dexter.py
+~10837) is called once per open trade, every check_and_update_open_trades
+loop iteration (that loop itself runs every scan cycle for crypto, on its own
+gated interval for forex/stock). It fetches candles fresh EVERY call
+(fetch_candles, a live network hit), recomputes _bos_choch_label(df) fresh
+every time, and dedups via a fingerprint set living directly on the trade
+dict (trade["bos_alerts_sent"], lazily initialized, never explicitly
+persisted anywhere outside the in-memory trade dict — the same fragility
+BOS itself already accepts). It bypasses ask_chev_manage_trade's 30-minute
+cooldown by passing a non-None bos_paragraph — that function's cooldown
+check is literally `if bos_paragraph is None and (...): return None`, so ANY
+non-None paragraph, from ANY caller, skips the wait entirely by design. The
+actual LLM call happens in a daemon background thread
+(threading.Thread(target=lambda ...: ask_chev_manage_trade(...), daemon=
+True).start()) so the main loop never blocks on it.
+ALSO FOUND, NOT TOUCHED: bos_paragraph's construction has a real operator-
+precedence bug — three adjacent f-string literals concatenate into ONE atom
+before the trailing `if bos.get("hold") else ""` ternary ever binds, so
+depending on truthiness of "hold" either the opening lines (urgency/what-
+happened) or the closing lines (watch-for + explanatory text) silently
+vanish from the message, never both together. In practice this never fires:
+_bos_choch_label's only case with hold=None ("STRUCTURE UNCLEAR") is already
+filtered out by _maybe_send_bos_alert's own early return before the
+paragraph is ever built. Left untouched per this build's rule that the BOS
+function stay byte-identical (grep-diff proved below) and per general
+instructions not to fix unrelated pre-existing bugs; format_ray_break_
+paragraph_for_chev (new, this phase) deliberately does NOT reproduce this
+construction.
+
+WHAT CHANGED AND WHY:
+
+1. ray_registry.py — two new PURE functions, no I/O, added for a reason
+   beyond style: dexter.py has no `if __name__ == "__main__"` guard anywhere
+   (confirmed by grep — its main scan loop, `while True:` ~13399, sits at
+   true module level), so `import dexter` would start the live bot
+   immediately. The only way to satisfy this phase's GATE requirement for an
+   offline, no-bot-run test of the fire/skip/paragraph logic was to make
+   that logic live somewhere importable without side effects.
+     - select_break_alert_candidate(rays, already_alerted_ids): returns the
+       first BROKEN ray (any side) whose id is not in the caller's
+       already-alerted set, or None. Does not read/write RayRecord.
+       alerted_trade_ids itself — that field is a separate, caller-managed
+       persisted record.
+     - format_ray_break_paragraph_for_chev(ray, symbol, timeframe,
+       still_valid_line): builds the exact "what happened / still valid if /
+       watch for" shape BOS uses, correctly (no adjacent-literal-plus-
+       ternary bug), fact-framed. Takes a plain string for still_valid_line
+       so the formatter itself stays trade-dict-agnostic.
+
+2. dexter.py — _maybe_send_ray_break_alert(trade, current_price), placed
+   directly after _maybe_send_bos_alert, invoked immediately after it at the
+   SAME call site inside check_and_update_open_trades' per-trade loop (same
+   cadence, same guards, same try/except-never-raises safety net). Reads the
+   registry (no fetch, no recompute — the whole point is reusing what
+   scan_pair_tf's R3 wiring already computed), finds a not-yet-alerted
+   BROKEN ray for this trade's symbol+timeframe via the pure selector above,
+   marks it alerted in trade["ray_alerts_sent"] (a set, mirroring
+   trade["bos_alerts_sent"] exactly — same fragility accepted, per Task 2's
+   explicit instruction to follow how BOS persists its own per-trade flag),
+   ALSO appends the trade's row-id to the ray's own alerted_trade_ids (the
+   RayRecord field reserved for this exact purpose since Phase R2 — a
+   secondary, persisted record that survives a restart even though the
+   trade-side set doesn't; NOT consulted for the fire/skip decision, which
+   is the trade-side set only). "Still valid if" pulls trade.get(
+   "invalidation") or trade.get("reasoning") — confirmed by reading
+   ask_chev_manage_trade's own context-building code that trade dicts really
+   do carry these fields (not assumed), with an honest fallback sentence
+   when neither is recorded rather than fabricating one. Fires via the same
+   threading.Thread(daemon=True) pattern, reusing ask_chev_manage_trade's
+   existing bos_paragraph= parameter as-is (its role is generically "urgent
+   paragraph, bypass cooldown," not literally BOS-specific — reusing it
+   avoids touching that function's signature at all).
+   TASK 3 (double-fire guard): BOS and this new function are now BOTH
+   urgent-bypass callers of the same trade's management cycle in the same
+   loop iteration. ask_chev_manage_trade's cooldown check only protects
+   ROUTINE (bos_paragraph=None) calls — any non-None paragraph, from EITHER
+   caller, skips it entirely, so the shared cooldown gives no protection
+   between two urgent callers. BOS itself has no guard against this (until
+   this phase there was only one urgent-bypass source, so the collision
+   couldn't happen). Per the phase's explicit instruction, the minimal guard
+   was added to the NEW function ONLY: RAY_ALERT_DEDUP_WINDOW_SEC (10
+   seconds, a "same breath" window, unrelated to and much shorter than the
+   real 30-minute cooldown) — skip if ANY management call, routine or
+   urgent, touched trade["last_management_at"] within the last 10 seconds.
+   HONEST LIMITATION, stated plainly: this is best-effort, not a hard
+   guarantee. BOS's own background thread updates last_management_at
+   asynchronously (inside ask_chev_manage_trade, which is the thread's own
+   target function) — if BOS decides to fire in the SAME iteration
+   immediately before this function runs, there is a real window where that
+   thread hasn't started yet and last_management_at is still stale, so this
+   guard would not catch it. Closing that window completely would require
+   touching either BOS or ask_chev_manage_trade's cooldown gate for every
+   caller, both explicitly out of scope. Flagged here rather than silently
+   presented as fully solved.
+
+BENEFIT: a ray that was cited (or plausibly relevant) as part of a trade's
+thesis, breaking while that trade is open, now reaches Chev within roughly
+one loop iteration instead of waiting up to 30 minutes — with the specific
+what-broke/still-valid-if/watch-for facts he needs to decide whether to
+reconsider, exactly the "give Chev the opportunity to withdraw a trade"
+capability this whole ray build set out to add, using the exact same urgent-
+delivery mechanism already trusted for structure breaks rather than
+inventing a new one.
+
+SECOND-PASS REVIEW (Lead AI Quant Strategist / Senior Python Architect pass,
+re-reading the diff cold): traced every module touched directly (ray_
+registry.py's two new pure functions, dexter.py's new function + one new
+invocation line) and indirectly (ask_chev_manage_trade — confirmed its
+bos_paragraph handling is generic and unaffected by a second caller; BOS
+itself — confirmed untouched by grep-diff, twice). ONE REAL BUG FOUND AND
+FIXED before this was reported: the first draft called
+ray_registry.load_registry() OUTSIDE REGISTRY_LOCK and only acquired the
+lock around the final save_registry() call — this re-opens the exact lost-
+update race the lock exists to prevent (a concurrent scan_pair_tf write
+landing in the gap between this function's unlocked read and its locked
+write would be silently overwritten by this function's now-stale snapshot
+on save). Fixed by moving the lock acquisition to wrap the entire load ->
+select -> mutate -> save sequence, matching ray_registry.py's own documented
+contract exactly. Re-verified all tests pass after the fix. Also caught
+during the same pass, fixed as a small consistency item: select_break_alert_
+candidate's already_alerted_ids parameter had no type hint, inconsistent
+with every other typed function in the module — added (Set[str], with Set
+added to the typing import).
+
+VERIFICATION: `python -m py_compile dexter.py labeller.py ray_registry.py
+audit_context.py test_ray_break_alert.py test_ray_extension.py` -> exit 0 on
+all six. `python -X utf8 derivs.py` -> 12/12 PASS (unchanged). `python
+labeller.py` -> 32/32 PASS (unchanged — this phase never touches
+labeller.py). `python -X utf8 ray_registry.py` -> 28/28 PASS (unchanged from
+R4 — the two new functions are covered by the new standalone test file
+instead, matching the test_ray_extension.py/test_validation_candidates.py
+convention of a separate test_*.py per phase rather than folding into ray_
+registry.py's own self-test). `python -X utf8 test_ray_break_alert.py` (new)
+-> 15/15 PASS: LIVE ray never a candidate; BROKEN ray selected on first
+check; never selected again once alerted for this trade (including across 5
+repeated checks); a second, distinct BROKEN ray IS selected even with the
+first already alerted; paragraph names what broke (side + slope class) in
+the exact BOS-style three-part shape; states the lifetime record; carries a
+supplied still-valid-if line through verbatim; names a retest (not a
+directive to act) under "watch for"; the missing-reasoning fallback line is
+used honestly rather than fabricated. `python -X utf8 audit_context.py` ->
+exit 0 (unaffected — this phase adds no new Chev-facing text block, only an
+alert-dispatch path; nothing new to measure against the token budget).
+Grep-confirmed: the new invocation line, the new function definition, the
+new constant, and both new ray_registry.py functions each appear exactly
+once. Grep-diff-confirmed (twice, before and after the lock fix)
+_maybe_send_bos_alert is byte-identical to its pre-phase text. No dexter.py
+execution, bot never run.
+
+REMAINING UNCERTAIN / MANUAL VERIFICATION FOR KEV: the same-breath guard
+(RAY_ALERT_DEDUP_WINDOW_SEC=10) is a judgment call, not derived from
+anything — worth watching whether 10 seconds is actually enough in practice,
+and honestly, whether the BOS-vs-ray-break same-iteration collision this
+guards against ever happens at all outside of a rare coincidence. The
+"still valid if" line quality depends entirely on how well populated
+trade.get("invalidation")/trade.get("reasoning") are in practice for real
+trades — worth reading one real ray-break alert once one fires, to judge
+whether that fallback sentence ("no invalidation or reasoning recorded...")
+shows up more often than expected, which would say something about how
+consistently Chev's own POST replies actually get logged with those fields
+filled in.
+
+RESTART: REQUIRED (dexter.py and ray_registry.py both changed).
+DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
 END OF HANDOFF
 ================================================================================
