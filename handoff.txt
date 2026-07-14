@@ -11542,5 +11542,222 @@ PROMPT: NO (this phase changes nothing Chev receives -- confirmed above via
 the geometry-consumer grep audit).
 
 ================================================================================
+
+PHASE R7 -- TIMEFRAME TABLE FIX + GAP-WINDOW HARDENING IN ray_registry.py
+
+CONTEXT: ray_registry.py's _TF_SECONDS had no "5m" entry, even though Dexter
+scans crypto on 5m (dexter.py's own SCAN_TFS_CRYPTO includes it, and dexter's
+own TF_SECONDS table already has it). Every 5m ray's _bars_since silently
+fell back to 1h's 3600 sec/bar -- 12x too coarse -- corrupting every
+projection, touch/break/pierce evaluation, horizon timestamp, and stale-
+retirement check computed for that timeframe. Separately, scan_pair_tf's
+incremental ray-touch bar walk used a bare `primary_df.tail(10)`, silently
+dropping history whenever more than 10 bars elapsed between scans for a ray
+(a restart, a skipped cycle, etc.).
+
+WHAT CHANGED AND WHY:
+
+1. ray_registry.py -- _TF_SECONDS extended to {"1m":60, "5m":300, "15m":900,
+   "30m":1800, "1h":3600, "4h":14400, "1d":86400} ("5m" was the actual gap;
+   "1m" added defensively, per the task, though nothing scans it today). New
+   comment cites the real reference tables after reading dexter.py rather
+   than trusting the phase text's own naming: dexter's actual per-pair scan
+   cadence lives in SCAN_TFS_CRYPTO/SCAN_TFS_FOREX (dexter.py ~4125-4126),
+   NOT TIMEFRAMES_FOREX_STOCK (~4106) as the phase text named -- that table
+   turned out to be a different, narrower list (["1h","4h"]) that only
+   drives the horizontal S/R validated-level submodel's multi-TF loop, not
+   which timeframes actually reach scan_pair_tf/reconcile(). This is exactly
+   the "two things with similar names, only one is what you think" trap the
+   preamble warns about -- caught by reading both call sites (dexter.py
+   ~9354 vs ~13731) before writing the comment, not by trusting either name.
+   Values cross-checked against dexter's own TF_SECONDS (dexter.py ~4113),
+   the correct reference for the seconds-per-bar numbers themselves.
+
+   _bars_since now prints one `[ray_registry] WARNING: unknown timeframe...`
+   line the first time it ever sees a timeframe string absent from
+   _TF_SECONDS, via a new module-level `_unknown_tf_warned` seen-set (not a
+   per-call check) -- loud once per unknown value per process, then silent,
+   still falling back to 1h so nothing crashes.
+
+2. ray_registry.py -- new constant R7_5M_FIX_DEPLOY_TS = 1783987200
+   (2026-07-14 00:00:00 UTC, this phase's ship date, hardcoded rather than
+   computed from "now" so re-running the self-test or restarting dexter.py
+   days later doesn't move the cutoff) and new function _retire_pre_r7_5m():
+   retires (state -> "RETIRED", one ray_identity_log.jsonl line citing
+   "pre-R7 5m bar-math fix") any RayRecord with timeframe=="5m" and
+   born_ts < R7_5M_FIX_DEPLOY_TS, guarded by `state != "RETIRED"` so it only
+   ever fires once per record. Records of every other timeframe are
+   completely untouched (the condition checks timeframe=="5m" explicitly).
+
+   Deliberately wired into reconcile() (called once per _retire_stale(), now
+   sweeping the WHOLE registry dict rather than just the caller's own
+   (symbol, timeframe, side) key) rather than into load_registry() itself --
+   see the SECOND-PASS REVIEW below for why load_registry() would have been
+   an actual hard-rule violation, not just a stylistic choice.
+
+   ray_registry.json does not currently exist on disk (checked directly --
+   the file is absent, meaning the bot has genuinely never been run, exactly
+   as every phase's hard rule requires) -- so there are, as of this commit,
+   ZERO 5m records of any kind to retire. The guard is implemented and
+   self-tested anyway per the task's own instruction, since the file may
+   gain 5m records between this commit and Kev's restart if his own running
+   instance (outside this session) mints any under the old code first. One
+   edge case worth naming honestly: R7_5M_FIX_DEPLOY_TS is pinned to today's
+   date, so a 5m ray minted by an OLD, still-running process AFTER midnight
+   UTC today but BEFORE Kev actually restarts with this fix would carry a
+   born_ts on the correct side of the cutoff (i.e., NOT retired) despite
+   still using the buggy math. Given the registry file's total absence
+   confirms no instance has been minting rays during this entire build, this
+   isn't a live risk today, but it's a real, narrow gap in the guard's logic
+   that would only bite if Kev's setup deviates from "never run until
+   restart."
+
+3. dexter.py -- one new constant, RAY_GAP_LOOKBACK_BARS = 50, defined
+   alongside RAY_ALERT_DEDUP_WINDOW_SEC (dexter.py ~11169, the only other
+   ray-specific constant already living in dexter.py itself, since every
+   other ray tolerance/threshold belongs in ray_registry.py). The literal
+   `primary_df.tail(10)` inside scan_pair_tf's ray wiring (confirmed exactly
+   one match in the whole file before editing) now reads
+   `primary_df.tail(RAY_GAP_LOOKBACK_BARS)`. Both old and new values only
+   ever affect bars STRICTLY newer than the ray's last-seen timestamp (the
+   `if _bts <= _prior_ts: continue` filter inside the loop is unchanged) --
+   the only behavior difference is when MORE than 10 (but <=50) bars have
+   elapsed since a ray's last scan, which now get walked instead of silently
+   dropped. This is the intended fix, not a new risk: nothing about the
+   touch/break-state math itself changed, only how much incremental history
+   is fed into it.
+
+4. ray_registry.py -- 5 new self-test checks (41 -> 46):
+     14a: _bars_since(T0, T0+3600, "5m") == 12.0, and _project_value moves a
+          5m ray by slope_raw * 12 over that same hour -- proves the actual
+          bar-math fix, not just that the table has a new key.
+     14b: constructs a registry with a pre-R7 5m record and a 15m record of
+          identical born_ts, calls reconcile() for a THIRD, unrelated key,
+          and confirms the 5m record is RETIRED while the 15m one is
+          untouched -- proves the whole-registry sweep (not just the
+          currently-reconciled key) and the timeframe=="5m" filter both work.
+     14c: calls _bars_since twice with an unrecognized timeframe ("3m") and
+          confirms the warning string appears in captured stdout exactly
+          once, not twice.
+
+BENEFIT: 5m rays (Dexter's fastest-scanned crypto timeframe) now get the
+same trustworthy touch/break/pierce/horizon math every other timeframe
+already had -- previously every single one was silently 12x wrong with zero
+signal anything was off. A restart or a skipped scan cycle no longer quietly
+loses up to 40 bars of legitimate touch history. Any FUTURE missing-
+timeframe bug of this exact shape will now print a warning instead of
+silently corrupting math again.
+
+SECOND-PASS REVIEW (Lead AI Quant Strategist / Senior Python Architect pass,
+re-reading the diff cold): traced everything touched directly (_TF_SECONDS,
+_bars_since, R7_5M_FIX_DEPLOY_TS, _retire_pre_r7_5m, reconcile(),
+RAY_GAP_LOOKBACK_BARS, the tail() call site) and indirectly:
+  - The one finding that actually changed the design mid-implementation:
+    the task's Task 2 wording ("on load, any record... gets state=
+    'RETIRED' and one identity-log line") reads most naturally as logic
+    belonging inside load_registry() itself. I started to implement it
+    there, then stopped and reconsidered against this build's own hard
+    rule -- "New Flask routes are READ-ONLY... must never mutate registry
+    state, tallies, or identity logs... a chart refresh must leave zero
+    trace in trust data." load_registry() is called by BOTH the read-only
+    /api/rays route AND the write-capable scan wiring; it has no way to
+    know which kind of caller invoked it. If the retirement's identity-log
+    write lived inside load_registry(), the very FIRST /api/rays chart
+    refresh after a restart (before any scan has run) would write a new
+    ray_identity_log.jsonl line purely from a GET request -- an unambiguous
+    violation, since "identity logs" is one of the three things named
+    explicitly in that rule. Re-designed instead around reconcile() (the
+    one function that already both logs AND is only ever called from the
+    write-capable scan path, under REGISTRY_LOCK, immediately followed by
+    save_registry()) -- extended it to sweep the FULL registry dict
+    (already an existing parameter, not just its own key) rather than
+    adding a second code path. Verified via grep that reconcile() has
+    exactly one call site in dexter.py (the scan wiring) and that every
+    OTHER load_registry() caller (api_rays, ask_chev_to_judge, _maybe_send_
+    ray_break_alert, ask_chev_manage_trade) never calls reconcile() --
+    confirming none of them can trigger the log write.
+  - Verified ordering inside reconcile(): _retire_pre_r7_5m() runs BEFORE
+    _reconcile_decision() (the match-or-mint step). This is load-bearing,
+    not incidental -- if a pre-R7 5m ray's own symbol/tf/side gets scanned
+    again, retiring it FIRST means _reconcile_decision's own `if ray.state
+    != "LIVE": continue` filter correctly excludes it from matching, so a
+    brand-new ray mints fresh under the same key on the very same call --
+    satisfying "fresh 5m rays mint cleanly afterward" immediately, not one
+    scan cycle late.
+  - Confirmed the guard is genuinely idempotent with no separate seen-set
+    needed (unlike the unknown-timeframe warning, which has no natural
+    persisted marker): REGISTRY_LOCK already serializes every scan's full
+    load->reconcile->save sequence process-wide (per the module's own
+    docstring), so the first successful cycle that retires+saves a record
+    is guaranteed to complete before any other thread's reconcile() call
+    can observe the same on-disk "not yet RETIRED" state -- no duplicate
+    log lines are possible.
+  - Confirmed no existing self-test used timeframe "5m" anywhere before this
+    phase (grepped the whole file) -- the new retirement logic can't have
+    silently altered any pre-existing test's fixtures. Confirmed T0
+    (1_700_000_000, used throughout the pre-existing suite) predates
+    R7_5M_FIX_DEPLOY_TS, which would matter if any old fixture used "5m" --
+    it doesn't, so this is inert.
+  - Verified `ray.state == "RETIRED"` is handled identically everywhere
+    downstream regardless of WHY a ray was retired: select_live() and every
+    state-machine function already gate on `state != "LIVE": continue"` or
+    `state == "LIVE"` checks that pre-date this phase (used identically by
+    the existing RAY_STALE_BARS path) -- an R7-retired ray is invisible to
+    narration/selection/matching through the exact same, already-proven
+    mechanism, not a new code path that needed its own new gating.
+  - Noted (not fixed, by design): reconcile()'s single `line["ts"] =
+    current_bar_ts` stamp applies uniformly to every log line generated
+    during a call, including a different symbol/timeframe's R7 retirement
+    entry -- so an R7 RETIRED line can carry a `ts` from whichever unrelated
+    scan happened to trigger the sweep. This exactly matches _retire_stale's
+    own pre-existing behavior (same stamp, same imprecision) -- not a new
+    inconsistency introduced by this phase.
+No issues required a fix beyond the load_registry()-vs-reconcile() redesign
+above, which was caught and corrected before ever being tested, not shipped
+and later patched.
+
+VERIFICATION: `python -m py_compile dexter.py ray_registry.py` -> exit 0 on
+both. `python ray_registry.py` -> 46/46 PASS (41 existing + 5 new, all
+listed above). `python labeller.py` -> 32/32 PASS (unchanged). `python
+derivs.py` -> 12/12 PASS (unchanged). `python audit_context.py` -> exit 0,
+COMBINED TOTAL unchanged at 10,197 tokens (this phase touches no prompt/
+token-budget code at all). `python test_ray_break_alert.py` -> 15/15 PASS
+(unchanged). `python test_ray_extension.py` -> 7/7 PASS (unchanged). `git
+diff` of dexter.py shows exactly one changed line (tail(10) ->
+tail(RAY_GAP_LOOKBACK_BARS)) plus one new 12-line constant block --
+_run_pattern_engine (dexter.py ~8560-9075) and every Chev-facing text
+builder (ask_chev_to_judge, ask_chev_manage_trade, format_ray_block_for_chev,
+format_ray_break_paragraph_for_chev) do not appear in the diff at all,
+confirming byte-identical. `git diff --stat` for patterns.py/webapp/
+labeller.py/audit_context.py -> empty (nothing else touched). Grep-confirmed
+primary_df.tail(10) had exactly one match in the whole file before editing,
+and every new anchor (R7_5M_FIX_DEPLOY_TS, _retire_pre_r7_5m,
+_unknown_tf_warned, RAY_GAP_LOOKBACK_BARS) resolves to exactly one real
+definition each. No dexter.py execution, bot never run.
+
+REMAINING UNCERTAIN / MANUAL VERIFICATION FOR KEV: after restart, watch
+ray_identity_log.jsonl -- since ray_registry.json does not currently exist,
+you should see ordinary MINTED lines for fresh 5m rays with no RETIRED
+lines at all (there is nothing pre-existing to retire) unless your own
+separately-running Dexter instance minted 5m rays between this commit and
+your restart, in which case you'd see exactly one RETIRED line per such
+record, citing "pre-R7 5m bar-math fix", the first time any scan runs after
+restart. Either outcome is correct; watch for MORE than one RETIRED line
+per ray id, which would indicate the idempotency reasoning above has a hole.
+Over the following hours, a 5m ray's label hours in the TL overlay should
+now track its actual age (was previously always reported in 1h-equivalent
+units, understating a 5m ray's true bar-derived age by 12x). Also watch for
+any `[ray_registry] WARNING: unknown timeframe` lines in the console/log --
+none are expected now that "5m" and "1m" are covered, but this is exactly
+the signal that would catch the NEXT missing-timeframe bug immediately
+instead of silently, which was the whole point of Task 1's second half.
+
+RESTART: REQUIRED (ray_registry.py's TF table/retirement logic and dexter.py's
+RAY_GAP_LOOKBACK_BARS constant both changed; dexter.py imports ray_registry).
+DEPLOY: NO (no webapp/JS/CSS files touched this phase). RE-PASTE CHEV PROMPT:
+NO (this phase touches arithmetic plumbing only -- confirmed above via the
+byte-identical diff on every Chev-facing text builder).
+
+================================================================================
 END OF HANDOFF
 ================================================================================

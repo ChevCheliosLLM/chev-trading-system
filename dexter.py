@@ -9882,7 +9882,7 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                                          "close": float(primary_df["close"].iloc[-1])}]
                         else:
                             _ray_bars = []
-                            for _bidx, _brow in primary_df.tail(10).iterrows():
+                            for _bidx, _brow in primary_df.tail(RAY_GAP_LOOKBACK_BARS).iterrows():
                                 _bts = int(_bidx.timestamp())
                                 if _bts <= _prior_ts:
                                     continue
@@ -11167,6 +11167,18 @@ def _maybe_send_bos_alert(trade, current_price):
 # last few seconds -- a "same breath" window, unrelated to the real 30-min
 # cooldown.
 RAY_ALERT_DEDUP_WINDOW_SEC = 10
+
+# Phase R7: bounds scan_pair_tf's incremental ray-touch bar walk (was a bare
+# tail(10) literal) after downtime -- if more than this many bars have closed
+# since a ray's last scan (Dexter restarted, a symbol/tf pair got skipped for
+# a while, etc.), the extra bars beyond this window are accepted as unmeasured
+# history rather than walked; only the most recent RAY_GAP_LOOKBACK_BARS get
+# fed to update_touches/update_break_state. 50 gives real headroom over a
+# single missed scan cycle on any TF Dexter runs -- worst case is 5m (dexter's
+# own TF_SECONDS, ~line 4113: 300 sec/bar), where 50 bars is ~4.2h of gap
+# tolerance -- without silently re-walking an unbounded amount of history
+# after a long outage.
+RAY_GAP_LOOKBACK_BARS = 50
 
 
 def _maybe_send_ray_break_alert(trade, current_price):

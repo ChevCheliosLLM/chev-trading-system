@@ -45,7 +45,20 @@ RAY_IDENTITY_LOG_PATH = os.path.join(DATA_DIR, "ray_identity_log.jsonl")
 # (dexter.py's td_map, ~line 398). Unknown timeframe falls back to "1h"'s
 # value rather than raising, mirroring that same td_map.get(interval, "1h")
 # fallback convention instead of crashing on an unexpected string.
-_TF_SECONDS = {"15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
+#
+# Phase R7: this table MUST be a superset of every timeframe string dexter.py
+# can actually scan -- SCAN_TFS_CRYPTO = ["5m","15m","30m","1h","4h"] and
+# SCAN_TFS_FOREX = ["15m","30m","1h","4h"] (dexter.py ~4125-4126), cross-
+# checked against dexter's own TF_SECONDS = {"5m":300,"15m":900,"30m":1800,
+# "1h":3600,"4h":14400} (dexter.py ~4113) as the reference for the values
+# themselves. "5m" was missing here before this phase -- every 5m ray's
+# _bars_since fell back to 1h's 3600s/bar (12x too coarse), corrupting every
+# touch/pierce/break-state tally and horizon projection for that timeframe
+# (see R7_5M_FIX_DEPLOY_TS below for the historical-data cleanup this forced).
+# "1m" is added defensively -- Dexter doesn't scan it today, but the cost of
+# being wrong here (silent 1h fallback) is high enough that covering one
+# timeframe ahead of actual use is worth the one extra table entry.
+_TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
 
 # ── Identity / touch / break constants (each with a WHY) ────────────────────
 TOUCH_TOL_ATR = 0.3
@@ -92,6 +105,17 @@ RAY_STALE_BARS = 100
 # A LIVE ray unmatched by any scan for this many bars of ITS OWN timeframe is
 # retired. Bar-count, not wall-clock hours, so a 15m ray and a 4h ray aren't
 # held to the same clock.
+
+# ── Pre-R7 5m data cleanup ────────────────────────────────────────────────────
+R7_5M_FIX_DEPLOY_TS = 1783987200  # 2026-07-14 00:00:00 UTC
+# WHY: before this phase, "5m" was absent from _TF_SECONDS, so every 5m ray's
+# _bars_since silently fell back to 1h's 3600s/bar -- 12x too coarse. Every
+# touch/pierce/break-state tally and horizon projection computed for a 5m ray
+# born before this timestamp is unreliable software output, not a real market
+# read, and must not be trusted going forward. Hardcoded to this phase's ship
+# date rather than computed from "now" at import time, so re-running the
+# self-test or restarting dexter.py days later doesn't silently move the
+# cutoff and start retiring perfectly good post-fix rays.
 
 # ── Boundary purity gate (Phase R6) ──────────────────────────────────────────
 # Adapted from the client-side TL validator in webapp/js/ui/chat.js
@@ -168,7 +192,22 @@ class RayRecord:
     last_touch_ts: Optional[int] = None
 
 
+_unknown_tf_warned: Set[str] = set()
+# WHY: a missing timeframe (this phase's own "5m" bug, or any future one) used
+# to fail completely silently -- 12x-wrong bar math with zero signal anything
+# was off. Module-level set, not a per-call check, so a timeframe scanned
+# every few minutes for hours doesn't spam the console once per call --
+# see it once per unknown value per process, same "loud once, not forever"
+# shape as this phase's Task 2 5m-retirement fix uses (there, the record's
+# own state field is the "already handled" marker instead of a set).
+
+
 def _bars_since(anchor_ts: int, target_ts: int, timeframe: str) -> float:
+    if timeframe not in _TF_SECONDS and timeframe not in _unknown_tf_warned:
+        _unknown_tf_warned.add(timeframe)
+        print(f"[ray_registry] WARNING: unknown timeframe {timeframe!r} -- "
+              f"falling back to 1h's bar-seconds ({_TF_SECONDS['1h']}). Add it "
+              f"to _TF_SECONDS if Dexter actually scans this timeframe.")
     sec = _TF_SECONDS.get(timeframe, _TF_SECONDS["1h"])
     return (target_ts - anchor_ts) / sec
 
@@ -228,6 +267,46 @@ def _retire_stale(rays_for_key: List[RayRecord], current_bar_ts: int) -> List[di
     return logs
 
 
+def _retire_pre_r7_5m(registry: Dict[str, List[RayRecord]]) -> List[dict]:
+    """
+    Pure-ish (mutates ray.state in place): retire every 5m RayRecord born
+    before R7_5M_FIX_DEPLOY_TS (Phase R7 -- see that constant's WHY). Sweeps
+    the WHOLE registry (every key), not just whichever (symbol, timeframe,
+    side) the caller is currently reconciling -- reconcile() already receives
+    the full registry dict, and this only needs to actually do anything once,
+    from whichever scan happens to run first after this fix ships.
+
+    Guarded by `state != "RETIRED"` rather than a separate seen-set (contrast
+    with _bars_since's _unknown_tf_warned above): once reconcile()'s caller
+    saves the registry (the same locked load -> reconcile -> save sequence
+    that already serializes every scan via REGISTRY_LOCK -- see the module
+    docstring), the RETIRED state itself IS the permanent "already handled"
+    marker. Every subsequent load anywhere sees it already RETIRED and this
+    is a no-op -- no duplicate log line is possible, since REGISTRY_LOCK
+    already prevents two scans from ever being inside this function
+    concurrently on the same on-disk data.
+
+    Deliberately NOT run from load_registry() itself: a read-only Flask route
+    (e.g. /api/rays) calls load_registry() on every chart refresh but never
+    saves -- if the retirement + log write lived there, the very first chart
+    refresh after a restart (before any scan has run) would write a new line
+    to ray_identity_log.jsonl purely from a GET request, which is exactly
+    what "a chart refresh must leave zero trace in trust data" forbids. Tying
+    it to reconcile() instead means it only ever fires from the one code path
+    that already owns saving the result.
+    """
+    logs = []
+    for rays in registry.values():
+        for ray in rays:
+            if (ray.timeframe == "5m" and ray.born_ts < R7_5M_FIX_DEPLOY_TS
+                    and ray.state != "RETIRED"):
+                ray.state = "RETIRED"
+                logs.append({"decision": "RETIRED", "id": ray.id, "symbol": ray.symbol,
+                             "timeframe": ray.timeframe, "side": ray.side,
+                             "reason": "pre-R7 5m bar-math fix"})
+    return logs
+
+
 def reconcile(registry: Dict[str, List[RayRecord]], symbol: str, timeframe: str,
               side: str, slope_raw: float, slope_norm: float,
               value_at_current_bar: float, current_bar_ts: int, atr: float,
@@ -248,6 +327,9 @@ def reconcile(registry: Dict[str, List[RayRecord]], symbol: str, timeframe: str,
 
     log_lines = []
     log_lines.extend(_retire_stale(rays_for_key, current_bar_ts))
+    # Phase R7: whole-registry sweep (not rays_for_key) -- see _retire_pre_r7_5m's
+    # docstring for why this lives here rather than in load_registry().
+    log_lines.extend(_retire_pre_r7_5m(registry))
 
     decision, matched, info = _reconcile_decision(
         rays_for_key, slope_norm, value_at_current_bar, current_bar_ts, atr)
@@ -1048,6 +1130,54 @@ if __name__ == "__main__":
     # 13g: formatter renders nothing for a non-narratable ray.
     check("13g: format_ray_block_for_chev renders empty for a non-narratable ray",
           format_ray_block_for_chev([_r6_gated], current_price=100.0, timeframe="1h") == "")
+
+    # ── 14. Phase R7: 5m timeframe support + gap-window hardening ───────────
+    import io
+    import contextlib
+
+    # 14a: _bars_since / _project_value now treat "5m" correctly (300 sec/bar,
+    # not the old silent 1h/3600 fallback) -- one hour = 12 five-minute bars.
+    check("14a: _bars_since returns 12.0 for one hour of 5m bars",
+          _bars_since(T0, T0 + HOUR, "5m") == 12.0)
+
+    _r7_ray = RayRecord(id="r7a", symbol="X", timeframe="5m", side="upper",
+                         slope_raw=2.5, slope_norm=0.1, anchor_ts=T0, value_at_anchor=100.0,
+                         born_ts=T0, last_seen_ts=T0)
+    check("14a: _project_value moves by slope_raw x 12 over one hour of 5m bars",
+          _project_value(_r7_ray, T0 + HOUR) == 100.0 + 2.5 * 12)
+
+    # 14b: pre-R7 5m retirement is a WHOLE-registry sweep (see
+    # _retire_pre_r7_5m's docstring) -- reconciling a totally unrelated key
+    # still retires every qualifying 5m record anywhere in the registry,
+    # while a 15m record of identical age is left completely alone.
+    _old_ts = R7_5M_FIX_DEPLOY_TS - HOUR  # clearly before the cutoff
+    reg_r7 = {
+        _key("OLDSYM", "5m", "upper"): [
+            RayRecord(id="r7-5m", symbol="OLDSYM", timeframe="5m", side="upper",
+                      slope_raw=1.0, slope_norm=0.2, anchor_ts=_old_ts, value_at_anchor=50.0,
+                      born_ts=_old_ts, last_seen_ts=_old_ts)
+        ],
+        _key("OLDSYM", "15m", "upper"): [
+            RayRecord(id="r7-15m", symbol="OLDSYM", timeframe="15m", side="upper",
+                      slope_raw=1.0, slope_norm=0.2, anchor_ts=_old_ts, value_at_anchor=50.0,
+                      born_ts=_old_ts, last_seen_ts=_old_ts)
+        ],
+    }
+    _r7_5m_ray  = reg_r7[_key("OLDSYM", "5m", "upper")][0]
+    _r7_15m_ray = reg_r7[_key("OLDSYM", "15m", "upper")][0]
+    reconcile(reg_r7, "UNRELATED", "1h", "lower", slope_raw=1.0, slope_norm=0.1,
+              value_at_current_bar=10.0, current_bar_ts=T0, atr=ATR, log_path=_log_path)
+    check("14b: pre-R7 5m record loading as RETIRED", _r7_5m_ray.state == "RETIRED")
+    check("14b: a 15m record of identical age loads untouched", _r7_15m_ray.state == "LIVE")
+
+    # 14c: unknown-timeframe warning fires once per unknown value per
+    # process, not once per call (module-level seen-set, see _unknown_tf_warned).
+    _buf = io.StringIO()
+    with contextlib.redirect_stdout(_buf):
+        _bars_since(T0, T0 + HOUR, "3m")
+        _bars_since(T0, T0 + HOUR, "3m")
+    check("14c: unknown-timeframe warning fires exactly once across two calls",
+          _buf.getvalue().count("unknown timeframe") == 1)
 
     failed = [n for n, ok in T if not ok]
     print(f"\n{len(T) - len(failed)}/{len(T)} tests passing")
