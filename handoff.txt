@@ -10295,5 +10295,217 @@ RESTART: NO (new module, nothing imports it yet). DEPLOY: NO.
 RE-PASTE CHEV PROMPT: NO.
 
 ================================================================================
+*** PHASE R3-REV — REGISTRY WIRED INTO scan_pair_tf VIA _run_pattern_engine's
+FIT + REASON STRINGS + LABELLER TOKENS (SHADOW-ONLY) — 2026-07-14 —
+RESTART: YES (dexter.py + labeller.py edited), DEPLOY: NO,
+RE-PASTE CHEV PROMPT: NO ***
+================================================================================
+
+CONTEXT: this phase SUPERSEDES the original Phase R3, which was written
+against the wrong engine. Investigation before any edits (no code changed in
+that pass) established that patterns.py's run() -- the module Phases R1/R2
+were built around -- is called only from api_analysis_engine() (a Flask
+route; webapp display only, confirmed via a repo-wide grep of every
+"patterns." reference in dexter.py). The autonomous scan loop that actually
+reaches Chev, scan_pair_tf() (~9168, called concurrently per (symbol,
+timeframe) pair via a ThreadPoolExecutor at ~13149), calls a wholly separate,
+dexter-native engine instead: _run_pattern_engine() (~8396), with its own
+inline fit_tl() trendline fit (last-up-to-5-pivots OLS), already feeding real
+scoring (SCAN_WEIGHTS["pattern_breakout"] etc.) and real reason strings. Kev
+ratified: the registry should track THIS engine's fit, since trust only
+matters if it influences the decisions Chev actually sees. patterns.py stays
+untouched and display-only; the visible PAT overlay and the line Chev is told
+about are accepted as two closely-related but not identical lines (3-pivot vs
+up-to-5-pivot fit) -- a known v1 caveat, not a bug, unification explicitly
+deferred.
+
+WHAT CHANGED AND WHY:
+
+1. ray_registry.py -- added REGISTRY_LOCK (threading.Lock) and updated the
+   module docstring to describe the R3 wiring target. scan_pair_tf runs
+   concurrently across pairs; a lock only around save_registry()'s own write
+   would not have been enough, since the race is the WHOLE load-mutate-save
+   span (two threads could each load the same on-disk state, mutate their own
+   copies, and the second save silently discards the first's changes -- the
+   same class of bug already fixed once for chev_journal.json/
+   weight_overrides.json elsewhere in this project). Callers must hold
+   REGISTRY_LOCK across their entire load -> reconcile -> update_touches ->
+   update_break_state -> save sequence. Self-test extended with check 11:
+   8 threads, each doing its OWN independent load->mutate->save round trip
+   against the same file under the lock -- proves no symbol's ray is lost.
+   22/22 (was 21/21).
+
+2. dexter.py, _run_pattern_engine() (~8396) -- two ADDITIVE changes only,
+   fit math (fit_tl, pivot detection, pattern scoring) untouched:
+     a. geometry dict gained two new keys: upper_slope_raw / lower_slope_raw
+        (the raw per-bar slope). upper_slope_norm/lower_slope_norm already
+        there are price-normalized (per-mille of price), not the ATR-per-bar
+        convention ray_registry.py needs, and neither is the raw slope needed
+        to project the line forward/backward in time -- so it wasn't
+        recoverable from the existing keys without adding these two.
+     b. If no named pattern qualifies (results stays [] after every triangle/
+        wedge/channel/rectangle/flag/pennant/H&S/double/triple check), the
+        already-computed geometry vector was previously discarded entirely --
+        the ray registry needs it every scan, independent of whether a named
+        pattern forms (this was the whole point raised at the very start of
+        this project's ray-line discussion: a bare respected diagonal with no
+        named pattern is exactly the case that matters). Now appends one
+        sentinel entry ({"name": "None", "confidence": 0.0, "breakout": False,
+        "volume_confirmed": False, "category": "none", "details": {},
+        "geometry": geometry}) mirroring patterns.py's own "pattern": "None"
+        empty-result convention. VERIFIED SAFE by grepping every reader of
+        _run_pattern_engine's return value in dexter.py: all_patterns's only
+        emptiness-gate is `if all_patterns:` (~9411); pattern_result itself
+        (the "pattern" key in scan_pair_tf's returned dict) is read NOWHERE
+        else in the file (zero hits for result["pattern"]/result.get("pattern")
+        anywhere); every reader of all_patterns downstream in ask_chev_to_judge
+        (~10292-10230 area: _meaningful_pats filter, the breakout-level scan,
+        the neckline-invalidation scan) gates on breakout/volume_confirmed/
+        confidence>=0.55 or reads details/breakout_level -- all False/0.0/
+        empty on the sentinel, so it is inert everywhere it could be read.
+
+3. dexter.py, scan_pair_tf() -- the actual wiring, inserted after the Volume
+   Profile block and before "Distance from level":
+     - `import ray_registry` added alongside the existing engine imports.
+     - Static levels captured for the future-crossing check WITHOUT
+       recomputing anything: top_r/top_s (already-computed validated SR
+       zones), fib_levels (already-computed dict), and VP POC/VAH/VAL --
+       these last three needed one additive capture line inside the EXISTING
+       VP loop (_ray_static_levels.append(...), unconditional, NOT gated on
+       the existing proximity threshold, since a future-crossing candidate is
+       by definition not at the level yet) -- the VP scoring logic itself
+       untouched.
+     - For each side (upper/lower): ATR from primary_df (skip entirely if
+       unavailable), slope_norm = slope_raw/ATR, value-at-current-bar from
+       geometry's upper_line/lower_line (already the projected value at the
+       last bar -- confirmed by reading _run_pattern_engine's own upper_now/
+       lower_now derivation). ray_registry.reconcile() -> update_touches() ->
+       update_break_state(), all under REGISTRY_LOCK, then save_registry(),
+       then select_live() (still under the lock, so it reads this thread's
+       own just-saved state consistently rather than racing a concurrent
+       thread's later write).
+     - "Bars since last scan": a freshly minted ray gets just the current bar
+       (not a speculative multi-bar lookback -- the fit itself only spans its
+       last 3-5 pivots, crediting it with more history than that would
+       overstate what's proven). A continuing ray processes only bars
+       STRICTLY newer than its own last_seen_ts; if nothing has closed since
+       (still the same forming candle, scanned again before it closed),
+       touch/break processing is skipped entirely that round. SECOND-PASS
+       FINDING, fixed before this was reported (see below): the first draft
+       fell back to reprocessing the current bar whenever no new bar existed,
+       which could double-count a touch against an earlier snapshot of the
+       same still-forming candle -- corrected to skip instead.
+     - Reason strings, at most one "Ray respected" and one "Ray confluence
+       ahead" per selected live ray (ray_registry.select_live already caps at
+       2 rays per side per symbol/timeframe): "Ray respected — {rising/
+       falling/flat} {support/resistance}, held Nx over M.Mh, {bullish/
+       bearish} (Xpt)" when price is currently within TOUCH_TOL_ATR x ATR of
+       the ray; "Ray confluence ahead — approaching {level label} in ~N bars,
+       {bullish/bearish}, tentative (Xpt)" when ray_registry.time_to_cross()
+       finds a static-level crossing within the ray's horizon. Points via
+       SCAN_WEIGHTS.get("ray_respected"/"ray_cross_ahead", 0.0) -- absent
+       from SCAN_WEIGHTS/WEIGHT_LAB_VERIFIED_TAGS (grep-proof below), so both
+       score 0.0 live today; hot-reloadable with zero code change once
+       ratified, same as every other SCAN_WEIGHTS-backed tag. ray_reasons
+       folded into all_reasons, ray_score folded into total_score, in the
+       same expressions as every other confluence source.
+     - The whole block wrapped in try/except mirroring api_analysis_engine's
+       existing "[patterns.run] FAILED:" handling style exactly (bare
+       `except Exception:`, traceback.print_exc(), never re-raised) --
+       ray_reasons/ray_score reset to []/0.0 on any failure so a broken
+       registry read/write can never break a scan or contaminate Chev's
+       brief with partial data.
+
+4. labeller.py -- two new REASON_MAP_ORDERED entries, placed FIRST (before
+   even the "[WATCH..." entries), with a comment explaining why: ray reason
+   strings are full sentences that deliberately reuse other reason types'
+   vocabulary inside them (e.g. "...approaching Fib 61.8%...", "...rising
+   support..."), so if any Fib/SR/GP/etc. entry were checked first in the
+   substring-match, first-match-wins loop, it would steal the token before
+   the ray-specific entry ever got a chance. Verified against the FULL
+   ordered table (not assumed): no existing entry's pattern is a substring of
+   "Ray respected"/"Ray confluence ahead" themselves, so placing these two
+   first costs nothing and fixes everything downstream. Also verified the
+   step-1 S/R regex (_SR_RE, anchored `^(Resistance|Support)\(`) cannot fire
+   on either string (they don't start with those literals), and the step-2
+   pattern regex (_PATTERN_RE, literal "conf=") cannot fire either -- "conf="
+   does not appear even though "confluence" contains the substring "conf".
+   Self-test extended (32/32, was 26/26) with 6 new checks (14e-14h): a
+   string containing "support" maps ONLY to ray_respected, no sr_single/
+   sr_multi leak; same for "resistance"; the exact "Ray confluence ahead ...
+   Fib 61.8% ..." collision case proves ray_cross_ahead wins over fib_618
+   (first-match-wins, not just asserted); both ray_respected examples
+   confirmed to literally carry the word "bullish"/"bearish" as required;
+   confirmed neither ray string ever triggers _PATTERN_RE's pattern tokens.
+
+TASK 4 -- shadow-only confirmed end to end. Grep-proof (programmatic, not
+eyeballed): neither "ray_respected" nor "ray_cross_ahead" appears in the
+SCAN_WEIGHTS or WEIGHT_LAB_VERIFIED_TAGS dict literal bodies. Read
+weight_proposal.py's build_design_matrix() (~240): tag_counts is built by
+iterating `for t in r["features"]` across every shadow record dynamically --
+there is no fixed tag enumeration anywhere in that file. Any tag appearing in
+labels_closed.jsonl's "features" list is automatically counted, and once it
+reaches MIN_N=30 occurrences it's included in the regression and reported on
+-- confirmed, not assumed. So ray_respected/ray_cross_ahead will surface in
+future weight_proposal.py runs automatically, with zero code change to that
+file, once enough shadow samples exist; no STOP was needed.
+
+SECOND-PASS REVIEW (Lead AI Quant Strategist / Senior Python Architect pass,
+re-reading the whole diff cold): traced every module the diff touches
+directly (ray_registry.py, dexter.py's _run_pattern_engine + scan_pair_tf +
+import block, labeller.py's REASON_MAP_ORDERED + self-test) and indirectly
+(weight_proposal.py -- confirmed unaffected/automatic, not modified;
+ask_chev_to_judge -- confirmed the sentinel pattern entry and the two new
+geometry keys are inert everywhere they're read; the webapp -- confirmed
+zero JS touched, patterns.py's own consumers from Phase R1 untouched). One
+real problem found and fixed before reporting: the touch/break bar-selection
+logic's original fallback (reprocess the current bar whenever nothing newer
+existed) risked double-counting a touch against the same still-forming
+candle sampled twice across two nearby scans -- corrected to skip processing
+entirely when there's nothing strictly newer than the ray's last-seen
+timestamp. A minor style inconsistency (an unused bound exception variable
+in the new try/except, which the accompanying comment claimed mirrored
+patterns.run's existing handler exactly) was also caught and fixed to
+actually match that style. One accepted, documented tradeoff, not fixed:
+select_live() is called against the WHOLE registry (flattened across every
+symbol/timeframe/side already tracked) and then filtered down to just this
+scan's own symbol/timeframe -- correct, but a mild and growing inefficiency
+as the watchlist/registry grows, since select_live's internal grouping work
+is repeated for every scan even for symbols irrelevant to it. Worth a future
+optimization (pre-filter before calling select_live) if the watchlist grows
+large enough for this to matter; not fixed now per "smallest possible diff."
+
+VERIFICATION: `python -m py_compile dexter.py labeller.py ray_registry.py` ->
+exit 0 on all three. `python -X utf8 derivs.py` -> 12/12 PASS (unchanged).
+`python labeller.py` -> 32/32 PASS (26 existing + 6 new). `python -X utf8
+ray_registry.py` -> 22/22 PASS (21 existing + 1 new concurrency check).
+Grep-confirmed both new REASON_MAP_ORDERED anchors landed exactly once.
+Grep-confirmed (programmatically, via a script parsing the actual dict
+literal bodies, not just eyeballing) neither ray tag appears in SCAN_WEIGHTS
+or WEIGHT_LAB_VERIFIED_TAGS. No offline harness exists to exercise
+scan_pair_tf() itself (confirmed: no test_*.py in this project, excluding
+vendored third-party test suites, references scan_pair_tf) -- per this
+phase's gate, the bot was NOT run; verification rests on the module self-
+tests above plus the written trace of the wiring path in this entry. No
+dexter.py execution, bot never run.
+
+REMAINING UNCERTAIN / MANUAL VERIFICATION FOR KEV: after restart and some
+live scanning, ray_identity_log.jsonl should start growing -- skim it and
+judge whether MATCHED/MINTED/RETIRED decisions agree with your own eye on a
+real chart; ray_registry.json should show rays accumulating respect counts
+over time; "Ray respected"/"Ray confluence ahead" reason strings should
+start appearing in scan console output and escalation reasons, each showing
+"(0pt)" until ratified. Also worth watching for a while: how often the
+"Ray confluence ahead" tentative crossing calls actually pan out (this was
+flagged as the most speculative piece of the whole design, stacking two
+forecasts), and whether the accepted 3-pivot-vs-5-pivot gap between the
+drawn ray (patterns.py, webapp) and the scored ray (_run_pattern_engine,
+this phase) is ever visually confusing enough in practice to justify the
+unification phase that was explicitly deferred.
+
+RESTART: REQUIRED (dexter.py and labeller.py both changed).
+DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
 END OF HANDOFF
 ================================================================================

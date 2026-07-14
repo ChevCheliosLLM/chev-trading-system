@@ -21,6 +21,7 @@ import labeller
 import derivs
 import trade_forensics
 import patterns
+import ray_registry
 import risk_gauntlet
 import honest_sim
 import counterfactual_report
@@ -8544,6 +8545,13 @@ def _run_pattern_engine(df, window=3, lookback=100, breakout_pct=0.012):
         "vol_spike":        vol_spike(),
         "upper_line":       round(upper_now, 6),
         "lower_line":       round(lower_now, 6),
+        # Phase R3 (Trendline Ray): raw per-bar slopes, additive -- upper/lower_slope_norm
+        # above are price-normalized (per-mille of price), not the ATR-normalized
+        # convention ray_registry.py uses, and neither is the raw price-per-bar slope
+        # ray_registry needs to project the line forward/backward in time. Consumed by
+        # scan_pair_tf's ray-registry wiring only; no existing consumer reads these.
+        "upper_slope_raw":  round(hi_slope, 8),
+        "lower_slope_raw":  round(lo_slope, 8),
     }
 
     results = []
@@ -8885,6 +8893,20 @@ def _run_pattern_engine(df, window=3, lookback=100, breakout_pct=0.012):
         int(bool(p.get("breakout"))),
         p["confidence"],
     ), reverse=True)
+
+    # Phase R3 (Trendline Ray): if no named pattern qualified, `geometry` was
+    # still computed above and would otherwise be silently discarded here --
+    # the ray registry needs it every scan, independent of whether a named
+    # pattern forms (mirrors patterns.py's own "pattern": "None" empty-result
+    # convention). Every existing consumer of this return value already
+    # gates on breakout/volume_confirmed/confidence>=0.55 (all False/0.0 here)
+    # or reads details/breakout_level (empty/absent here), so this entry is
+    # inert for all of them -- verified by grepping every reader of
+    # all_patterns/pattern_result in dexter.py before adding this.
+    if not results:
+        results.append({"name": "None", "bias": "neutral", "signal": "NEUTRAL",
+                        "confidence": 0.0, "breakout": False, "volume_confirmed": False,
+                        "category": "none", "details": {}, "geometry": geometry})
 
     return results
 
@@ -9491,6 +9513,13 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         # Lower TFs excluded — their VP windows are too short to carry structural weight.
         vp_score   = 0
         vp_reasons = []
+        # Phase R3 (Trendline Ray): side-capture of already-computed static price
+        # levels (Fib below, SR above, VP POC/VAH/VAL here) for the ray registry's
+        # future-crossing check. Captured unconditionally (not gated on the
+        # proximity threshold below) since a future-crossing candidate is by
+        # definition NOT at the level yet. Reuses these values as computed by the
+        # existing VP scoring loop -- does not recompute or touch its producers.
+        _ray_static_levels = []
         try:
             # ATR-calibrated proximity — 25% of ATR as % of price so BTC/ADA/EUR/USD all
             # trigger at a structurally meaningful distance rather than a fixed percentage.
@@ -9513,6 +9542,9 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                 _vp = _ca_volume_profile(_dfv, _anc["idx"], len(_dfv) - 1)
                 if not _vp:
                     continue
+                _ray_static_levels.append((_vp["poc"], f"VP POC {_vp_tf}"))
+                _ray_static_levels.append((_vp["vah"], f"VP VAH {_vp_tf}"))
+                _ray_static_levels.append((_vp["val"], f"VP VAL {_vp_tf}"))
                 for _lbl, _px, _pts in [("POC", _vp["poc"], _vp_base),
                                          ("VAH", _vp["vah"], _vp_base - 1),
                                          ("VAL", _vp["val"], _vp_base - 1)]:
@@ -9524,6 +9556,126 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                         vp_reasons.append(f"VP {_lbl} {_vp_tf} ({_dist:.2f}% away ≤{_vp_prox:.2f}% prox, {_unconf_note}{_pts_awarded}pt)")
         except Exception as _vpe:
             print(f"[Dexter] Volume Profile scoring failed for {symbol}/{primary_tf}: {_vpe}")
+
+        # ── Trendline Ray registry (Phase R3) ─────────────────────────────────
+        # Feeds the SAME fit the chart pattern engine above already computed
+        # (all_patterns[0]["geometry"] -- always present after this build's
+        # additive fix to _run_pattern_engine, even when no named pattern
+        # qualifies) into the persistent ray registry: identity/trust across
+        # scans, touch/break state, and a direction-aware future-crossing
+        # check against the static levels captured above (SR/Fib/VP). Reason
+        # strings are shadow-only (ray_respected/ray_cross_ahead absent from
+        # SCAN_WEIGHTS/WEIGHT_LAB_VERIFIED_TAGS) -- see SCAN_WEIGHTS.get(...)
+        # below. Registry failures must never break a scan: caught and logged
+        # exactly like the pattern engine's own try/except above, never raised.
+        ray_reasons = []
+        ray_score   = 0.0
+        try:
+            _ray_atr = float(primary_df["ATR"].iloc[-1]) if "ATR" in primary_df.columns else None
+            _ray_geo = all_patterns[0].get("geometry") if all_patterns else None
+            if _ray_atr and _ray_atr > 0 and _ray_geo:
+                _ray_bar_ts = int(primary_df.index[-1].timestamp())
+                _ray_levels = (
+                    ([(top_r["price"], "Resistance")] if top_r else [])
+                    + ([(top_s["price"], "Support")] if top_s else [])
+                    + [(p, f"Fib {name}") for name, p in fib_levels.items()]
+                    + _ray_static_levels
+                )
+
+                with ray_registry.REGISTRY_LOCK:
+                    _ray_reg = ray_registry.load_registry()
+                    _old_last_seen = {r.id: r.last_seen_ts
+                                      for _rs in _ray_reg.values() for r in _rs}
+
+                    for _side, _slope_raw, _value_now in [
+                        ("upper", _ray_geo["upper_slope_raw"], _ray_geo["upper_line"]),
+                        ("lower", _ray_geo["lower_slope_raw"], _ray_geo["lower_line"]),
+                    ]:
+                        _ray_obj = ray_registry.reconcile(
+                            _ray_reg, symbol, primary_tf, _side,
+                            slope_raw=_slope_raw, slope_norm=_slope_raw / _ray_atr,
+                            value_at_current_bar=_value_now, current_bar_ts=_ray_bar_ts,
+                            atr=_ray_atr)
+
+                        # "Bars since last scan" (Task 1). A freshly minted ray has no
+                        # prior identity to measure from -- give it just the current bar,
+                        # not a speculative multi-bar lookback (the fit itself only spans
+                        # its last 3-5 pivots; crediting it with a longer touch history
+                        # than that would overstate what's actually been proven). A
+                        # continuing ray only processes bars STRICTLY newer than its last
+                        # scan; if nothing has closed since (still the same forming
+                        # candle, scanned again before it closed), there is genuinely
+                        # nothing new -- skip rather than reprocessing the same bar and
+                        # risking double-counting a touch that already resolved against
+                        # an earlier snapshot of that same still-forming candle.
+                        _prior_ts = _old_last_seen.get(_ray_obj.id)
+                        if _prior_ts is None:
+                            _ray_bars = [{"ts": _ray_bar_ts,
+                                         "high": float(primary_df["high"].iloc[-1]),
+                                         "low": float(primary_df["low"].iloc[-1]),
+                                         "close": float(primary_df["close"].iloc[-1])}]
+                        else:
+                            _ray_bars = []
+                            for _bidx, _brow in primary_df.tail(10).iterrows():
+                                _bts = int(_bidx.timestamp())
+                                if _bts <= _prior_ts:
+                                    continue
+                                _ray_bars.append({"ts": _bts, "high": float(_brow["high"]),
+                                                  "low": float(_brow["low"]), "close": float(_brow["close"])})
+
+                        if _ray_bars:
+                            ray_registry.update_touches(_ray_obj, _ray_bars, _ray_atr)
+                            ray_registry.update_break_state(_ray_obj, _ray_bars, _ray_atr)
+
+                    ray_registry.save_registry(_ray_reg)
+
+                    _ray_selected = ray_registry.select_live(
+                        [r for _rs in _ray_reg.values() for r in _rs],
+                        current_bar_ts=_ray_bar_ts,
+                        atr_by_key={(symbol, primary_tf): _ray_atr})
+
+                _ray_respected_pts   = SCAN_WEIGHTS.get("ray_respected", 0.0)
+                _ray_cross_ahead_pts = SCAN_WEIGHTS.get("ray_cross_ahead", 0.0)
+                # ray_respected/ray_cross_ahead are new, shadow-only tags (Phase R3)
+                # -- absent from SCAN_WEIGHTS/WEIGHT_LAB_VERIFIED_TAGS by design, so
+                # .get() falls back to 0.0 and they score nothing live while the
+                # shadow ledger accumulates evidence. Hot-reloadable with zero code
+                # change once ratified, same as every other SCAN_WEIGHTS-backed tag.
+                _ray_tol_now = ray_registry.TOUCH_TOL_ATR * _ray_atr
+                _bar_hours = ((primary_df.index[-1] - primary_df.index[-2]).total_seconds() / 3600.0
+                              if len(primary_df) >= 2 else 1.0)
+
+                for _ray_obj in _ray_selected:
+                    if _ray_obj.symbol != symbol or _ray_obj.timeframe != primary_tf:
+                        continue
+                    _side_word  = "resistance" if _ray_obj.side == "upper" else "support"
+                    _dir_word   = "bearish" if _ray_obj.side == "upper" else "bullish"
+                    _slope_word = ("rising" if _ray_obj.slope_norm > 0
+                                   else "falling" if _ray_obj.slope_norm < 0 else "flat")
+                    _ray_now_value = (_ray_geo["upper_line"] if _ray_obj.side == "upper"
+                                     else _ray_geo["lower_line"])
+
+                    if abs(current_price - _ray_now_value) <= _ray_tol_now:
+                        _held_hours = round(_ray_obj.lifetime_span_bars * _bar_hours, 1)
+                        ray_reasons.append(
+                            f"Ray respected — {_slope_word} {_side_word}, held "
+                            f"{_ray_obj.respect_count}x over {_held_hours}h, {_dir_word} "
+                            f"({_ray_respected_pts:g}pt)")
+                        ray_score += _ray_respected_pts
+
+                    _crossings = ray_registry.time_to_cross(_ray_obj, _ray_now_value, _ray_levels)
+                    if _crossings:
+                        _nearest = _crossings[0]
+                        ray_reasons.append(
+                            f"Ray confluence ahead — approaching {_nearest['label']} in "
+                            f"~{_nearest['bars']:.0f} bars, {_dir_word}, tentative "
+                            f"({_ray_cross_ahead_pts:g}pt)")
+                        ray_score += _ray_cross_ahead_pts
+        except Exception:
+            import traceback
+            print(f"[ray_registry] FAILED for {symbol}/{primary_tf}:")
+            traceback.print_exc()
+            ray_reasons, ray_score = [], 0.0
 
         # ── Distance from level ───────────────────────────────────────────────
         # Find the dominant level being tested
@@ -9601,7 +9753,7 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
             except Exception:
                 deriv_score, deriv_reasons = 0.0, []
 
-        total_score = sr_score + fib_score + div_score + ema_score + sweep_score + pattern_score + rsi_level_score + bb_score + vp_score + deriv_score
+        total_score = sr_score + fib_score + div_score + ema_score + sweep_score + pattern_score + rsi_level_score + bb_score + vp_score + deriv_score + ray_score
 
         # GP × SR deadly combo bonus — multiplicative, not additive.
         # When price is at a confirmed multi-TF SR zone AND inside the golden pocket,
@@ -9624,7 +9776,7 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         all_reasons = (_combo_reasons
                        + sr_reasons + fib_reasons + div_reasons + ema_reasons
                        + sweep_reasons + pattern_reasons + rsi_level_reasons
-                       + bb_reasons + vp_reasons + deriv_reasons
+                       + bb_reasons + vp_reasons + deriv_reasons + ray_reasons
                        + _form_reasons_labelled + _gp_approach_labelled
                        + fast_anchor_reasons)
 

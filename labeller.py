@@ -70,11 +70,24 @@ COST_R_CAP = 0.50
 #   Sweep:     "Sweep:buy_side (3pt)", "Sweep:sell_side (3pt)"
 #   Patterns:  "ascending_triangle (bullish, conf=0.75) BREAKOUT+vol"  [parsed by _PATTERN_RE]
 #   Combo:     "** GP*SR DEADLY COMBO (*1.15 quality bonus applied)"
+#   Ray:       "Ray respected — rising support, held 3x over 5.0h, bullish (0pt)"
+#              "Ray confluence ahead — approaching Fib 61.8% in ~4 bars, bullish, tentative (0pt)"
+#              (Phase R3 — shadow-only, checked first, see the top of REASON_MAP_ORDERED below)
 
 _SR_RE      = re.compile(r"^(Resistance|Support)\((\d+)x,")   # must start with label(Nx,
 _PATTERN_RE = re.compile(r"conf=")                             # only pattern reasons contain this
 
 REASON_MAP_ORDERED = [
+    # ── Trendline Ray (Phase R3) — MUST be first: these reason strings are
+    # full sentences that deliberately reuse other reason types' vocabulary
+    # inside them (e.g. "Ray confluence ahead — approaching Fib 61.8% ...",
+    # "Ray respected — rising support ..."), so if any Fib/SR/GP/etc. entry
+    # below were checked first, its substring match would steal the token
+    # before the ray-specific entry ever got a chance (first-match-wins).
+    # Shadow-only (absent from SCAN_WEIGHTS/WEIGHT_LAB_VERIFIED_TAGS) --
+    # scores 0 until ratified through the Weight Lab flow.
+    ("Ray respected",                      "ray_respected"),
+    ("Ray confluence ahead",               "ray_cross_ahead"),
     # ── Meta / combo — before any component matches ─────────────────────────
     # Must check [WATCH] prefixes before "GP" so approaching-GP watch strings
     # ("[WATCH — approaching GP] GP zone ...") don't misfire as gp_sr_combo.
@@ -1196,6 +1209,34 @@ def _run_self_test() -> bool:
     tok14d = normalize_reasons(["Support(2x,2pt)"])
     check("14d: Support(2x,2pt) -> sr_single",
           tok14d == ["sr_single"], f"tokens={tok14d}")
+
+    # Case 14e-14i (Phase R3): Trendline Ray reason strings must never leak
+    # into SR/Fib/pattern tokens, despite deliberately reusing their vocabulary.
+    _ray_str_support = "Ray respected — rising support, held 3x over 5.0h, bullish (0pt)"
+    tok14e = normalize_reasons([_ray_str_support])
+    check("14e: ray string containing 'support' maps ONLY to ray_respected (no sr leak)",
+          tok14e == ["ray_respected"], f"tokens={tok14e}")
+    check("14e-dir: ray_respected support string carries the literal word 'bullish'",
+          "bullish" in _ray_str_support)
+
+    _ray_str_resistance = "Ray respected — falling resistance, held 2x over 3.5h, bearish (0pt)"
+    tok14f = normalize_reasons([_ray_str_resistance])
+    check("14f: ray string containing 'resistance' maps ONLY to ray_respected (no sr leak)",
+          tok14f == ["ray_respected"], f"tokens={tok14f}")
+    check("14f-dir: ray_respected resistance string carries the literal word 'bearish'",
+          "bearish" in _ray_str_resistance)
+
+    _ray_str_cross = ("Ray confluence ahead — approaching Fib 61.8% (golden pocket) in "
+                      "~4 bars, bullish, tentative (0pt)")
+    tok14g = normalize_reasons([_ray_str_cross])
+    check("14g: 'Ray confluence ahead ... Fib 61.8% ...' maps to ray_cross_ahead, "
+          "NOT fib_618 (first-match-wins)",
+          tok14g == ["ray_cross_ahead"], f"tokens={tok14g}")
+
+    _pattern_tokens = {"pattern_breakout_vol", "pattern_breakout", "pattern_high_conf", "pattern_mid_conf"}
+    tok14h = normalize_reasons([_ray_str_support, _ray_str_resistance, _ray_str_cross])
+    check("14h: ray strings never trigger _PATTERN_RE's pattern tokens (no 'conf=' substring)",
+          not (_pattern_tokens & set(tok14h)), f"tokens={tok14h}")
 
     # Case 15: profit on candle 1, +2R hit on candle 5, no loss touch between -> hit_2r=True
     # upper=101, upper_2r=102, lower=99

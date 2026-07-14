@@ -2,12 +2,12 @@
 ray_registry.py — Persistent identity, trust tallies, and break state for
 Dexter's trendline rays (Phase R2 of the "Trendline Ray" build).
 
-patterns.py refits a trendline from scratch every scan (last-3-pivot OLS) —
-it has no memory that "this specific line has already been respected 4 times
-over its life." This module IS that memory. It is a standalone module: as of
-this phase, NOTHING imports it. Wiring (feeding it live slope/value/ATR data
-from patterns.py + dexter.py each scan, and reading it back out for Chev's
-brief) is Phase R3+.
+dexter.py's own trendline/pattern fit (_run_pattern_engine, dexter.py ~8396)
+refits from scratch every scan — it has no memory that "this specific line
+has already been respected 4 times over its life." This module IS that
+memory. Built standalone in Phase R2 (nothing imported it yet); wired into
+the real scan loop (scan_pair_tf, via _run_pattern_engine's fit -- NOT
+patterns.py, which is display-only for the webapp) in Phase R3.
 
 Design mirrors derivs.py: pure logic functions, constants at the top with a
 WHY comment each, an offline self-test under __main__. The one exception to
@@ -16,6 +16,12 @@ line to ray_identity_log.jsonl on every call — that I/O is isolated to a thin
 wrapper around a pure decision helper, same split derivs.py uses between
 classify_derivs() (pure) and get_derivs() (network).
 
+Thread-safety: scan_pair_tf runs concurrently across (symbol, timeframe)
+pairs via a ThreadPoolExecutor (dexter.py ~13149). REGISTRY_LOCK (below)
+must be held by the caller across the full load -> reconcile -> touches ->
+break-state -> save sequence for a given scan, since the race is a lost
+update across that whole span, not any single call.
+
 Self-test: python -X utf8 ray_registry.py   (offline, no dexter import, no network)
 """
 from __future__ import annotations
@@ -23,6 +29,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import threading
 import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -431,6 +438,19 @@ def select_live(rays: List[RayRecord], current_bar_ts: int,
     return kept_all
 
 
+# ── Concurrency ───────────────────────────────────────────────────────────────
+
+REGISTRY_LOCK = threading.Lock()
+# scan_pair_tf() runs concurrently across (symbol, timeframe) pairs (dexter.py
+# ~13149, ThreadPoolExecutor). A lock only around save_registry()'s own write
+# would NOT be enough -- the race is load-mutate-save as a whole: two threads
+# could both load the same on-disk state, mutate their own in-memory copies,
+# and the second save silently discards the first thread's changes (the same
+# class of bug already fixed once for chev_journal.json/weight_overrides.json
+# elsewhere in this project). Callers must hold this lock across their entire
+# load -> reconcile(...) -> update_touches(...) -> update_break_state(...) ->
+# save_registry(...) sequence for a given scan.
+
 # ── Persistence ───────────────────────────────────────────────────────────────
 
 def load_registry(path: str = REGISTRY_PATH) -> Dict[str, List[RayRecord]]:
@@ -614,6 +634,34 @@ if __name__ == "__main__":
 
     missing_path = os.path.join(_tmp_dir, "does_not_exist.json")
     check("10b: missing file -> empty registry, no exception", load_registry(missing_path) == {})
+
+    # ── 11. Concurrency: REGISTRY_LOCK prevents a lost-update race ──────────
+    # Mirrors the REAL call pattern (each scan does its own independent
+    # load -> mutate -> save round trip, not a shared in-memory object) --
+    # without the lock serializing that whole span, two threads racing this
+    # would silently drop each other's minted ray (last save wins).
+    import threading as _threading
+
+    _conc_path    = os.path.join(_tmp_dir, "concurrent_registry.json")
+    _conc_symbols = [f"SYM{i}" for i in range(8)]
+
+    def _conc_worker(sym):
+        with REGISTRY_LOCK:
+            _r = load_registry(_conc_path)
+            reconcile(_r, sym, "1h", "upper", slope_raw=1.0, slope_norm=0.1,
+                      value_at_current_bar=100.0, current_bar_ts=T0, atr=ATR, log_path=_log_path)
+            save_registry(_r, _conc_path)
+
+    _threads = [_threading.Thread(target=_conc_worker, args=(s,)) for s in _conc_symbols]
+    for t in _threads:
+        t.start()
+    for t in _threads:
+        t.join()
+
+    _conc_loaded = load_registry(_conc_path)
+    check("11: concurrent independent load->mutate->save round trips under "
+          "the lock lose no symbol's ray",
+          set(_conc_loaded.keys()) == {_key(s, "1h", "upper") for s in _conc_symbols})
 
     failed = [n for n, ok in T if not ok]
     print(f"\n{len(T) - len(failed)}/{len(T)} tests passing")
