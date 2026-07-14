@@ -10055,5 +10055,102 @@ This closes out the "second look" fix round:
      designed, not changed (Phase 4)
   5. 9 confirmed-dead functions + 2 orphaned constants -> removed (Phase 5)
 ================================================================================
+*** PHASE R1 — TRENDLINE RAY EXTENSION FIX IN patterns.py — 2026-07-14 —
+RESTART: YES (patterns.py imported by dexter.py), DEPLOY: NO (JS verification
+is read-only), RE-PASTE CHEV PROMPT: NO ***
+================================================================================
+
+CONTEXT: `_trendline_endpoints()` in patterns.py draws the upper/lower
+boundary lines the webapp's "PAT" Arsenal tool renders (ascending/descending
+triangles, wedges, channels). It accepts `n_extend_bars=25`, clearly intended
+to project the line forward past the current candle so it behaves like a ray
+rather than a segment that dead-ends at "now." One expression permanently
+discarded that extension. This phase fixes only that one expression — the
+trendline FIT math (_local_trendline, _global_trendline, pivot selection) is
+untouched, as is the horizontal S/R system, per this build's hard rules.
+
+WHAT CHANGED AND WHY:
+1. patterns.py, `_trendline_endpoints()`: the line
+     end_local = min(len(df_window) - 1 + n_extend_bars, len(df_window) - 1)
+   always evaluated to the un-extended value, because len+n_extend_bars is
+   always greater than len whenever n_extend_bars is positive — a min/max
+   mixup, not a deliberate clamp. Changed to:
+     end_local = len(df_window) - 1 + max(0, n_extend_bars)
+   The future-timestamp estimation branch immediately below (bar_seconds
+   extrapolation, ~line 457-461) was already correct and already guarded for
+   len(df_window) < 2 — it had simply never executed. It now does. No other
+   line in the function changed; the ts_end index-safety clamp
+   (`min(end_local, len(df_window) - 1)` used only to read a safe placeholder
+   timestamp before the extrapolation branch overwrites it) is a different
+   expression from the bug and was left exactly as-is, per instruction.
+2. test_ray_extension.py (new file, dexter.py root): offline self-test, no
+   dexter import, no network — synthetic 30-bar hourly DataFrame with known
+   slope/intercept, calls `_trendline_endpoints` directly. 7/7 checks pass:
+   ray extends by exactly n_extend_bars*bar_seconds; p2 matches `_project()`
+   at the extended bar index; n_extend_bars=0 reproduces the old (correct)
+   un-extended behaviour exactly; t1/p1 unchanged by the fix either way.
+
+BENEFIT: the trendline boundaries patterns.py already computes and already
+narrates well (touch-tolerant, ATR-scaled, backtested) can now actually be
+drawn as forward-looking rays instead of segments that stop at the current
+candle — the prerequisite for treating a diagonal line as a live, moving
+support/resistance reference rather than a historical artifact. This phase
+is deliberately just the drawing-math fix; ray identity/persistence, trust
+tallies, Chev narration, and mid-trade alert wiring are separate, later
+phases and were NOT touched here.
+
+CONSUMER AUDIT (Task 4): grepped dexter.py, chart_drawer.py, webapp/js for
+every reader of upper_trendline/lower_trendline and the t1/p1/t2/p2 dict
+shape. dexter.py's only reference is the None-fallback default in the empty
+pattern result (~line 2574) — not a value consumer. chart_drawer.py has zero
+references (Chev's manual draw_trend_line tool takes explicit coordinates
+from Chev, unrelated code path). webapp/js/charts/engine.js reads
+pat.upper_trendline/lower_trendline in three places (_drawPatternLine,
+the "PAT ~" label, and the "no named pattern" fallback text) — all either
+draw whatever t1/p1/t2/p2 they're given or just check truthiness, neither
+assumes t2 equals the last candle. Separately confirmed breakout detection
+in patterns.run() (breakout_up/breakout_dn) calls its OWN _project(...,
+last_idx) before _trendline_endpoints is ever invoked — it does not consume
+_trendline_endpoints' output at all, so breakout/pattern-selection behavior
+is provably unaffected by this fix. One near-miss worth recording: chat.js
+line ~674 (`time1: L.t1, price1: L.p1, time2: L.t2, price2: L.p2`) uses the
+same field names but is a completely separate, self-contained client-side
+trendline tool (the "TL" Arsenal layer / drawTrendlines()) that detects its
+own pivots from currentCandles in the browser — it does not read patterns.py
+output and is untouched either way. No consumer breaks under a future t2.
+
+JS VERIFICATION (Task 5, read-only, no edits): webapp/js/charts/drawing.js's
+timeToX() falls back to linear extrapolation (via _bm(), which reads the
+pixel spacing between the last two candles) whenever the chart library's
+native timeToCoordinate() returns null for an out-of-range timestamp — this
+looks like it was built for the existing RSI forming-divergence 4-bar
+projection. _bm() depends only on `currentCandles`, which chart-core.js
+populates unconditionally whenever candle data loads — not gated by
+_engineReadoutActive or the PAT tool's own state — so the fallback's
+prerequisite is met in the PAT-only code path (patterns draw independently
+of _engineReadoutActive per an existing code comment in engine.js).
+
+VERIFICATION: `python -m py_compile patterns.py test_ray_extension.py` ->
+exit 0. `python test_ray_extension.py` -> 7/7 PASS. Existing self-tests
+re-run to confirm no regression: `python -X utf8 derivs.py` -> 12/12 PASS
+(unchanged from baseline); `python labeller.py` -> 26/26 PASS (unchanged).
+Grep-confirmed the new line landed exactly once and the old min()-mixup
+pattern no longer appears anywhere in patterns.py. No dexter.py execution,
+bot never run.
+
+REMAINING UNCERTAIN / MANUAL VERIFICATION NEEDED FROM KEV: this phase
+proves the Python math and the JS extrapolation path exist and are wired
+correctly by reading, but neither Claude nor Fable has watched a live chart
+render an extended ray. After restart, please (1) load a chart with the PAT
+overlay on and confirm boundary lines now visibly extend ~25 bars past the
+last candle, and (2) separately confirm an RSI forming-divergence projection
+still renders as before. If the Python fix passes but lines don't visibly
+extend, suspect the timeToX fallback specifically — report back rather than
+patching JS, since this phase's rules put webapp JS changes out of scope.
+
+RESTART: REQUIRED (patterns.py changed, imported by dexter.py).
+DEPLOY: NO. RE-PASTE CHEV PROMPT: NO.
+
+================================================================================
 END OF HANDOFF
 ================================================================================

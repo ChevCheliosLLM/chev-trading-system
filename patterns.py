@@ -441,7 +441,10 @@ def _trendline_endpoints(swing_indices_local: List[int],
     Timestamps come from the df_window index (DatetimeIndex).
     """
     start_local = swing_indices_local[0]
-    end_local   = min(len(df_window) - 1 + n_extend_bars, len(df_window) - 1)
+    # 2026-07-14: previous min() here always picked the un-extended value
+    # (len+n_extend_bars is always > len when n_extend_bars>0), silently
+    # disabling forward projection. The future-timestamp branch below now executes.
+    end_local   = len(df_window) - 1 + max(0, n_extend_bars)
 
     p_start = _project(slope, intercept, anchor_local, start_local)
     p_end   = _project(slope, intercept, anchor_local, end_local)
