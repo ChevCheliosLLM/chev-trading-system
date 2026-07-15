@@ -605,6 +605,20 @@
   font-size: 11px; color: var(--txt2); font-family: 'Share Tech Mono', monospace;
   margin: 2px 0 14px; text-align: center;
 }
+/* Full Report tab (counterfactual_report.py's build_report(), served in-app) --
+   same monospace family every other terminal-style block in this app uses. */
+#ctfReportRefreshBtn {
+  margin-left: auto; background: none; border: none; cursor: pointer;
+  font-size: 11px; color: var(--txt3); padding: 0 4px;
+}
+#ctfReportRefreshBtn:hover { color: var(--gold); }
+.stratReportBox {
+  white-space: pre-wrap; word-break: break-word; overflow-x: auto;
+  font-family: 'Share Tech Mono', monospace; font-size: 11px; line-height: 1.5;
+  color: var(--txt1); background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08); border-radius: var(--r-md);
+  padding: 14px; margin: 0;
+}
 .stratBarSplit { display: flex; height: 100%; }
 .stratBarSplit .right   { background: var(--green); }
 .stratBarSplit .wrong   { background: var(--red); }

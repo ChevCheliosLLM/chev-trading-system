@@ -1,16 +1,20 @@
 CHEV TRADING PLAYBOOK — STOCKS
-Last updated: 2026-07-13 18:25:38 | Based on 5 STOCKS trades
+Last updated: 2026-07-15 10:38:43 | Based on 5 STOCKS trades
 ========================================
 
 ### Window: 2026-07-01 -> 2026-07-06, n=5, regime: trending
 
 #### CONFLUENCE CONDITIONS
-- High win-rate shadow combos include BB Squeeze with EMA and fast anchor conditions (shadow_total_R=+2.50).
-- RSI divergence signals are more reliable in trending markets, especially when combined with other indicators like GP SR Combo.
-- 4H SR levels tend to be more significant than 1H for confirming support or resistance.
+- Combinations with high win-rates (shadow_wr > 80%) include bb_squeeze, ema13, ema21, ema55, fast_anchor_or_high, fast_anchor_or_low, fib_50, and pattern_high_conf.
+- RSI divergence signals are more reliable in trending markets when combined with strong support/resistance levels (SR).
+- SR needs to be 4H for setups to have higher win-rates compared to using only 1H SR.
 
 #### MARKET STRUCTURE RULES
-- Trending market conditions improve setup quality, particularly when setups align with higher time frame (e.g., 4H) support/resistance.
+- Trending conditions improve setup quality, especially when combined with breakout patterns and RSI divergence.
+- Price typically reaches TP in trending markets if the setup includes strong trend-following indicators like EMA crossovers and fast anchors.
+- High-confidence setups are more likely to reach TP than reverse early when SR levels are well-defined.
+
+#### ENTRY QUALITY STANDARDS
 ### TRENDING MARKET BEHAVIOUR — CRITICAL
 - In a confirmed uptrend (4H HH/HL, net move > +3%), resistance levels are CONTINUATION ZONES, not reversal zones. Stocks in strong uptrends break resistance with force — shorting resistance in an uptrend is almost always wrong.
 - In a confirmed downtrend (4H LH/LL, net move < -3%), support levels break down. Longing support in a downtrend is similarly low probability.
@@ -20,62 +24,59 @@ Last updated: 2026-07-13 18:25:38 | Based on 5 STOCKS trades
 - High-confidence patterns like EMA and fast anchor combinations are more likely to reach TP in trending markets.
 - Patterns that break out from strong support or resistance levels have a higher chance of success.
 
-#### ENTRY QUALITY STANDARDS
-- High-conviction entries often involve multiple indicators confirming the same trend direction, such as RSI divergence with GP SR Combo.
-- Winners typically show clear structural support (e.g., 4H SR) and momentum indicators like EMA crossovers.
-- Marginal setups lack strong confluence or have conflicting signals from different time frames.
+- High-conviction entries have multiple confluence signals, such as bb_squeeze, ema13/21/55, fast_anchor_or_high/low, and fib_50.
+- Winners often had strong trend-following indicators like EMA crossovers and RSI divergence in the same direction.
+- Marginal setups lacked clear SR levels or were missing key confluence signals.
 
 #### TRADE MANAGEMENT PATTERNS
 - Insufficient data — revisit next session.
 
 #### REASONING QUALITY
-- Validated reasoning occurs in about 67% of cases (2/3), while partial validation is seen in one case.
-- Invalidated reasoning often stems from misreading market structure or timeframe, particularly when ignoring higher time frame signals.
-- A+ setups show better reasoning validation than B setups.
+- 60% of reasoning is validated by price action (n=5).
+- Invalidated reasoning often stemmed from misreading market structure, particularly in setups without clear SR levels.
+- A+ setups show better validation rates than B setups, indicating higher structural confidence.
 
 #### ASSET NOTES
-- Cryptos tend to follow strong trend patterns more consistently compared to forex and stocks.
-- Forex pairs are more volatile and less predictable in trending markets without clear structural support.
+- Insufficient data — revisit next session.
 
 #### JANE'S PATTERNS
 - Insufficient data — revisit next session.
 
 #### SHADOW COMBO INTELLIGENCE
-- BB Squeeze with EMA13, EMA21, EMA55, fast anchor conditions have a shadow win rate of +2.50 (n=5), but no real-trade confirmation yet.
-- Patterns like BB Burst and Fast Anchor or High show promising shadow results (+2.62) but lack real-trade validation.
+- Combinations like bb_squeeze, ema13/21/55, fast_anchor_or_high/low, fib_50, and pattern_high_conf have high shadow win-rates (shadow_wr > 80%) but need real-trade confirmation.
+- Tentative (n=0) combinations still lack real-trade validation.
 
 ### Window: 2026-07-01 -> 2026-07-06, n=5, regime: trending
 
 #### CONFLUENCE CONDITIONS
-- High win-rate shadow combos include BB Squeeze with EMA and fast anchor conditions (shadow_total_R=+2.50).
-- RSI divergence signals are more reliable in trending markets, especially when combined with other indicators like GP SR Combo.
-- 4H SR levels tend to be more significant than 1H for confirming support or resistance.
+- Combinations with high win-rates (shadow_wr > 80%) include bb_squeeze, ema13, ema21, ema55, fast_anchor_or_high, fast_anchor_or_low, fib_50, and pattern_high_conf.
+- RSI divergence signals are more reliable in trending markets when combined with strong support/resistance levels (SR).
+- SR needs to be 4H for setups to have higher win-rates compared to using only 1H SR.
 
 #### MARKET STRUCTURE RULES
-- Trending market conditions improve setup quality, particularly when setups align with higher time frame (e.g., 4H) support/resistance.
-- High-confidence patterns like EMA and fast anchor combinations are more likely to reach TP in trending markets.
-- Patterns that break out from strong support or resistance levels have a higher chance of success.
+- Trending conditions improve setup quality, especially when combined with breakout patterns and RSI divergence.
+- Price typically reaches TP in trending markets if the setup includes strong trend-following indicators like EMA crossovers and fast anchors.
+- High-confidence setups are more likely to reach TP than reverse early when SR levels are well-defined.
 
 #### ENTRY QUALITY STANDARDS
-- High-conviction entries often involve multiple indicators confirming the same trend direction, such as RSI divergence with GP SR Combo.
-- Winners typically show clear structural support (e.g., 4H SR) and momentum indicators like EMA crossovers.
-- Marginal setups lack strong confluence or have conflicting signals from different time frames.
+- High-conviction entries have multiple confluence signals, such as bb_squeeze, ema13/21/55, fast_anchor_or_high/low, and fib_50.
+- Winners often had strong trend-following indicators like EMA crossovers and RSI divergence in the same direction.
+- Marginal setups lacked clear SR levels or were missing key confluence signals.
 
 #### TRADE MANAGEMENT PATTERNS
 - Insufficient data — revisit next session.
 
 #### REASONING QUALITY
-- Validated reasoning occurs in about 67% of cases (2/3), while partial validation is seen in one case.
-- Invalidated reasoning often stems from misreading market structure or timeframe, particularly when ignoring higher time frame signals.
-- A+ setups show better reasoning validation than B setups.
+- 60% of reasoning is validated by price action (n=5).
+- Invalidated reasoning often stemmed from misreading market structure, particularly in setups without clear SR levels.
+- A+ setups show better validation rates than B setups, indicating higher structural confidence.
 
 #### ASSET NOTES
-- Cryptos tend to follow strong trend patterns more consistently compared to forex and stocks.
-- Forex pairs are more volatile and less predictable in trending markets without clear structural support.
+- Insufficient data — revisit next session.
 
 #### JANE'S PATTERNS
 - Insufficient data — revisit next session.
 
 #### SHADOW COMBO INTELLIGENCE
-- BB Squeeze with EMA13, EMA21, EMA55, fast anchor conditions have a shadow win rate of +2.50 (n=5), but no real-trade confirmation yet.
-- Patterns like BB Burst and Fast Anchor or High show promising shadow results (+2.62) but lack real-trade validation.
+- Combinations like bb_squeeze, ema13/21/55, fast_anchor_or_high/low, fib_50, and pattern_high_conf have high shadow win-rates (shadow_wr > 80%) but need real-trade confirmation.
+- Tentative (n=0) combinations still lack real-trade validation.

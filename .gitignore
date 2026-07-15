@@ -36,6 +36,8 @@ counterfactual_report.txt
 weight_proposal_report.txt
 weight_overrides.json
 real_performance_report.txt
+ray_registry.json
+ray_identity_log.jsonl
 *.log
 
 # ─── Not part of this project ────────────────────────────────────────────────

@@ -2155,6 +2155,39 @@
       });
     }
 
+    // Full Report (counterfactual_report.py's build_report(), served in-app --
+    // read-only, calls build_report() only, never write_report(), so opening
+    // this tab never touches disk). Same lazy-load-on-first-click shape as
+    // Weight Lab above: fetch once, cache client-side, manual refresh icon
+    // for "give me the current numbers now".
+    let _ctfReportLoaded = false;
+    async function loadCounterfactualReportText(forceRefresh) {
+      if (!forceRefresh && _ctfReportLoaded) return;
+      const body = document.getElementById('ctfReportBody');
+      if (!body) return;
+      body.textContent = 'Loading…';
+      try {
+        const r = await _apiFetch('/api/strategy/counterfactual_report');
+        const d = await r.json();
+        if (!d.ok) throw new Error(d.error || 'failed to load report');
+        body.textContent = d.text;
+        _ctfReportLoaded = true;
+      } catch (e) {
+        body.textContent = 'Report unavailable — ' + e.message;
+      }
+    }
+    const ctfReportTab = document.querySelector('.stratTab[data-spane="ctfreport"]');
+    if (ctfReportTab) {
+      ctfReportTab.addEventListener('click', () => loadCounterfactualReportText(false));
+    }
+    const ctfReportRefreshBtn = document.getElementById('ctfReportRefreshBtn');
+    if (ctfReportRefreshBtn) {
+      ctfReportRefreshBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        loadCounterfactualReportText(true);
+      });
+    }
+
     // Feed filter pills
     document.querySelectorAll('.stratFilterPill').forEach(pill => {
       pill.addEventListener('click', () => {

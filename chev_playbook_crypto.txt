@@ -1,27 +1,31 @@
 CHEV TRADING PLAYBOOK — CRYPTO
-Last updated: 2026-07-13 18:28:54 | Based on 87 CRYPTO trades
+Last updated: 2026-07-15 10:35:32 | Based on 93 CRYPTO trades
 ========================================
 
 ### CONFLUENCE CONDITIONS
-- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
-  - BB Squeeze with EMA13/EMA21/EMA55 and Fast Anchor or High/Low consistently shows strong results (shadow_total_R=+2.58, shadow_wr=100%).
-  - RSI divergence signals are reliable when combined with other technical indicators like Fib_50 and pattern mid-confidence (shadow_total_R=+2.37, shadow_wr=100%).
+- **Window: 2026-07-12 -> 2026-07-15, n=15, regime: trending**
+  - Patterns with RSI divergence (e.g., `rsi_div_regular`, `rsi_div_hidden`) show higher win rates in trending markets.
+  - SR levels need to be at the 4H timeframe for better validation compared to 1H.
 
 ### MARKET STRUCTURE RULES
-- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
-  - Trending markets with strong EMA and BB Squeeze signals tend to reach TP more often than reversing early (shadow_total_R=+2.47, shadow_wr=78%).
-  - SR levels need to be confirmed on the 4H timeframe for better reliability in trending conditions.
+- **Window: 2026-07-12 -> 2026-07-15, n=15, regime: trending**
+  - Trending markets improve setup quality when combined with strong anchors (`fast_anchor_or_high`, `fast_anchor_or_low`).
+  - High confidence patterns (`pattern_high_conf`) are more likely to reach TP in a trending market.
 
 ### ENTRY QUALITY STANDARDS
-- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
-  - High-conviction entries are characterized by strong BB Squeeze signals and multiple EMA confirmations (shadow_total_R=+2.37, shadow_wr=100%).
-  - Winners typically have a combination of RSI divergence and pattern mid-confidence, while losers lack these key indicators.
+- **Window: 2026-07-12 -> 2026-07-15, n=15, regime: trending**
+  - High conviction entries have strong confluence with multiple indicators (e.g., `ema13`, `ema21`, `fast_anchor_or_high`).
+  - Winners often had clear trend continuation signals and robust support/resistance levels.
 
 ### TRADE MANAGEMENT PATTERNS
-- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
-  - Raised TP often results in price reversing to the floor (n=3), suggesting overconfidence.
-  - Moving SL early did not protect profit and resulted in stops before hitting TP (n=0).
-  - Leaving trades alone with no management shows a higher win rate (shadow_total_R=+1.82, shadow_wr=100%).
+- **Window: 2026-07-12 -> 2026-07-15, n=15, regime: trending**
+  - Raising TP often led to price hitting the raised TP (3/3), suggesting effective management.
+  - Moving SL early protected profit in some cases but also resulted in premature exits (3/3).
+
+### REASONING QUALITY
+- **Window: 2026-07-12 -> 2026-07-15, n=15, regime: trending**
+  - Reasoning was validated in 2 out of 23 trades.
+  - A+ setups showed better validation (1W/4L) compared to B setups (8W/9L).
 
 ### TRENDING MARKET BEHAVIOUR — CRITICAL
 - In a confirmed uptrend (4H making HH/HL, net move > +5%), resistance levels are CONTINUATION ZONES. The market is expected to break them, not reverse from them. Shorting resistance in an uptrend is the single lowest-probability trade in crypto — historical win rate < 15%.
@@ -34,39 +38,26 @@ Last updated: 2026-07-13 18:28:54 | Based on 87 CRYPTO trades
 
 - Winners typically have well-defined invalidation levels, allowing for better risk management (n=3)
 
-### REASONING QUALITY
-- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
-  - Reasoning is validated by price action in 67% of trades (n=18).
-  - Invalidated reasoning often stems from misreading trend context and timeframe.
-  - A+ setups show better validation than B setups, with a 25% win rate vs. 44%.
-
 ### ASSET NOTES
-- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
-  - Cryptos show stronger performance in trending conditions compared to forex and stocks.
-  - Forex and stocks require more robust confluence signals for reliable setups.
-
-### SHADOW COMBO INTELLIGENCE
-- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
-  - BB Squeeze with EMA13/EMA21/EMA55 and Fast Anchor or High/Low has been confirmed by real trades (shadow_total_R=+2.58, shadow_wr=100%).
-  - RSI divergence signals combined with pattern mid-confidence have shown consistent results in real trades (n=5).
+- **Window: 2026-07-12 -> 2026-07-15, n=15, regime: trending**
+  - Cryptos showed higher volatility and quicker trend reversals compared to forex or stocks.
 
 ### JANE'S PATTERNS
-- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
-  - Jane is consistently profitable on setups with strong BB Squeeze and RSI divergence (shadow_total_R=+2.37, shadow_wr=100%).
-  - Her instincts diverge from models when she over-relies on single indicators without confluence.
+- Insufficient data — revisit next session.
 
-### INSUFFICIENT DATA
-- **Window: 2026-07-10 -> 2026-07-13, n=15, regime: trending**
-  - Insufficient data to draw conclusions on setups with fewer than 5 supporting trades (tentative).
+### SHADOW COMBO INTELLIGENCE
+- **Window: 2026-07-12 -> 2026-07-15, n=15, regime: trending**
+  - No shadow combos have been confirmed by real trades yet.
+  - Patterns like `bb_squeeze`, `ema13`, `fast_anchor_or_high` are still tentative (shadow only).
 
 ### STRUCTURAL RISK FACTORS
-- **Ranging Market Structure**: A market in a ranging structure can lead to choppy price action and increased risk of false breakouts. The presence of multiple timeframes showing range-bound conditions (e.g., low ADX values or narrow Bollinger Bands) would have flagged the risk in advance.
+- **Ranging Market Conditions**: High-quality setups with multiple confluences in ranging markets (e.g., Fibonacci levels, EMA crossovers) often fail due to choppy price action. A market structure analysis indicating a ranging regime would have flagged the risk of low directional momentum.
   
-- **Proximity to Invalidation Level**: Entries very close to defined invalidation levels leave little room for normal price fluctuation, increasing the likelihood of premature stop-outs. A larger buffer between entry and invalidation level (e.g., at least 1.5x ATR) would have flagged this risk.
+- **Proximity to Invalidation Levels**: Entries very close to pre-defined invalidation levels leave little room for normal price noise and increase the likelihood of stop-outs. Ensuring a buffer between entry and invalidation level based on recent volatility (e.g., ATR) would have flagged this risk.
 
-- **Hidden Divergence Without Confirmatory Indicators**: Hidden divergences can be less reliable without additional confirmatory signals such as a clear breakout or support/resistance confirmation from other indicators (e.g., EMA crossovers, VWAP confluence). The absence of these confirmations would have flagged the risk in advance.
+- **Overextension Indicators Near Band Edges**: Setups near Bollinger Bands edges, especially when combined with overbought/oversold RSI conditions or bearish/bullish sweeps, indicate potential mean reversion. Checking %B values and RSI levels at scan time would have highlighted the risk of overextended price action.
 
 ### WIN/LOSS INSIGHT
 WIN/LOSS INSIGHT:
-- The winning trades consistently featured Fibonacci levels combined with volume profile POC or EMA resistance/support, providing clearer structural invalidation points compared to losing trades.
-- Winning trades often had a golden pocket confluence, which was absent in most losing trades, suggesting this tag adds significant predictive value when present.
+- The winning trades had multiple structural supports including Fibonacci levels and EMA alignments (e.g., sr_4h, fib_1h), while losing trades often lacked these strong confluences or relied on less robust signals like RSI divergence.
+- Winning trades showed sustained momentum post-entry, as indicated by the market conditions described in the post-mortem, whereas losing trades experienced a lack of follow-through despite having high-quality entry locations.

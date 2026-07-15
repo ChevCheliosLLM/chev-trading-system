@@ -1,28 +1,32 @@
 CHEV TRADING PLAYBOOK — FOREX
-Last updated: 2026-07-13 18:27:14 | Based on 38 FOREX trades
+Last updated: 2026-07-15 10:37:02 | Based on 42 FOREX trades
 ========================================
 
 ### CONFLUENCE CONDITIONS
-- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
-  - Combinations involving `fast_anchor_or_high`, `fast_anchor_or_low`, and `pattern_mid_conf` show strong results with a win rate of 80% (n=9).
-  - RSI divergence (`rsi_div_hidden`) provides real signals in trending markets, contributing to high win rates like +2.58 (n=13).
+- Shadow combos with high win rates (≥80%) like `bb_squeeze,ema13,ema21,ema55,fast_anchor_or_high,fast_anchor_or_low,fib_50,pattern_high_conf` are producing the best results.
+- RSI divergence signals are more reliable in trending markets; in ranging markets, they often lead to false positives.
+- SR levels need to be 4H for better confirmation when there is a clear trend direction.
 
 ### MARKET STRUCTURE RULES
-- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
-  - Trending markets improve setup quality when combined with `fast_anchor_or_high` and `fast_anchor_or_low`, as seen in +2.58 (n=13) win rate.
-  - Price reaches TP more often when setups include `fib_50` and `rsi_div_hidden`, indicating strong trend continuation.
+- Trending market conditions improve setup quality as winners tend to reach TP rather than reverse early.
+- High-confidence patterns like `fast_anchor_or_high,fast_anchor_or_low,pattern_high_conf` perform well in trending markets but not in ranging ones.
+- In ranging markets, setups with strong support/resistance levels are more reliable.
 
 ### ENTRY QUALITY STANDARDS
-- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
-  - High-conviction entries have multiple confirmations like `fast_anchor_or_high`, `fast_anchor_or_low`, and `pattern_mid_conf`.
-  - Winners typically had strong trend indicators (`ema13`, `ema21`) and clear support/resistance levels.
+- High-conviction entries have multiple confluences (e.g., `bb_squeeze`, `ema13`, `fast_anchor_or_high`) and clear trend direction.
+- Winners typically had a combination of technical indicators like `fib_50` and strong support/resistance levels, while losers lacked these structural elements.
 
 ### TRADE MANAGEMENT PATTERNS
-- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
-  - Insufficient data — revisit next session.
+- Raising TP often resulted in price hitting the raised TP (e.g., `bb_squeeze,ema13,ema21,ema55,fast_anchor_or_high,fast_anchor_or_low,fib_50,pattern_high_conf`).
+- Moving SL early did not protect profit and often led to being stopped out before reaching TP.
+- Leaving trades alone with original SL/TP resulted in more wins than managed adjustments.
 
 ### REASONING QUALITY
-- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
+- 63% of reasoning was validated by price action (2 VALIDATED, 17 PARTIAL).
+- Invalidated reasoning often stemmed from misreading market structure or timeframe.
+- A+ setups showed better validation rates compared to B setups, indicating higher structural confidence.
+
+### ASSET NOTES
 **TRENDING MARKET BEHAVIOUR — CRITICAL**
 - In a confirmed uptrend (4H HH/HL, net move > +2%), resistance levels are CONTINUATION ZONES, not reversal points. Shorting resistance in an uptrend is the lowest-probability trade in forex. The pair will walk through resistance, not bounce from it.
 - In a confirmed downtrend (4H LH/LL, net move < -2%), support levels are CONTINUATION ZONES. Longing support in a downtrend is similarly low probability.
@@ -32,31 +36,28 @@ Last updated: 2026-07-13 18:27:14 | Based on 38 FOREX trades
   - 3 validated (n=3) and 15 partial (n=15) reasoning outcomes indicate moderate validation.
   - A+ setups show better validation with a win rate of 0% (n=1), while B setups have a win rate of 22% (n=9).
 
-### ASSET NOTES
-- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
-  - Cryptos show stronger performance with `fast_anchor_or_high` and `fast_anchor_or_low`, while forex benefits from `rsi_div_hidden`.
+- Cryptos and forex performed similarly in trending markets but differently in ranging ones; stocks were more prone to false breakouts.
+- Crypto setups with `bb_squeeze` and strong trend indicators had the highest win rate.
 
 ### JANE'S PATTERNS
-- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
-  - Insufficient data — revisit next session.
+- Jane is consistently profitable on setups like `fast_anchor_or_high,fast_anchor_or_low,pattern_breakout_vol`.
+- Her instincts diverge from models in ranging markets where she overestimates breakout potential; her setups were often invalidated here.
 
 ### SHADOW COMBO INTELLIGENCE
-- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
-  - Shadow combo `bb_squeeze,ema13,ema21,fast_anchor_or_high,fast_anchor_or_low,pattern_mid_conf` has a shadow win rate of +2.58 (n=13) but no real-trade confirmation yet.
-  - Shadow combo `bb_near,fast_anchor_or_low,fast_anchor_pdl,pattern_high_conf` shows a tentative win rate of +1.86 (shadow only).
+- Shadow combos with high win rates (≥80%) such as `bb_squeeze,ema13,ema21,ema55,fast_anchor_or_high,fast_anchor_or_low,fib_50,pattern_high_conf` have not yet been confirmed by real trades.
+- Combos like `fast_anchor_pdl,pattern_high_conf` with 100% win rate (shadow only) still lack real-trade confirmation.
 
 ### INSUFFICIENT DATA
-- **Window: 2026-07-07 -> 2026-07-11, n=15, regime: trending**
-  - Insufficient data — revisit next session.
+- Insufficient data — revisit next session.
 
 ### STRUCTURAL RISK FACTORS
-- **Ranging Market Conditions**: High volatility and lack of directional bias in ranging markets can lead to choppy price action, making setups with tight stop-loss placements more prone to being hit. Require a broader structural support/resistance band or an extended timeframe confirmation before entering.
+- **Ranging Market Conditions**: The presence of a ranging market context (often indicated by tight Bollinger Bands and limited directional momentum) should have flagged higher risk due to potential whipsaws around support/resistance levels.
   
-- **Bollinger Bands Squeeze (BBS)**: Presence of BBS indicates high volatility risk, which may cause rapid price movements that can quickly trigger stop losses. Look for additional confluences like strong SR levels or clear momentum indicators to mitigate this risk.
+- **Tight Stop-Loss Placement**: Tight stop-losses near structural levels in choppy or ranging markets increase the likelihood of being stopped out due to normal price fluctuations. A wider stop placement relative to market volatility would have reduced this risk.
 
-- **Marginal Entry Levels**: Entries near the edges of structural support/resistance zones without a clear confirmation from other indicators (e.g., RSI divergence, EMA crossovers) are more susceptible to being invalidated by minor price fluctuations. Require at least two additional confluences or a broader SR level for higher confidence.
+- **Multiple Confluences Near Structural Boundaries**: Entries taken near the upper or lower boundaries of expected ranges (e.g., close to EMA resistances/supports) in a ranging market are more vulnerable to reversal and should be treated with caution, requiring additional confirmation from other indicators.
 
 ### WIN/LOSS INSIGHT
 WIN/LOSS INSIGHT:
-- Winning trades often included Fibonacci confluence (`fib_1h`) and non-RSI divergence (`dv`), which were notably absent in losing trades.
-- Winning setups frequently had support from multiple EMAs (EMA55, EMA21, EMA13) and were within a Bollinger Bands squeeze zone, indicating strong structural support that was less prevalent in the losing trades.
+- The winning trades consistently had confluences at multiple timeframes (e.g., sr_4h with fib_1h) and included non-RSI divergence (dv), which provided additional confirmation of momentum shifts.
+- Winning setups often mentioned ranging market conditions on the 4H timeframe, allowing for more predictable price action around support/resistance levels, whereas losing trades were taken in tighter ranges or near upper boundaries where normal fluctuations could trigger stops prematurely.

@@ -1,0 +1,144 @@
+================================================================================
+ CHEVTOOLS -- TERMINAL CODES CHEAT SHEET
+ (PowerShell commands, run from C:\ChevTools unless noted otherwise)
+================================================================================
+
+
+--------------------------------------------------------------------------------
+1) START THE LAUNCHER (the easy button -- has GUI buttons for most of this)
+--------------------------------------------------------------------------------
+What is it: Opens the ChevTools launcher window -- from there you can start
+Dexter, open WebUI, open the webapp, and start the Cloudflare tunnel with
+buttons instead of typing commands. Easiest starting point most days.
+
+    python launcher.py
+
+
+--------------------------------------------------------------------------------
+2) START DEXTER (the bot itself)
+--------------------------------------------------------------------------------
+What is it: Runs Dexter -- the scan loop, Chev's brain calls, and the Flask
+server that serves the webapp/API on port 8080, all in one process. Once
+this is running, http://localhost:8080 is live on your machine.
+
+    python dexter.py
+
+NOTE: this starts the REAL bot -- it scans, it can post trades, it talks to
+Chev. Only run this when you actually mean to.
+
+
+--------------------------------------------------------------------------------
+3) SHARE THE TERMINAL REMOTELY (Cloudflare Tunnel on port 8080)
+--------------------------------------------------------------------------------
+What is it: Dexter must already be running (step 2) before you do this --
+this just exposes your local port 8080 to a public internet address so
+someone else (e.g. Alejandro) can open it in a browser. Prints a URL like
+https://random-words-1234.trycloudflare.com after a few seconds. Leave the
+window open -- closing it kills the link. The launcher also has a button
+for this exact command.
+
+    & "C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --url http://localhost:8080
+
+(If cloudflared is on your PATH already, you can just type:)
+
+    cloudflared tunnel --url http://localhost:8080
+
+
+--------------------------------------------------------------------------------
+4) PUSH TO GITHUB / DEPLOY WEBAPP CHANGES (push HTML/CSS/JS to the live site)
+--------------------------------------------------------------------------------
+What is it: After editing anything in webapp/ (index.html, css/, js/), this
+pushes those files to GitHub so the live site at
+chevcheliosllm.github.io/chev-trading-system/webapp/index.html updates.
+Local testing (localhost:8080) does NOT need this -- only run it when you
+want the public/shared version to reflect your changes.
+
+    python push_dashboard.py
+
+IF IT FAILS WITH "403 Resource not accessible by personal access token":
+This is NOT a code bug -- GitHub itself is rejecting the saved token. It
+reads the token from the GITHUB_TOKEN environment variable first, then falls
+back to a line in secrets.local (C:\ChevTools\secrets.local) that looks like
+GITHUB_TOKEN=xxxxxxxx. A 403 here means that token is expired, was revoked,
+or no longer has write access to this specific repo. Fix: go to
+github.com -> Settings -> Developer settings -> Personal access tokens,
+generate a fresh token with write access to the chev-trading-system repo,
+and replace the value in secrets.local (or the GITHUB_TOKEN env var) with
+the new one. Nothing about this script needs to change -- it's purely a
+GitHub-side permission/expiry issue.
+
+
+--------------------------------------------------------------------------------
+5) OPEN CHEV'S BRAIN INTERFACE (Open WebUI / Ollama front-end)
+--------------------------------------------------------------------------------
+What is it: Opens the local Ollama WebUI in your browser where you can talk
+to the chev-32b model directly, manage models, etc. Doesn't need Dexter
+running.
+
+    start http://localhost:3000
+
+(Or just click "Open WebUI" in the launcher.)
+
+
+--------------------------------------------------------------------------------
+6) RUN THE SELF-TESTS (check nothing is broken before/after an edit)
+--------------------------------------------------------------------------------
+What is it: Each of these files has its own built-in test suite that runs
+standalone -- no bot required, no network calls, safe to run any time.
+Useful right after Claude finishes a phase, or any time you want a sanity
+check before restarting Dexter.
+
+    python ray_registry.py
+    python labeller.py
+    python derivs.py
+    python audit_context.py
+    python test_ray_break_alert.py
+    python test_ray_extension.py
+
+(Each prints PASS/FAIL lines and a final "X/Y tests passing" summary.)
+
+
+--------------------------------------------------------------------------------
+7) CHECK PYTHON FILES COMPILE CLEANLY (quick syntax check, no execution)
+--------------------------------------------------------------------------------
+What is it: Confirms a .py file has no syntax errors WITHOUT actually
+running it (dexter.py included -- this is how Claude checks dexter.py is
+safe to restart without ever starting the bot).
+
+    python -m py_compile dexter.py
+    python -m py_compile ray_registry.py
+
+(Silent output = success. No output at all means it compiled fine.)
+
+
+--------------------------------------------------------------------------------
+8) CHECK A JAVASCRIPT FILE FOR SYNTAX ERRORS
+--------------------------------------------------------------------------------
+What is it: Same idea as (7) but for a webapp JS file -- checks it parses
+correctly without running it in a browser.
+
+    node --check webapp\js\charts\engine.js
+
+
+--------------------------------------------------------------------------------
+9) BASIC GIT CHECK-IN (see what changed, save it)
+--------------------------------------------------------------------------------
+What is it: The everyday "what did I change, and did it get saved" loop.
+
+    git status
+    git diff
+    git log --oneline -10
+
+(To actually commit -- usually Claude does this at the end of a phase, but
+if you ever want to do it yourself:)
+
+    git add <file1> <file2>
+    git commit -m "short description of what changed and why"
+
+
+================================================================================
+ QUICK REFERENCE -- PORTS
+================================================================================
+  8080  -> Dexter's Flask server (API + the live webapp/terminal)
+  3000  -> Open WebUI (Chev's brain / Ollama front-end)
+================================================================================

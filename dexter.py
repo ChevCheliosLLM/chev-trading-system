@@ -821,6 +821,25 @@ def api_strategy_counterfactual():
     })
 
 
+@flask_app.route("/api/strategy/counterfactual_report")
+def api_strategy_counterfactual_report():
+    """Read-only: the full printable Examiner counterfactual report as plain text --
+    counterfactual_report.py's build_report() (the exact same text write_report()
+    saves to counterfactual_report.txt), served here instead so it's visible in the
+    webapp without Kev needing to remember to run the script by hand. Calls
+    build_report() only -- never write_report(), so this route never touches the
+    filesystem; a page load here leaves zero trace, same as every other read-only
+    route in this build. Not cached (unlike /api/strategy/counterfactual above):
+    this is a manual, click-to-view tab, not part of the 25s auto-poll loop, so
+    there's no repeated-call volume here worth caching against."""
+    try:
+        text = counterfactual_report.build_report()
+        return jsonify({"ok": True, "text": text})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # =============================================================================
 # WEIGHT LAB — API routes
 #
@@ -4500,24 +4519,19 @@ def _call_chev(messages, timeout=120, model_id=MODEL_ID):
                 return data["choices"][0]["message"]["content"].strip()
             content_len = sum(len(str(m.get("content", ""))) for m in messages)
             data_str = str(data)
-            is_depleted = "prepayment credits are depleted" in data_str or "RESOURCE_EXHAUSTED" in data_str
-            is_rate_limit = is_depleted or resp.status_code == 429 or (
+            is_rate_limit = resp.status_code == 429 or (
                 "'code': 429" in data_str or '"code": 429' in data_str or
-                "free_tier" in data_str or "quota" in data_str.lower()
+                "quota" in data_str.lower()
             )
             if is_rate_limit:
-                if is_depleted:
-                    _chev_rate_limit_until = time.time() + 14400  # 4 hours — credits gone, stop hammering
-                    print(f"[{datetime.now()}] *** GEMINI CREDITS DEPLETED — pausing ALL escalations for 4 hours. Top up at console.cloud.google.com ***")
-                else:
-                    _chev_rate_limit_until = time.time() + _CHEV_RL_COOLDOWN
-                    print(f"[{datetime.now()}] Chev rate-limited — cooling down {_CHEV_RL_COOLDOWN}s.")
+                _chev_rate_limit_until = time.time() + _CHEV_RL_COOLDOWN
+                print(f"[{datetime.now()}] Chev rate-limited — cooling down {_CHEV_RL_COOLDOWN}s.")
                 print(f"  payload {content_len:,} chars | {data_str[:300]}")
             elif _chev_online:
                 _chev_online = False
                 print(f"[{datetime.now()}] Chev is down — pausing escalations.")
                 print(f"  HTTP {resp.status_code} | payload {content_len:,} chars")
-                print(f"  Gemini error: {data_str[:400]}")
+                print(f"  Response error: {data_str[:400]}")
             return None
         except Exception as e:
             if _chev_online:
@@ -12783,8 +12797,21 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
         since_epoch  = _honest_sim_last_check_ts(trade)
         exit_candles = honest_sim.get_exit_candles(trade["symbol"], trade["asset_type"], since_epoch, fetch_candles)
 
-        if exit_candles is None:
-            print(f"[{datetime.now()}] {trade['symbol']} candle fetch failed — falling back to spot check this cycle.")
+        # Starvation guard: get_exit_candles() returning [] repeatedly (fetch "succeeds"
+        # but never yields a fresh closed candle -- e.g. a stale scanner cache entry, or
+        # the exchange quietly serving the same window every call) used to mean this trade
+        # NEVER got spot-checked, so a blown SL/TP could sit open indefinitely even though
+        # the live price thread showed it correctly the whole time. If it's been more than
+        # 3 candle-periods since the last candle we actually processed, treat it the same
+        # as a hard fetch failure and fall back to spot.
+        _exit_tf_secs   = honest_sim.EXIT_TF_SECONDS.get(honest_sim.EXIT_TF.get(trade["asset_type"], "1m"), 900)
+        _candle_starved = exit_candles is not None and not exit_candles and (time.time() - since_epoch) > (_exit_tf_secs * 3)
+
+        if exit_candles is None or _candle_starved:
+            if exit_candles is None:
+                print(f"[{datetime.now()}] {trade['symbol']} candle fetch failed — falling back to spot check this cycle.")
+            else:
+                print(f"[{datetime.now()}] {trade['symbol']} no new exit candle in {int(time.time() - since_epoch)}s (starved) — falling back to spot check.")
             hit_tp, hit_sl = _detect_sl_tp_hit(trade, price)
             trade["last_wick_check_ms"] = int(time.time() * 1000)
 
@@ -13599,10 +13626,14 @@ _load_jane_balance()
 jane_trades = load_jane_trades_from_sheet() if jane_worksheet else []
 print(f"[{datetime.now()}] Jane: {len(jane_trades)} open trade(s). Balance: ${jane_balance:.2f}")
 
-# ── Startup SL audit ─────────────────────────────────────────────────────────
+# ── Startup SL/TP audit ──────────────────────────────────────────────────────
 # When Dexter restarts after being down, price may have already blown through a
-# trade's SL while we were offline.  The normal loop wouldn't catch it until the
-# next price tick, which could be minutes away.  Close those trades immediately.
+# trade's SL *or TP* while we were offline.  The normal loop wouldn't catch it
+# until the next price tick, which could be minutes away.  Close those trades
+# immediately. (Originally SL-only -- extended to also catch a blown TP after a
+# forex trade was found sitting OPEN days past its target because the candle-
+# based exit check had starved; see the starvation guard in
+# check_and_update_open_trades for the running-loop side of that fix.)
 def _startup_sl_audit():
     global open_trades, _cached_balance
     survived = []
@@ -13620,17 +13651,21 @@ def _startup_sl_audit():
 
         is_long  = trade["direction"] == "long"
         hit_sl   = (price <= trade["sl"]) if is_long else (price >= trade["sl"])
-        if not hit_sl:
+        hit_tp   = (price >= trade["tp"]) if is_long else (price <= trade["tp"])
+        if not hit_sl and not hit_tp:
             survived.append(trade)
             continue
 
-        # SL was breached while offline — close at current price
-        exit_price = price
+        # SL/TP was breached while offline — close now. SL books at the raw
+        # (possibly worse-than-SL) price like a real gap fill; TP books at the
+        # target itself, matching the running loop's spot-fallback convention.
+        exit_price = price if hit_sl else trade["tp"]
         exit_move  = ((exit_price - trade["entry"]) / trade["entry"]) if is_long \
                      else ((trade["entry"] - exit_price) / trade["entry"])
         _gross_pnl = round(trade["position_size_usd"] * exit_move, 2)
         exit_pnl, _trade_cost = honest_sim.apply_costs(trade, _gross_pnl, 1.0)
         outcome    = "WIN" if exit_pnl >= 0 else "LOSS"
+        close_type = "SL_HIT" if hit_sl else "TP_HIT"
 
         balance          = get_balance(dashboard_ws)
         margin_to_return = trade.get("margin_reserved", 0)
@@ -13644,16 +13679,17 @@ def _startup_sl_audit():
                 range_name=f"K{trade['row']}:N{trade['row']}"
             )
         except Exception as e:
-            print(f"[Startup SL audit] Sheet update failed for {trade['symbol']}: {e}")
+            print(f"[Startup SL/TP audit] Sheet update failed for {trade['symbol']}: {e}")
 
-        print(f"[Startup SL audit] {trade['symbol']} SL already breached (price={price} vs SL={trade['sl']}) "
+        _breached_label = f"SL={trade['sl']}" if hit_sl else f"TP={trade['tp']}"
+        print(f"[Startup SL/TP audit] {trade['symbol']} {close_type} already breached (price={price} vs {_breached_label}) "
               f"— closing at {exit_price} | PnL ${exit_pnl:+.2f} (gross ${_gross_pnl:+.2f} fees ${_trade_cost:.2f}) | Balance ${balance:.2f} -> ${new_balance:.2f}")
         send_telegram_alert(
-            f"⚠️ STARTUP AUDIT: {trade['symbol']} SL breached while offline — closed at {exit_price} | PnL ${exit_pnl:+.2f}"
+            f"⚠️ STARTUP AUDIT: {trade['symbol']} {close_type} breached while offline — closed at {exit_price} | PnL ${exit_pnl:+.2f}"
         )
 
         trade_copy               = dict(trade)
-        trade_copy["close_type"]   = "SL_HIT"
+        trade_copy["close_type"]   = close_type
         trade_copy["trading_cost"] = _trade_cost
         threading.Thread(
             target=_do_postmortem,
@@ -13665,7 +13701,7 @@ def _startup_sl_audit():
     n_closed    = len(open_trades) - len(survived)
     open_trades = survived
     if n_closed:
-        print(f"[Startup SL audit] Closed {n_closed} trade(s) that breached SL while Dexter was offline.")
+        print(f"[Startup SL/TP audit] Closed {n_closed} trade(s) that breached SL/TP while Dexter was offline.")
 
 _startup_sl_audit()
 # ─────────────────────────────────────────────────────────────────────────────

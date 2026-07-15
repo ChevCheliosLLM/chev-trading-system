@@ -42,7 +42,7 @@
 <link rel="stylesheet" href="css/components/hypothesis-tracker.css?v=20260718-1">
 <link rel="stylesheet" href="css/components/command-palette.css">
 <link rel="stylesheet" href="css/components/shortcuts-panel.css?v=20260720-1">
-<link rel="stylesheet" href="css/components/strategy.css?v=20260716-8">
+<link rel="stylesheet" href="css/components/strategy.css?v=20260715-1">
 <link rel="stylesheet" href="css/components/weight-lab.css?v=20260716-2">
 <link rel="stylesheet" href="css/animations.css">
 <!-- ============================================================
@@ -330,6 +330,7 @@
         <div class="stratTab" data-spane="performance">Performance</div>
         <div class="stratTab" data-spane="raw">Raw Log</div>
         <div class="stratTab" data-spane="weightlab">⚖️ Weight Lab</div>
+        <div class="stratTab" data-spane="ctfreport">📄 Full Report</div>
         <div class="stratTab" data-spane="learn">📖 Learn</div>
       </div>
       <div id="stratBody">
@@ -500,6 +501,20 @@
             <button id="weightLabRefreshBtn" title="Refresh">⟳</button>
           </div>
           <div id="weightLabBody" class="stratShadowSection"></div>
+        </div>
+
+        <!-- ===== FULL REPORT (counterfactual_report.py's printable text, in-app) =====
+             Kev previously had to remember to run `python counterfactual_report.py`
+             by hand to get this; now it's just a tab. Loaded lazily on this tab's own
+             first click (same pattern as Weight Lab above), manual refresh icon for
+             "give me the current numbers now". Server calls build_report() only --
+             never write_report() -- so opening this tab never touches disk. -->
+        <div class="stratPane" data-spane="ctfreport">
+          <div class="stratSectionLabel">📄 Full Counterfactual Report
+            <button id="ctfReportRefreshBtn" title="Refresh">⟳</button>
+          </div>
+          <div class="stratShadowCaveat">Same "what-if" numbers as the Shadow Outcomes section above, just the full printable version — read top to bottom for the complete per-category breakdown.</div>
+          <pre id="ctfReportBody" class="stratReportBox">Loading…</pre>
         </div>
 
         <!-- ===== LEARN (PHASE 21) =====
@@ -1446,7 +1461,7 @@
 <script src="js/charts/rsi-canvas.js?v=20260709-2"></script>
 <script src="js/ui/chat.js?v=20260717-1"></script>
 <script src="js/charts/timeframe-load.js?v=20260709-2"></script>
-<script src="js/charts/drawing.js?v=20260721-7"></script>
+<script src="js/charts/drawing.js?v=20260715-1"></script>
 <script src="js/charts/engine.js?v=20260722-3"></script>
 <script src="js/ui/weight-lab.js?v=20260713-2"></script>
 <script src="js/ui/sparklines.js?v=20260709-2"></script>

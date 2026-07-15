@@ -79,7 +79,7 @@ class ChevLauncher:
         self._dots   = {}
         self._status = {
             "docker": False, "webui": False, "dexter": False,
-            "gemini": False, "telegram": False, "brain": False,
+            "ollama": False, "telegram": False, "brain": False,
         }
         self._brain_built = False
         self._procs = {}
@@ -113,7 +113,7 @@ class ChevLauncher:
             ("docker",   "Docker",    "Container runtime · runs Open WebUI",         self._start_docker),
             ("webui",    "Open WebUI","Chev's interface · localhost:3000",           lambda: webbrowser.open(WEBUI)),
             ("dexter",   "Dexter",    "Trading bot · click to start",                self._start_dexter),
-            ("gemini",   "Ollama",    "Chev's brain · click to start",               self._start_ollama),
+            ("ollama",   "Ollama",    "Chev's brain · click to start",               self._start_ollama),
             ("telegram", "Telegram",  "Chev in Telegram · click to start",           self._start_telegram),
             ("brain",    "Chev Brain","Corrected 32B (chev-32b + chev-32b-learn) · one-click build",   self._build_brain),
         ]:
@@ -575,19 +575,19 @@ class ChevLauncher:
             docker   = _check_docker()
             webui    = _check(WEBUI)
             dexter   = _check(f"{TERMINAL}/api/trades")
-            gemini   = _check("http://localhost:11434", timeout=4)
+            ollama   = _check("http://localhost:11434", timeout=4)
             telegram = self._check_telegram()
             brain    = self._check_brain()
 
             self._status = {
                 "docker": docker, "webui": webui, "dexter": dexter,
-                "gemini": gemini, "telegram": telegram, "brain": brain,
+                "ollama": ollama, "telegram": telegram, "brain": brain,
             }
             self.root.after(0, self._apply_status)
             time.sleep(5)
 
     def _apply_status(self):
-        for key in ("docker", "webui", "dexter", "gemini", "telegram", "brain"):
+        for key in ("docker", "webui", "dexter", "ollama", "telegram", "brain"):
             self._set_dot(key, self._status[key])
 
         all_up = all(self._status.values())

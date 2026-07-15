@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-13 20:32:13",
+  "generated_at": "2026-07-15 11:04:17",
   "note": "Self-graded by Chev's own post-mortem QUALITY verdict \u2014 not an independent price-action check.",
   "min_n": 5,
   "assets": {
@@ -7,10 +7,10 @@
       "versions": {
         "pre-stamp": {
           "validated": 11,
-          "total": 50,
-          "rate": 0.22,
+          "total": 55,
+          "rate": 0.2,
           "window_start": "2026-06-30 21:27:27",
-          "window_end": "2026-07-13 12:49:28"
+          "window_end": "2026-07-15 02:11:22"
         },
         "crypto-20260711-1649": {
           "validated": 1,
@@ -21,30 +21,30 @@
         }
       },
       "trailing_50": {
-        "validated": 12,
+        "validated": 11,
         "total": 50,
-        "rate": 0.24
+        "rate": 0.22
       },
       "latest_version": {
         "version": "pre-stamp",
         "validated": 11,
-        "total": 50,
-        "rate": 0.22,
+        "total": 55,
+        "rate": 0.2,
         "window_start": "2026-06-30 21:27:27",
-        "window_end": "2026-07-13 12:49:28"
+        "window_end": "2026-07-15 02:11:22"
       },
       "previous_version": null,
       "delta_pct_points": null,
-      "summary_text": "Crypto: Chev's reasoning checked out 22% of the time on this playbook \u2014 no prior playbook version has enough closed trades yet to compare against."
+      "summary_text": "Crypto: Chev's reasoning checked out 20% of the time on this playbook \u2014 no prior playbook version has enough closed trades yet to compare against."
     },
     "forex": {
       "versions": {
         "pre-stamp": {
-          "validated": 3,
-          "total": 23,
-          "rate": 0.13,
+          "validated": 4,
+          "total": 24,
+          "rate": 0.167,
           "window_start": "2026-07-01 12:53:13",
-          "window_end": "2026-07-11 04:14:43"
+          "window_end": "2026-07-15 11:04:17"
         },
         "forex-20260713-1217": {
           "validated": 0,
@@ -52,24 +52,31 @@
           "rate": 0.0,
           "window_start": "2026-07-13 20:32:13",
           "window_end": "2026-07-13 20:32:13"
+        },
+        "forex-20260713-1832": {
+          "validated": 0,
+          "total": 3,
+          "rate": 0.0,
+          "window_start": "2026-07-14 07:57:10",
+          "window_end": "2026-07-15 10:31:25"
         }
       },
       "trailing_50": {
-        "validated": 3,
-        "total": 24,
-        "rate": 0.125
+        "validated": 4,
+        "total": 28,
+        "rate": 0.143
       },
       "latest_version": {
         "version": "pre-stamp",
-        "validated": 3,
-        "total": 23,
-        "rate": 0.13,
+        "validated": 4,
+        "total": 24,
+        "rate": 0.167,
         "window_start": "2026-07-01 12:53:13",
-        "window_end": "2026-07-11 04:14:43"
+        "window_end": "2026-07-15 11:04:17"
       },
       "previous_version": null,
       "delta_pct_points": null,
-      "summary_text": "Forex: Chev's reasoning checked out 13% of the time on this playbook \u2014 no prior playbook version has enough closed trades yet to compare against."
+      "summary_text": "Forex: Chev's reasoning checked out 17% of the time on this playbook \u2014 no prior playbook version has enough closed trades yet to compare against."
     },
     "stock": {
       "versions": {
