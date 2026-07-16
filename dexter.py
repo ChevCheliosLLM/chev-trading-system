@@ -13263,14 +13263,26 @@ def check_and_update_open_trades(worksheet, dashboard_ws, asset_types_to_check):
                             print(f"[{datetime.now()}] {trade['symbol']} Chev's TRAIL move to {new_sl} rejected — wrong side of price {price}")
 
                     if new_tp is not None:
-                        old_tp = trade["tp"]
-                        trade["tp"] = new_tp
-                        worksheet.update_cell(trade["row"], 5, new_tp)
-                        tp_entry = f"TP {old_tp} → {new_tp} @ {datetime.now(timezone.utc).strftime('%H:%M')}"
-                        if move_reason:
-                            tp_entry += f" — {move_reason}"
-                        trade.setdefault("chev_moves", []).append(tp_entry)
-                        print(f"[{datetime.now()}] {trade['symbol']} TP trailed to {new_tp}" + (f" | reason: {move_reason}" if move_reason else ""))
+                        # Same directional sanity check as the SL/SIP move above: a new TP
+                        # must still sit ahead of current price (and of the current stop) in
+                        # the trade's favor. Chev sending a TP already behind price would
+                        # otherwise be accepted unchecked and could immediately mis-book an
+                        # exit, or silently invert the TP/SL ordering.
+                        tp_valid = (new_tp > price) if is_long else (new_tp < price)
+                        if tp_valid:
+                            tp_valid = (new_tp > trade["sl"]) if is_long else (new_tp < trade["sl"])
+
+                        if tp_valid:
+                            old_tp = trade["tp"]
+                            trade["tp"] = new_tp
+                            worksheet.update_cell(trade["row"], 5, new_tp)
+                            tp_entry = f"TP {old_tp} → {new_tp} @ {datetime.now(timezone.utc).strftime('%H:%M')}"
+                            if move_reason:
+                                tp_entry += f" — {move_reason}"
+                            trade.setdefault("chev_moves", []).append(tp_entry)
+                            print(f"[{datetime.now()}] {trade['symbol']} TP trailed to {new_tp}" + (f" | reason: {move_reason}" if move_reason else ""))
+                        else:
+                            print(f"[{datetime.now()}] {trade['symbol']} Chev's TP move to {new_tp} rejected — wrong side of price {price} or current SL {trade['sl']}")
 
                 except (ValueError, IndexError) as e:
                     print(f"[{datetime.now()}] Couldn't parse Chev's TRAIL reply: {reply} — {e}")
