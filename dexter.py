@@ -613,6 +613,49 @@ def classify_chev_skip_reason(reason):
     return "OTHER"
 
 
+# PHASE 2 (2026-07-17, backtest_chev_skips.py): during EXPLORATION_MODE, a SKIP is only
+# valid if it reduces to one of these categories -- matches the sanctioned list in
+# _exploration_note (ask_chev_to_judge) plus the R:R/ATR-floor citation path the
+# escalation prompt's SKIP DISCIPLINE section separately authorizes. Backtest found 26.4%
+# of score-qualified SKIPs fell outside this list (CONFLUENCE_BELOW_THRESHOLD is
+# explicitly banned by name in the prompt; CONFIRMATION_MISSING/STRUCTURAL_SUPPORT_MISSING
+# were never authorized at all) and that group won MORE often than the sanctioned one.
+SKIP_TAXONOMY_SANCTIONED = {
+    "INVALIDATION_TOO_CLOSE", "INVALIDATION_MISSING", "TREND_CONTEXT",
+    "PRICE_NOT_AT_ZONE", "RISK_REWARD_OR_SIZING",
+}
+
+# Only trust a number in Chev's SKIP text as a FLOOR CLAIM (not just his read of the
+# setup's own R:R) when it's textually adjacent to floor/minimum/required/at-least
+# language -- verified against real chev_decisions.jsonl quotes, incl. the false-positive
+# case ("R:R only 0.9:1, not attractive" cites zero floor, must not be flagged).
+_FLOOR_CITE_RE = re.compile(
+    r"(?:"
+    r"at least\s+(\d+(?:\.\d+)?)\s*:\s*1"
+    r"|(\d+(?:\.\d+)?)\s*:\s*1\s+floor"
+    r"|(?:minimum|required?)\s+(?:requirement\s+)?(?:of\s+)?(\d+(?:\.\d+)?)\s*:\s*1"
+    r"|(\d+(?:\.\d+)?)\s*:\s*1\s+(?:minimum|required?|requirement)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def rr_citation_matches_config(reason_text, detail_text, exploration_mode, tol=0.05):
+    """None = no floor was claimed, nothing to check. True/False = a floor was claimed
+    and does/doesn't match risk_gauntlet's real MIN_NET_RR for any trade_type. Found via
+    backtest: chev-32b (the escalation model's base) was built 2026-07-09, five days
+    before the EXPLORATION/NORMAL R:R-floor split (2026-07-14) -- Chev has repeatedly
+    cited 2.0:1 (the pre-split NORMAL-mode number) as recently as 2026-07-16, a number
+    that appears nowhere in his current prompt."""
+    combined = f"{reason_text or ''} {detail_text or ''}"
+    cited = [float(g) for m in _FLOOR_CITE_RE.finditer(combined) for g in m.groups() if g]
+    if not cited:
+        return None
+    stated_floor = max(cited)
+    real_floors = set(risk_gauntlet.get_active_profile(exploration_mode)["MIN_NET_RR"].values())
+    return any(abs(stated_floor - f) <= tol for f in real_floors)
+
+
 @flask_app.route("/api/strategy/funnel")
 def api_strategy_funnel():
     """Pipeline attrition for the window: pre-escalation NOT_ESCALATED reasons (from
@@ -1010,9 +1053,14 @@ def _build_weight_proposal_payload():
                 raw_diff = cross["avg_netR_with"] - cross["avg_netR_without"]
                 row["agreement"] = "agree" if (coef > 0) == (raw_diff > 0) else "conflict"
             if mapping == "verified" and current_weight is not None:
-                delta = 1 if coef > 0 else -1
-                row["proposed_delta"] = delta
-                row["effective_weight_preview"] = current_weight + delta
+                # 2026-07-16: proportional/decimal step (weight_proposal.compute_delta),
+                # not a flat sign-only +/-1 -- see that function's own guardrail-(b)
+                # comment for why a flat step was a wildly different-sized bet
+                # depending on the tag's own scale (0.5-point tags vs 4-point tags).
+                delta = weight_proposal.compute_delta(coef, lo, hi, current_weight)
+                if delta:
+                    row["proposed_delta"] = delta
+                    row["effective_weight_preview"] = round(current_weight + delta, 2)
         proposals.append(row)
 
     proposals.sort(key=lambda r: -abs(r["coef"]))
@@ -1071,17 +1119,33 @@ def _validate_weight_approval(tag, delta, entries):
     if not isinstance(tag, str) or not tag:
         return False, "missing tag", None
     try:
-        delta = int(delta)
+        delta = round(float(delta), 2)
     except (TypeError, ValueError):
-        return False, "delta must be an integer", None
-    if abs(delta) != 1:
-        return False, "delta must be exactly +1 or -1", None
+        return False, "delta must be a number", None
+    # 2026-07-16: was "delta must be exactly +1 or -1" -- widened to a proportional,
+    # decimal step (see weight_proposal.compute_delta's own guardrail-(b) comment).
+    # weight_proposal.MAX_STEP stays the hard absolute ceiling either way; a bare
+    # magnitude check here (rather than trusting whatever number the client sends)
+    # is deliberate -- matches the existing "server-side, never client-trusted"
+    # posture this function already applies to the significant-tags check below.
+    if delta == 0:
+        return False, "delta must be non-zero", None
+    if abs(delta) > weight_proposal.MAX_STEP:
+        return False, f"delta magnitude {abs(delta)} exceeds the hard ceiling of {weight_proposal.MAX_STEP}", None
     if _resolve_weight_tag(tag) is None:
         return False, f"'{tag}' is not a known SCAN_WEIGHTS/CONFLUENCE_SCORES tag (unmapped)", None
     if tag not in WEIGHT_LAB_VERIFIED_TAGS:
         return False, f"'{tag}' shares a name with a CONFLUENCE_SCORES key but its mechanic has not been verified (unverified) — see handoff PHASE 16 no-aliasing rule", None
     if tag not in _weight_proposal_significant_tags:
         return False, f"'{tag}' was not in the most recently served significant proposal set", None
+    # Sign must match the tag's own last-computed coefficient -- catches a stale or
+    # malformed client-supplied delta pointing the wrong direction, the one piece of
+    # this check the old magnitude-only ("abs(delta) != 1") version never verified.
+    _cached_row = next((p for p in (_weight_proposal_cache.get("payload") or {}).get("proposals", [])
+                         if p.get("tag") == tag), None)
+    if _cached_row is not None and _cached_row.get("coef") is not None:
+        if (delta > 0) != (_cached_row["coef"] > 0):
+            return False, f"delta sign does not match '{tag}'s current coefficient direction — stale proposal, re-fetch and retry", None
     if any(e.get("tag") == tag for e in entries):
         return False, f"a pending override for '{tag}' already exists — revert it first", None
     return True, None, delta
@@ -10360,9 +10424,11 @@ def ask_chev_to_judge(result, balance, dashboard_ws=None, timeout=360, force_tak
             "  If this setup has a nameable entry, a structural stop, and a target, your DEFAULT is POST at the\n"
             "  suggested grade-based risk above. SKIP is still allowed, but must name ONE concrete broken element:\n"
             "  no invalidation level available, direction fights the 4H trend without meeting the counter-trend\n"
-            "  requirements, or price nowhere near the zone. Never SKIP on general caution, 'not enough confluence',\n"
-            "  a letter grade alone, or maturity/participation figures alone — those are sizing inputs in this phase,\n"
-            "  not vetoes.\n\n"
+            "  requirements, price nowhere near the zone, or an R:R/ATR floor from THIS brief that the setup fails —\n"
+            "  cite the brief's actual number, never a general convention. Never SKIP on general caution, 'not enough\n"
+            "  confluence', 'lacks confirmation', 'lacks structural support', a letter grade alone, or maturity/\n"
+            "  participation figures alone — those are sizing inputs in this phase, not vetoes. If your reason isn't\n"
+            "  one of the four named above with a real number attached, it is not a valid SKIP — POST instead.\n\n"
         )
     session_label, session_quality = _session_grade(asset_type)
     grade, suggested_risk          = _setup_grade(result, asset_type)
@@ -14065,7 +14131,7 @@ while True:
                               f"{len(_h_issues)} issue(s). Sending correction to Chev.")
                         _chev_messages.append({"role": "assistant", "content": chev_response})
                         _chev_messages.append({"role": "user",      "content": _h_correction})
-                        _h_revised_reply = _call_chev(_chev_messages, timeout=180)
+                        _h_revised_reply = _call_chev(_chev_messages, timeout=180, model_id=ESCALATION_MODEL_ID)
                         _h_ok = False
                         if _h_revised_reply:
                             _h_revised_parsed = parse_chev_reply(_h_revised_reply)
@@ -14260,7 +14326,7 @@ while True:
                           f"{len(_geo_issues)} issue(s). Sending revision request to Chev.")
                     _chev_messages.append({"role": "assistant", "content": chev_response})
                     _chev_messages.append({"role": "user",      "content": _correction})
-                    _revised_reply = _call_chev(_chev_messages, timeout=180)
+                    _revised_reply = _call_chev(_chev_messages, timeout=180, model_id=ESCALATION_MODEL_ID)
                     _revision_ok = False
                     if _revised_reply:
                         _revised_parsed = parse_chev_reply(_revised_reply)
@@ -14334,7 +14400,7 @@ while True:
                         )
                         _chev_messages.append({"role": "assistant", "content": chev_response})
                         _chev_messages.append({"role": "user",      "content": _g_fix_msg})
-                        _g_revised  = _call_chev(_chev_messages, timeout=180)
+                        _g_revised  = _call_chev(_chev_messages, timeout=180, model_id=ESCALATION_MODEL_ID)
                         _g_accepted = False
                         if _g_revised:
                             _g_rp = parse_chev_reply(_g_revised)
@@ -14585,10 +14651,65 @@ while True:
             else:
                 _last_escalated[esc_key] = time.time() + skip_cool
                 _skip_reason = parsed.get("skip_reason", "no reason captured") if parsed else "no reason captured"
-                print(f"[{datetime.now()}] Chev skipped {result['symbol']}/{primary_tf}: {_skip_reason}")
                 _skip_reasoning = (parsed.get("reasoning", "") if parsed else "")
                 _skip_missing   = (parsed.get("what_was_missing", "") if parsed else "")
                 _skip_detail    = (_skip_reasoning + (f"\n\nWhat was missing: {_skip_missing}" if _skip_missing else "")).strip()
+
+                # PHASE 2 (2026-07-17): one retry if the SKIP reason is off-taxonomy or
+                # cites an R:R floor that doesn't match risk_gauntlet's real config. Scoped
+                # deliberately narrow: only auto-accepts the retry if it's STILL a SKIP
+                # (re-justified, hopefully validly). If the retry flips to POST, that is
+                # NOT auto-routed — a full POST needs geometry review/gauntlet/sizing this
+                # branch was never built to run, and grafting that in blind is a real-money
+                # risk. Instead it's logged distinctly for manual review, and the ORIGINAL
+                # SKIP still stands for this cycle. See backtest_chev_skips.py.
+                if EXPLORATION_MODE:
+                    _skip_cat = classify_chev_skip_reason(_skip_reason)
+                    _retry_nudge = None
+                    if _skip_cat not in SKIP_TAXONOMY_SANCTIONED:
+                        _retry_nudge = (
+                            f"Your SKIP reason (\"{_skip_reason}\") isn't one of the exploration-mode "
+                            f"sanctioned reasons: no invalidation level available, direction fights the "
+                            f"4H trend without meeting counter-trend requirements, price nowhere near "
+                            f"the zone, or an R:R/ATR floor from THIS brief that the setup fails. "
+                            f"Re-read the setup — either name one of those concretely with a real number "
+                            f"from the brief, or POST."
+                        )
+                    elif _skip_cat == "RISK_REWARD_OR_SIZING":
+                        _rr_ok = rr_citation_matches_config(_skip_reason, _skip_detail, EXPLORATION_MODE)
+                        if _rr_ok is False:
+                            _real = risk_gauntlet.get_active_profile(EXPLORATION_MODE)["MIN_NET_RR"]
+                            _retry_nudge = (
+                                f"The R:R floor you cited doesn't match this brief's EXECUTABLE GEOMETRY "
+                                f"block. The real floor for this setup's trade_type is one of: "
+                                f"scalp {_real['scalp']:.2f}:1, day {_real['day']:.2f}:1, "
+                                f"swing {_real['swing']:.2f}:1 — not a general convention. Re-check the "
+                                f"R:R against the correct number and reconsider POST."
+                            )
+                    if _retry_nudge:
+                        _chev_messages.append({"role": "assistant", "content": chev_response})
+                        _chev_messages.append({"role": "user",      "content": _retry_nudge})
+                        _skip_revised = _call_chev(_chev_messages, timeout=180, model_id=ESCALATION_MODEL_ID)
+                        _skip_revised_parsed = parse_chev_reply(_skip_revised) if _skip_revised else None
+                        if _skip_revised_parsed and not _skip_revised_parsed.get("post"):
+                            print(f"[{datetime.now()}] SKIP TAXONOMY RETRY — {result['symbol']}: "
+                                  f"\"{_skip_cat}\" rejected, re-justified on retry.")
+                            _skip_reason    = _skip_revised_parsed.get("skip_reason", _skip_reason)
+                            _skip_reasoning = _skip_revised_parsed.get("reasoning", "")
+                            _skip_missing   = _skip_revised_parsed.get("what_was_missing", "")
+                            _skip_detail    = (_skip_reasoning +
+                                                (f"\n\nWhat was missing: {_skip_missing}" if _skip_missing else "")
+                                                ).strip()
+                        elif _skip_revised_parsed and _skip_revised_parsed.get("post"):
+                            print(f"[{datetime.now()}] SKIP TAXONOMY RETRY — {result['symbol']}: retry flipped "
+                                  f"to POST — NOT auto-routed (needs geometry/gauntlet review this path "
+                                  f"doesn't run). Logging original SKIP; review manually.")
+                            _skip_detail += "\n\n[SKIP_RETRY_YIELDED_POST — see terminal log, not auto-applied]"
+                        else:
+                            print(f"[{datetime.now()}] SKIP TAXONOMY RETRY — {result['symbol']}: "
+                                  f"no usable reply on retry — logging original SKIP as-is.")
+
+                print(f"[{datetime.now()}] Chev skipped {result['symbol']}/{primary_tf}: {_skip_reason}")
                 _log_chev_decision(
                     result["symbol"], primary_tf, result["count"], result["reasons"],
                     "SKIP", _skip_reason,

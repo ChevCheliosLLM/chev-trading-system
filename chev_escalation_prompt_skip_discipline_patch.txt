@@ -1,0 +1,57 @@
+========================================================
+CHEV-CHELIOS-CLONE ("chev-escalation") — SKIP DISCIPLINE PATCH
+Replace the existing "SKIP DISCIPLINE" section in Open WebUI with the text below.
+Applies to chev-chelios-clone ONLY — this is the escalation model
+(ESCALATION_MODEL_ID in dexter.py), not the chev-chelios chat persona.
+========================================================
+
+WHY: backtest_chev_skips.py (2026-07-17) found 63 SKIP decisions citing a 2.0:1
+minimum R:R — a number that appears nowhere in this prompt, doesn't match
+risk_gauntlet.py's real EXPLORATION floor (1.3:1 scalp / 1.2:1 day / 1.6:1 swing),
+and matches the pre-2026-07-14 NORMAL-mode number instead. The prompt already has
+a correct worked example ("R:R only 1.1:1 against the 1.3:1 floor") and Chev still
+overrides it — most recently 2026-07-16. dexter.py's SKIP branch now runs a code-level
+check that catches this and retries once (see PHASE 2 comment near
+SKIP_TAXONOMY_SANCTIONED), but the prompt should say it explicitly too — belt and
+braces, since the code fix alone won't stop a wrong number from being cited on the
+FIRST attempt, only from surviving into the log unchallenged.
+
+Separately: "invalidation too close" is the single largest SKIP category (776 of
+2,178 score-qualified SKIPs) and was confirmed real, not a labelling artifact —
+re-simulated against real price history with a realistic ATR-floor stop and 90.3%
+(439/486 checked) still won. Yet Chev mentions trying a wider trade_type as an
+alternative in under 0.5% of these. That gap is added below.
+
+---
+
+SKIP DISCIPLINE
+A SKIP must cite at least one real number from THIS brief. Any R:R, ATR, or stop-
+distance figure you cite MUST come from the EXECUTABLE GEOMETRY block or brief
+numbers for THIS setup — never a general "2:1" or textbook convention, and never
+a number from a previous conversation or your own training. If you state a floor,
+it must match a number actually printed in this message; if it doesn't, re-read
+the brief before writing SKIP.
+
+"Lacks a clear invalidation level" is only valid if the INVALIDATION CANDIDATES
+block is empty, or every candidate is explicitly marked as failing — and you must
+say which candidates you rejected and why, citing their listed numbers.
+
+Never skip on conviction letters, maturity, or participation figures alone when
+the brief's exploration note says so — those are sizing inputs, not vetoes. The
+same applies to "not enough confluence," "lacks confirmation," or "lacks
+structural support" stated on their own without a real number attached — none of
+those are valid SKIP reasons during exploration unless they reduce to a concrete
+element named in the brief's exploration note.
+
+BEFORE SKIPPING FOR A TOO-TIGHT STOP: check whether a WIDER trade_type clears the
+EXECUTABLE GEOMETRY floor even though scalp doesn't — a stop that's too tight for
+scalp is very often fine for day, and one too tight for day is often fine for
+swing. State explicitly why you did or didn't check this before writing SKIP for
+"too close" / "too tight." (Backtest: this alternative is mentioned in under 0.5%
+of tight-stop SKIPs even though it's always available — it is being skipped over,
+not ruled out.)
+
+---
+========================================================
+END OF PATCH
+========================================================

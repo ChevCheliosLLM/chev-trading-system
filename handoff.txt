@@ -1,5 +1,111 @@
 ================================================================================
 ================================================================================
+*** CHEV SKIP BACKTEST + MODEL-ROUTING BUG FIX + TAXONOMY/R:R GATE —
+2026-07-17 — RESTART: DONE, RE-PASTE CHEV PROMPT: DONE (chev-chelios-clone only) ***
+RESTART DEXTER: YES (done, confirmed — fresh process pair, web terminal + Ollama both
+healthy post-restart). RE-PASTE CHEV PROMPT: YES (done — chev-chelios-clone /
+"chev-escalation" only, NOT chev-chelios the chat persona). DEPLOY SITE: NO.
+
+CONTEXT: Kev asked for a full backtest of the last 1000 Chev SKIP decisions to find out
+where Dexter's system is losing winners and why. The Examiner (labeller.py) had already
+been resolving every SKIP against real forward price action via its live resolver daemon
+— this was a join/analysis job over labels_closed.jsonl + chev_decisions.jsonl, not a new
+backtest engine. New script: backtest_chev_skips.py (standalone, read-only, does NOT
+import dexter.py — that file starts a Flask server + threads + the resolver daemon
+unconditionally at module load).
+
+THREE ROOT CAUSES FOUND, VERIFIED, AND (mostly) FIXED:
+
+1. MODEL-ROUTING BUG (independent of the backtest, found while drafting the fix) —
+   dexter.py's three retry mechanisms (HALLUCINATION CHECK ~14089, GEOMETRY REVIEW
+   ~14284, GAUNTLET RETRY ~14358) all called _call_chev(_chev_messages, timeout=180)
+   WITHOUT model_id, silently falling back to _call_chev's default (MODEL_ID =
+   "chev-chelios", the 53K-char CHAT persona) instead of continuing with
+   ESCALATION_MODEL_ID ("chev-chelios-clone", the actual escalation model that received
+   the original brief). Confirmed via git blame: all three retry lines were last touched
+   BEFORE ESCALATION_MODEL_ID was introduced (2026-07-09 04:30) and never updated when
+   the model split happened — a refactor that didn't propagate, not a design choice.
+   FIXED: all three now pass model_id=ESCALATION_MODEL_ID explicitly.
+
+2. TAXONOMY DRIFT — during EXPLORATION_MODE, 26.4% of score-qualified SKIPs (576/2178)
+   cited a reason outside what the exploration note actually sanctions (three named
+   reasons + R:R/ATR floor citation from the brief). CONFLUENCE_BELOW_THRESHOLD is
+   explicitly BANNED BY NAME in the exploration note and still appeared 159 times;
+   CONFIRMATION_MISSING/STRUCTURAL_SUPPORT_MISSING (261 more) were never authorized at
+   all. This off-taxonomy group won MORE often (63.1%) than the properly-sanctioned one
+   (62.1%) — the rule-breaking correlates with the costliest misses, not the safest ones.
+   Spot-checked 20 real quotes by hand to confirm the classifier wasn't forcing nuance
+   into the wrong bucket — it wasn't ("confluence quality below threshold despite strong
+   indicators" is exactly as generic as it sounds).
+   FIXED two ways: (a) _exploration_note text in ask_chev_to_judge now explicitly names
+   "lacks confirmation"/"lacks structural support" as invalid and requires a real number
+   for any R:R/ATR citation; (b) NEW code at the SKIP branch (~14652) classifies every
+   SKIP reason live via classify_chev_skip_reason() against SKIP_TAXONOMY_SANCTIONED —
+   an off-taxonomy reason gets ONE retry with a specific correction. Deliberately scoped
+   narrow: only auto-accepts the retry if it's STILL a SKIP; a retry that flips to POST
+   is logged as "[SKIP_RETRY_YIELDED_POST]" in the detail text for manual review, never
+   auto-routed (that needs the full geometry/gauntlet/sizing flow this branch was never
+   built to run — grafting it in blind was judged too risky to guess at).
+
+3. R:R FLOOR BUG — Chev (chev-chelios-clone) has cited a 2.0:1 minimum R:R floor in 63
+   SKIP decisions from 2026-07-05 through 2026-07-16 (still happening the day before this
+   session). The real EXPLORATION floor (risk_gauntlet.py, MIN_NET_RR) is 1.3:1 scalp /
+   1.2:1 day / 1.6:1 swing — up to 40% looser. 2.0:1 appears NOWHERE in Chev's context:
+   checked all 3 escalation prompt files, all 4 playbooks, tunables.json, _setup_grade(),
+   the full chev-chelios-clone system prompt (9,032 chars, pre-patch), AND all 7
+   registered tool definitions (242,573 combined chars) — zero occurrences anywhere. The
+   prompt's own worked example already showed the correct number ("R:R only 1.1:1
+   against the 1.3:1 floor") and Chev still overrode it. Likely mechanism: chev-32b (the
+   escalation model's base) was built 2026-07-09 — five days BEFORE risk_gauntlet.py's
+   EXPLORATION/NORMAL profile split (2026-07-14) ever loosened the R:R floor by mode.
+   Before that split, 2.0:1 genuinely was the only floor in the system; if the fine-tune
+   trained on Chev's own historical decisions from that window, he learned it from real
+   data, not a prompt gap — meaning a prompt patch alone was expected to keep losing this
+   race every time the config changes again, hence fix (b) below (code-level, not
+   prompt-only).
+   FIXED two ways: (a) new rr_citation_matches_config() in dexter.py (~line 632) parses a
+   FLOOR CLAIM out of Chev's SKIP text (only trusts a number adjacent to floor/minimum/
+   required/at-least language — verified against real quotes including the false-positive
+   case, "R:R only 0.9:1, not attractive," which correctly returns "nothing to check")
+   and retries if it doesn't match any real configured floor; (b) chev-chelios-clone's
+   live system prompt patched (chev_clone_prompt_proposed.txt has the full text) — SKIP
+   DISCIPLINE section now explicitly bans "a general 2:1 or textbook convention."
+
+FOURTH FINDING, NOT YET ACTED ON (needs a judgment call, not a fix): "invalidation too
+close" is the single largest SKIP category (776/2178). Confirmed REAL, not a labelling
+artifact — re-simulated the FULL population of 486 available missed-winners against real
+historical candles (Binance/yfinance, backtest_invalidation_recheck.py) using a realistic
+ATR-floor stop (0.6-1.0x ATR) instead of the Examiner's generous synthetic box
+(ATR x R_MULT, 1.0-1.5x) — 90.3% (439/486) still resolved as winners, zero data gaps.
+Chev mentions trying a WIDER trade_type (the obvious escape valve — a stop too tight for
+scalp is often fine for day) in under 0.5% of these. Added a prompt-only nudge for this
+(chev_clone_prompt_proposed.txt, SKIP DISCIPLINE) but no code-level fix — open question is
+whether to also loosen the ATR floor itself, which is a real risk-tolerance decision, not
+a bug fix.
+
+NEW FILES: backtest_chev_skips.py, backtest_invalidation_recheck.py (+ its
+_out.json), backtest_out_skip_analysis.json, chev_clone_prompt_proposed.txt (full
+chev-chelios-clone prompt, already pasted live — also fixed an unrelated VOLUME PROFILE
+RULES section duplication bug found while rewriting it), chev_escalation_prompt_
+skip_discipline_patch.txt (smaller diff-style version of the same patch, kept for the
+rationale write-up), phase2_taxonomy_gate_proposed.py (early draft, superseded by the
+real edit in dexter.py — kept for reference, not live).
+
+VERIFIED, NOT JUST ASSERTED: dexter.py syntax-checked via ast.parse after every edit
+(never imported live — see NEW FILES note above for why). Prompt paste confirmed live
+via Open WebUI API read-back (length 9,032 -> 9,773 chars, new instructions present,
+duplication gone). Process restart confirmed via fresh PIDs + HTTP 200 on the web
+terminal + Ollama health check post-restart.
+
+BENEFIT: three concrete, verified problems fixed (not just "Chev skips winners," which
+was already known going in) — a real bug independent of the backtest (model-routing),
+a measurable rule-adherence gap (taxonomy drift) with both a prompt and a code-level
+fix, and a stale-training-data explanation for the R:R number with the same two-layer
+fix. Left the ATR-floor risk-tolerance question and full POST-auto-routing on a taxonomy
+retry explicitly open rather than guessed at.
+
+================================================================================
+================================================================================
 *** FOLLOW-UP — VALIDATION CANDIDATES ENGINE + AUDIT TRUTHFULNESS FIX —
 2026-07-08 — RESTART: N/A (additive function + escalation text + audit script),
 DEPLOY: N/A, RE-PASTE CHEV PROMPT: NO ***
