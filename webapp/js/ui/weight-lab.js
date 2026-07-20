@@ -814,7 +814,7 @@
     const editDir = Math.sign(newValue - currentEffective);
     const proposalDir = Math.sign(row.proposed_delta);
     if (editDir === 0 || proposalDir === editDir) return '';  // same direction or no change — nothing to flag
-    return `FYI: current data proposes ${row.proposed_delta > 0 ? '+1' : '-1'} here (n=${row.n}, ${fmtR(row.coef)}R) — informational only, your call stands.`;
+    return `FYI: current data proposes ${row.proposed_delta > 0 ? '+' : ''}${row.proposed_delta} here (n=${row.n}, ${fmtR(row.coef)}R) — informational only, your call stands.`;
   }
 
   function _wlManualUpdateFyi() {

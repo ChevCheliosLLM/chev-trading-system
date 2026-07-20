@@ -1150,7 +1150,7 @@
     }
 
     async function loadAll() {
-      await Promise.all([loadMode(), loadFeed(), loadFunnel(), loadPerformance(), loadHeatmap(), loadShadow(), loadTimeseries(), loadScoreboard(), loadValidationKpi(), loadElliotSuggestions(), loadGlanceStrip()]);
+      await Promise.all([loadMode(), loadFeed(), loadFunnel(), loadSkipRobustness(), loadPerformance(), loadHeatmap(), loadShadow(), loadTimeseries(), loadScoreboard(), loadValidationKpi(), loadElliotSuggestions(), loadGlanceStrip()]);
       // Runs only after BOTH loadFunnel (renders the bars) and loadShadow (populates
       // _shadowBucketsCache) have settled -- no race between the two, regardless of which
       // resolves first.
@@ -1341,6 +1341,58 @@
       return SKIP_CATEGORY_LABELS[String(code || '').trim()] || String(code || 'unknown');
     }
 
+    // PHASE 2 FOLLOW-UP (2026-07-17): renders /api/strategy/skip_robustness --
+    // skip_category_robustness()'s discovery-persisted, effective-N-gated verdict per
+    // category, reusing the SAME friendly-name map as the plain count bars above so a
+    // category reads identically in both sections. Self-contained fetch + render, same
+    // pattern as loadShadow() -- a fetch failure degrades quietly, never breaks the rest
+    // of the diagnostics pane.
+    const ROBUSTNESS_PILL_TEXT = {
+      robust:                 'ROBUST',
+      not_robust:              'NOT ROBUST',
+      awaiting_confirmation:   'AWAITING CONFIRMATION',
+      insufficient_data:      'INSUFFICIENT DATA',
+    };
+    const ROBUSTNESS_FILL_COLOR = {
+      robust:                 'var(--green)',
+      not_robust:              'var(--red)',
+      awaiting_confirmation:   'var(--gold)',
+      insufficient_data:      'var(--txt3)',
+    };
+    async function loadSkipRobustness() {
+      try {
+        const r = await _apiFetch('/api/strategy/skip_robustness');
+        const d = await r.json();
+        const cats = d.categories || [];
+        document.getElementById('stratSkipRobustnessBars').innerHTML = cats.length
+          ? cats.map(c => `
+              <div class="stratBarRow">
+                <div class="stratBarLabel" title="${esc(c.category)}">${esc(friendlySkipCategory(c.category))}</div>
+                <div class="stratRobustnessMeta" style="flex:1;">
+                  <div class="stratBarTrack"><div class="stratBarFill" style="width:${c.progress_pct}%;background:${ROBUSTNESS_FILL_COLOR[c.status] || 'var(--txt3)'}"></div></div>
+                  <span class="stratRobustnessPill ${c.status}">${ROBUSTNESS_PILL_TEXT[c.status] || c.status}</span>
+                </div>
+                <div class="stratBarVal">${c.eff_n}/${c.min_n_eff} eff_N<br>${(c.win_rate*100).toFixed(0)}% wr</div>
+              </div>
+            `).join('')
+          : '<div class="stratEmptyState">Not enough resolved SKIPs yet.</div>';
+
+        // Reminder banner: anything that just crossed into "worth a second look" --
+        // newly ROBUST (a real, confirmed edge) or AWAITING_CONFIRMATION (cleared the
+        // data bar, discovery fired, just needs out-of-sample data to confirm/deny).
+        const worthAlook = cats.filter(c => c.status === 'robust' || c.status === 'awaiting_confirmation');
+        const banner = document.getElementById('stratRobustnessAlert');
+        if (worthAlook.length) {
+          const names = worthAlook.map(c => friendlySkipCategory(c.category)).join(', ');
+          document.getElementById('stratRobustnessAlertText').textContent =
+            `${names} — enough data to check now. Paste this tab to Claude and ask it to take a look.`;
+          banner.classList.add('show');
+        } else {
+          banner.classList.remove('show');
+        }
+      } catch (e) { console.warn('[Strategy] skip robustness load failed', e); }
+    }
+
     async function loadFunnel() {
       try {
         const r = await _apiFetch('/api/strategy/funnel?hours=24');
@@ -1431,8 +1483,14 @@
     // loadPerformance -- shadow samples come from ~95% of escalations, a much larger
     // pool, so a higher tag minimum is warranted). Keyed on `resolved`, never on `n`
     // (which includes still-open records with no outcome yet).
-    const SHADOW_MIN_TAG_N   = 10;
-    const SHADOW_MIN_COMBO_N = 5;
+    // Raised from 10/5 -> 30 (2026-07-16): matches the backend's own
+    // SHADOW_COMBO_MIN_N floor and this project's other two "trust this stat"
+    // thresholds (labeller.py MIN_N_EFF, weight_proposal.py MIN_N) -- first time
+    // all three agree. A manual split-half check found the old n=5 floor let
+    // through rows that evaporated on more data (see counterfactual_report.py's
+    // _replication_verdict for the permanent, automatic version of that check).
+    const SHADOW_MIN_TAG_N   = 30;
+    const SHADOW_MIN_COMBO_N = 30;
 
     // Shared renderer for both shadow leaderboards — same bar-row visual language as the
     // real Tag/Combo leaderboards (winRateColor, .stratBarRow/.stratBarFill), sorted by
@@ -1454,9 +1512,20 @@
         // from 73 setups" -- same underlying numbers as before (shadow_wr/total_r/resolved),
         // wording only. The win-rate fragment gets its own honest phrase when there's no
         // resolved data yet, rather than a bare "n/a" sitting next to a real R figure.
-        const wrFrag = s.shadow_wr != null ? `won ${s.shadow_wr.toFixed(0)}%` : 'win rate not yet known';
+        // 2026-07-16: win-rate fragment now carries its Wilson 95% CI when available -- a
+        // bare "67%" and a "67% (could honestly be 40-85%)" are very different claims, and
+        // burying that in a tooltip let thin rows read as more certain than they are.
+        const ciFrag = (s.wr_ci_lo != null && s.wr_ci_hi != null) ? ` (95% CI ${s.wr_ci_lo.toFixed(0)}-${s.wr_ci_hi.toFixed(0)}%)` : '';
+        const wrFrag = s.shadow_wr != null ? `won ${s.shadow_wr.toFixed(0)}%${ciFrag}` : 'win rate not yet known';
         const rFrag  = `would've made ${s.total_r >= 0 ? '+' : ''}${s.total_r.toFixed(2)}R`;
         const nFrag  = `from ${s.resolved} setup${s.resolved === 1 ? '' : 's'}`;
+        // replicated: True = same edge direction in both halves of its own history (trust
+        // this), False = the two halves actively disagree (do NOT trust this, even though
+        // the combined sample may look significant -- exactly what caught 'pattern_breakout'
+        // by hand), None = not enough data in one half to judge yet (no badge shown).
+        let repFrag = '';
+        if (s.replicated === true)  repFrag = '<span class="svFrag svRepOk" title="Same edge direction in both halves of its history">✓ replicated</span>';
+        if (s.replicated === false) repFrag = '<span class="svFrag svRepBad" title="First half and second half of its history disagree on direction -- likely a one-window fluke, not a real edge">⚠ not replicated</span>';
         const barW  = s.shadow_wr != null ? s.shadow_wr.toFixed(1) : 0;
         const barColor = !trusted ? 'var(--txt3)' : (s.shadow_wr != null ? winRateColor(s.shadow_wr) : 'var(--txt3)');
         // PHASE 16: friendly display text; raw code stays in the title for cross-referencing logs.
@@ -1471,6 +1540,7 @@
               <span class="svFrag">${esc(wrFrag)}</span>
               <span class="svFrag">${esc(rFrag)}</span>
               <span class="svFrag">${esc(nFrag)}${trusted ? '' : ' ⚠'}</span>
+              ${repFrag}
             </div>
           </div>`;
       }).join('');

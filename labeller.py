@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 
 # ── Config ───────────────────────────────────────────────────────────────────
-CONFIG_VER     = "1.1"
+CONFIG_VER     = "1.2"
 DATA_DIR       = r"C:\ChevTools"
 OPEN_FILE      = os.path.join(DATA_DIR, "labels_open.jsonl")
 CLOSED_FILE    = os.path.join(DATA_DIR, "labels_closed.jsonl")
@@ -21,6 +21,18 @@ DISCOVERY_FILE = os.path.join(DATA_DIR, "labels_discovery.json")  # {key: ts}, f
 
 # R multiples — must match risk_gauntlet.py so 1R means the same thing in both systems
 R_MULT = {"scalp": 1.0, "day": 1.2, "swing": 1.5}
+
+# PHASE (shadow box realism fix): the profit barrier used to sit at exactly 1R --
+# the same distance as the loss barrier -- which tests a symmetric 1:1 coin-flip,
+# not what a real trade actually has to clear. A real trade's TP must sit at least
+# risk_gauntlet's EXPLORATION MIN_NET_RR times farther than its SL (that's the
+# live gate real trades are held to today). Local copy, not an import -- same
+# "stays standalone, kept in sync by hand" convention as COST_R_CAP below; mirror
+# risk_gauntlet.py's _EXPLORATION["MIN_NET_RR"] if that ever changes. The loss
+# barrier (`lower`) is deliberately left at exactly 1R -- R is defined as the stop
+# distance, and widening only the profit side is what makes the box match a real
+# trade's required reward:risk instead of assuming a symmetric one.
+PROFIT_RR = {"scalp": 1.3, "day": 1.2, "swing": 1.6}
 
 # Active window: hours from touch before time-expiry triggers label=0 (wall-clock, not bars)
 EXPIRY_HOURS = {"scalp": 2, "day": 6, "swing": 48}
@@ -398,13 +410,18 @@ def record_setup(result: dict, asset_type: str, chev_decision: str,
 
     r_dist = R_MULT.get(trade_type, 1.2) * atr
 
+    # Profit barrier sits at required_rr x r_dist, not a flat 1R -- see PROFIT_RR's
+    # own comment above for why. Loss barrier and the 2R checkpoint both stay in
+    # flat r_dist units (r_dist IS the definition of "1R", independent of wherever
+    # the profit target itself sits).
+    required_rr = PROFIT_RR.get(trade_type, 1.2)
     if direction == "long":
-        upper    = entry_ref + r_dist
+        upper    = entry_ref + required_rr * r_dist
         lower    = entry_ref - r_dist
         upper_2r = entry_ref + 2 * r_dist
     else:
-        upper    = entry_ref - r_dist    # profit barrier below entry for shorts
-        lower    = entry_ref + r_dist    # loss barrier above entry for shorts
+        upper    = entry_ref - required_rr * r_dist   # profit barrier below entry for shorts
+        lower    = entry_ref + r_dist                  # loss barrier above entry for shorts
         upper_2r = entry_ref - 2 * r_dist
 
     now_e     = _now_epoch()
@@ -432,6 +449,7 @@ def record_setup(result: dict, asset_type: str, chev_decision: str,
         "upper":           round(upper, 8),
         "lower":           round(lower, 8),
         "upper_2r":        round(upper_2r, 8),
+        "required_rr":     required_rr,
         "cost_R":          _compute_cost_R(asset_type, trade_type, r_dist, entry_ref),
         "expiry_ts":       expiry_ts,
         "active_expiry_ts": None,
@@ -578,9 +596,14 @@ def _process_active(rec, candles, now, candle_end_ts):
     Walk candles checking profit/loss barriers and expiry.
 
     Barrier semantics (conceptual, not numeric):
-      upper    = profit barrier (long: above entry, short: below entry)
-      lower    = loss barrier   (long: below entry, short: above entry)
-      upper_2r = 2R extension in profit direction (same conceptual side)
+      upper    = profit barrier (long: above entry, short: below entry) -- sits at
+                 required_rr x r_dist, NOT a flat 1R (see PROFIT_RR); a win is
+                 realized at required_rr, matching what a real trade actually has
+                 to clear, not an easier symmetric coin-flip
+      lower    = loss barrier   (long: below entry, short: above entry) -- always
+                 exactly 1R; r_dist IS the definition of "R"
+      upper_2r = 2R extension in profit direction (same conceptual side), always
+                 2x r_dist regardless of where the profit barrier itself sits
 
     Pessimistic same-candle rule: both barriers in one candle -> label=-1.
 
@@ -596,6 +619,10 @@ def _process_active(rec, candles, now, candle_end_ts):
     lower         = rec["lower"]
     upper_2r      = rec["upper_2r"]
     r_dist        = rec["r_dist"]
+    # Records created before the asymmetric-box fix have no required_rr field --
+    # default to 1.0 so they keep resolving exactly as they always did (their
+    # `upper` was genuinely built at flat 1R, so a win there really was +1.0R).
+    required_rr   = rec.get("required_rr", 1.0)
     touched_ts    = int(rec.get("touched_ts") or rec["ts_epoch"])
     active_expiry = int(rec.get("active_expiry_ts") or rec.get("expiry_ts") or touched_ts + 86400)
 
@@ -628,7 +655,7 @@ def _process_active(rec, candles, now, candle_end_ts):
             break
 
         if hit_profit:
-            label, realized, resolved = 1, 1.0, True
+            label, realized, resolved = 1, required_rr, True
             profit_exit_candle = c_ts
             break
 

@@ -29,7 +29,9 @@ FIREWALL (see handoff.txt PHASE 7 / 7B-1 sections for the full rationale):
 Run manually:  python -X utf8 counterfactual_report.py
 Self-test:     python -X utf8 counterfactual_report.py --selftest
 """
+import bisect
 import json
+import math
 import os
 import sys
 import tempfile
@@ -65,8 +67,21 @@ RESOLVED_ITEMS_CAP = 300
 
 # Thresholds for a shadow combo to qualify as decision-influencing evidence.
 # Consumed by get_qualifying_shadow_combos() — one place to tune both callers.
-SHADOW_COMBO_MIN_N       = 5    # minimum resolved count
+# Raised from 5 -> 30 (2026-07-16): with 12,000+ distinct combos being ranked by
+# win rate, n=5 is exactly thin enough to be won by pure multiple-comparisons
+# noise -- confirmed by hand (a manual split-half check found the leaderboard's
+# own top-ranked "fast_anchor_or_high" combo family evaporating on more data).
+# 30 matches this project's other two "trust this stat" floors: labeller.py's
+# MIN_N_EFF and weight_proposal.py's MIN_N -- first time all three agree.
+SHADOW_COMBO_MIN_N       = 30   # minimum resolved count
 SHADOW_COMBO_MIN_TOTAL_R = 0.0  # must be net-positive in shadow space
+
+# Minimum count PER HALF for the replication check below to render a verdict at
+# all -- deliberately much lower than SHADOW_COMBO_MIN_N (that's the "is this
+# real" bar; this is only "do we have enough to even ask the question yet" for
+# each half of a split-in-two population). Below this, `replicated` stays None
+# ("not enough data to check"), never a false True or False.
+_REPLICATION_MIN_HALF_N = 5
 
 CAVEATS = (
     "SHADOW OUTCOMES ARE OPTIMISTIC. They assume the entry filled at the zone touch, no\n"
@@ -167,6 +182,69 @@ DECISION_DIRECT_MAP = {
 
 def _numeric_label(label):
     return label if label in (1, -1, 0) else None
+
+
+def _wilson_ci(n, k):
+    """Wilson 95% CI for a proportion k/n. Local copy, not an import -- same
+    "stays standalone" convention as COST_R_CAP above (labeller.py has the
+    identical function; kept in sync by hand if the math ever changes).
+    Returns (lo, hi) as fractions 0-1. n=0 -> (0.0, 1.0), maximally uninformative."""
+    if n == 0:
+        return (0.0, 1.0)
+    z = 1.96
+    p = k / n
+    denom  = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    margin = (z / denom) * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return (max(0.0, center - margin), min(1.0, center + margin))
+
+
+def _window(rec):
+    """(start_epoch, end_epoch) for overlap detection. Local copy of labeller.py's
+    identical function (same standalone convention) -- used only to compute
+    effective N below, never to resolve anything."""
+    if rec.get("touched_ts"):
+        start = int(rec["touched_ts"])
+        end   = int(rec.get("resolved_ts") or rec.get("active_expiry_ts") or rec.get("expiry_ts") or start + 86400)
+    else:
+        start = int(rec.get("ts_epoch") or 0)
+        end   = int(rec.get("expiry_ts") or start + 86400)
+    return (start, end)
+
+
+def _effective_n(filled):
+    """Overlap-downweighted sample size for one tag/combo's own filled records --
+    same 'k = how many other records here were open at the same time, effective
+    N = sum(1/k)' idea as labeller.py's _compute_k_map, scoped to just this
+    tag/combo's own closed_list instead of the whole dataset (the question here
+    is narrower: are THESE n records independent tests of THIS combo, or mostly
+    the same persistent setup re-triggering back to back).
+
+    O(n log n) via a start/end sweep (binary search), NOT the naive O(n^2)
+    pairwise comparison labeller.py's own _compute_k_map uses. Checked combo
+    sizes before first wiring this in (largest combo n=83, cheap either way) but
+    missed that this same function also runs per TAG, and tags run into the
+    thousands (ema13 n=12,849, bb_squeeze n=9,779) -- the naive version measured
+    at 99s for build_counterfactual() and 143s for get_qualifying_shadow_combos()
+    against real data, unusable for a live-polled endpoint. This version is
+    mathematically identical (k for record I = count of records, including I
+    itself, whose window intersects I's window -- exactly labeller.py's
+    definition) but computed via two sorted-array binary searches per record
+    instead of a full inner loop."""
+    if not filled:
+        return 0.0
+    windows = [_window(r) for r in filled]
+    starts = sorted(w[0] for w in windows)
+    ends   = sorted(w[1] for w in windows)
+    total = 0.0
+    for ws, we in windows:
+        # count of records (including self) with start < we, minus count with
+        # end <= ws -- together, exactly "windows that intersect (ws, we)".
+        a = bisect.bisect_left(starts, we)
+        b = bisect.bisect_right(ends, ws)
+        k = max(a - b, 1)
+        total += 1.0 / k
+    return round(total, 2)
 
 
 def bucket_stats(closed_recs, open_count):
@@ -289,13 +367,61 @@ def _bucket_label(kind, source, key):
     return key
 
 
+def _split_epoch(closed_recs):
+    """Median ts_epoch across closed_recs -- the same "sort by time, cut in half"
+    split a manual replication check would use. Returns None if there's nothing
+    to split (caller treats that as "replication unknown" for everything)."""
+    epochs = sorted(r.get("ts_epoch") or 0 for r in closed_recs if r.get("ts_epoch"))
+    if not epochs:
+        return None
+    return epochs[len(epochs) // 2]
+
+
+def _replication_verdict(closed_list, split_epoch):
+    """True/False/None verdict for whether a tag/combo's shadow edge shows the
+    same direction in the first half of its history as the second half -- the
+    exact check that caught 'pattern_breakout' looking real on the combined
+    sample (n=1281, significant) while flatly not replicating split in half
+    (first half significant negative, second half ~zero). Built into the
+    pipeline so that check runs automatically on every tag/combo, every time,
+    instead of requiring someone to think to do it by hand.
+
+    None ("not enough data to judge yet") whenever either half has fewer than
+    _REPLICATION_MIN_HALF_N filled records -- deliberately distinct from False
+    ("checked, and it disagreed"). Never silently defaults to True.
+    """
+    if split_epoch is None:
+        return None
+    first  = [r for r in closed_list if (r.get("ts_epoch") or 0) <  split_epoch]
+    second = [r for r in closed_list if (r.get("ts_epoch") or 0) >= split_epoch]
+
+    def _net_sign(recs):
+        filled = [r for r in recs
+                  if _numeric_label(r.get("label")) is not None and r.get("realized_R") is not None]
+        if len(filled) < _REPLICATION_MIN_HALF_N:
+            return None
+        net = sum((r.get("realized_R") - (r.get("cost_R") or 0.0)) for r in filled)
+        return net > 0
+
+    s1, s2 = _net_sign(first), _net_sign(second)
+    if s1 is None or s2 is None:
+        return None
+    return s1 == s2
+
+
 def _tag_combo_aggregate(closed_recs, open_recs):
     """Aggregates per-individual-tag and per-tag-combination shadow stats across the given
     (already SKIP+NOT_ESCALATED-filtered) record sets. Uses Dexter's own `features` token
     list (present on every record regardless of decision type) — NEVER chev_tags, which is
     only ever populated on POST records (confirmed in PHASE 7 discovery: the SKIP/
     NOT_ESCALATED record_setup call sites never pass a "tags" key). Independent of, and
-    never merged with, compute_tag_win_rates' real-trade data (see DO-NOT-TOUCH)."""
+    never merged with, compute_tag_win_rates' real-trade data (see DO-NOT-TOUCH).
+
+    Each entry also carries wr_ci_lo/wr_ci_hi (Wilson 95% CI on the shadow win rate --
+    a raw "67%" and a "67%, but could honestly be anywhere from 40% to 85%" 67% are very
+    different things, and the CI is what tells them apart) and `replicated`
+    (True/False/None — see _replication_verdict) so a thin, lucky-looking row can no
+    longer be visually indistinguishable from a real, repeatable one."""
     tag_n, tag_closed = {}, {}
     combo_n, combo_closed = {}, {}
 
@@ -321,13 +447,25 @@ def _tag_combo_aggregate(closed_recs, open_recs):
             combo_n[ck] = combo_n.get(ck, 0) + 1
             combo_closed.setdefault(ck, []).append(r)
 
+    split_epoch = _split_epoch(closed_recs)
+
     def _stats_for(n_total, closed_list):
         filled = [r for r in closed_list
                   if _numeric_label(r.get("label")) is not None and r.get("realized_R") is not None]
         wins = sum(1 for r in filled if r.get("label") == 1)
         wr = (wins / len(filled) * 100.0) if filled else None
+        wr_ci_lo = wr_ci_hi = None
+        if filled:
+            lo, hi = _wilson_ci(len(filled), wins)
+            wr_ci_lo, wr_ci_hi = round(lo * 100.0, 1), round(hi * 100.0, 1)
         net_total = sum((r.get("realized_R") - (r.get("cost_R") or 0.0)) for r in filled)
-        return {"n": n_total, "resolved": len(closed_list), "shadow_wr": wr, "total_r": round(net_total, 2)}
+        return {
+            "n": n_total, "resolved": len(closed_list), "shadow_wr": wr,
+            "wr_ci_lo": wr_ci_lo, "wr_ci_hi": wr_ci_hi,
+            "total_r": round(net_total, 2),
+            "replicated": _replication_verdict(closed_list, split_epoch),
+            "effective_n": _effective_n(filled),
+        }
 
     shadow_tags = [dict(tag=t, **_stats_for(tag_n[t], tag_closed.get(t, []))) for t in tag_n]
     shadow_combos = [dict(combo=c, **_stats_for(combo_n[c], combo_closed.get(c, []))) for c in combo_n]
@@ -424,11 +562,25 @@ def _symbol_asset_type(symbol):
     return "stock"
 
 
-def get_qualifying_shadow_combos(min_n=None, min_total_r=None):
+def get_qualifying_shadow_combos(min_n=None, min_total_r=None, require_replication=True):
     """Return shadow combos meeting evidence thresholds. Read-only — no writes, no side effects.
     Consumed by dexter.py at trade-post time (shadow_combo_match tagging) and by
     _run_learning_session (playbook rewrite context). Filter logic lives here so
-    both callers share the same definition of 'qualifying'."""
+    both callers share the same definition of 'qualifying'.
+
+    require_replication=True (default): a combo must ALSO show the same edge direction
+    in both halves of its own history (see _replication_verdict) to qualify -- not just
+    clear the sample-size/total_r bar. This is the fix for the exact failure mode found
+    by hand 2026-07-16: 'pattern_breakout' looked real (n=1281, significant) on the
+    combined sample and would have passed the old filter, but its two halves disagreed
+    on sign -- a one-window fluke, not a repeatable edge. Callers that explicitly need
+    the pre-replication-check behavior (e.g. comparing old vs new) can pass False.
+
+    min_n is checked against effective_n (overlap-downweighted -- see _effective_n),
+    NOT the raw resolved count. The same persistent setup re-triggering five times in a
+    row is not five independent tests of a combo; counting it as five was overstating
+    confidence in exactly the way labeller.py's own MIN_N_EFF already guards against
+    for its discovery report -- this brings the shadow leaderboard in line with that."""
     min_n       = min_n       if min_n       is not None else SHADOW_COMBO_MIN_N
     min_total_r = min_total_r if min_total_r is not None else SHADOW_COMBO_MIN_TOTAL_R
     closed_all    = _load_jsonl(LABELS_CLOSED_FILE)
@@ -438,9 +590,10 @@ def get_qualifying_shadow_combos(min_n=None, min_total_r=None):
     _, shadow_combos = _tag_combo_aggregate(shadow_closed, shadow_open)
     return [
         c for c in shadow_combos
-        if c["n"] >= min_n
+        if c.get("effective_n", 0) >= min_n
         and c.get("shadow_wr") is not None
         and c["total_r"] > min_total_r
+        and (not require_replication or c.get("replicated") is True)
     ]
 
 

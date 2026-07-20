@@ -525,6 +525,34 @@
   width: 210px; white-space: normal; overflow: visible; text-overflow: unset; line-height: 1.3;
 }
 
+/* PHASE 2 FOLLOW-UP (2026-07-17): Skip Reason Robustness -- same bar shape as above,
+   own container so its wide-label treatment and status pill don't leak into the plain
+   count bars. */
+#stratSkipRobustnessBars .stratBarLabel {
+  width: 210px; white-space: normal; overflow: visible; text-overflow: unset; line-height: 1.3;
+}
+#stratSkipRobustnessBars .stratBarRow { align-items: flex-start; margin-bottom: 12px; }
+#stratSkipRobustnessBars .stratBarTrack { margin-top: 3px; }
+.stratRobustnessMeta { display: flex; flex-direction: column; gap: 4px; }
+.stratRobustnessPill {
+  display: inline-block; font-size: 9.5px; font-family: 'Share Tech Mono', monospace;
+  text-transform: uppercase; letter-spacing: 0.03em; padding: 2px 7px; border-radius: var(--r-xs);
+  width: fit-content;
+}
+.stratRobustnessPill.robust             { background: rgba(38,166,154,0.15); color: var(--green); border: 1px solid rgba(38,166,154,0.35); }
+.stratRobustnessPill.not_robust         { background: rgba(242,54,69,0.10); color: #ff8a95; border: 1px solid rgba(242,54,69,0.3); }
+.stratRobustnessPill.awaiting_confirmation { background: rgba(255,183,3,0.12); color: var(--gold); border: 1px solid rgba(255,183,3,0.35); }
+.stratRobustnessPill.insufficient_data  { background: var(--s2); color: var(--txt3); border: 1px solid var(--border); }
+
+/* Reminder banner -- gold "worth a look" tone, distinct from the red quiet-system alert.
+   Same show/hide toggle pattern as #stratQuietAlert. */
+#stratRobustnessAlert {
+  display: none; align-items: center; gap: 10px; padding: 10px 14px; margin: 10px 0 14px;
+  background: rgba(255,183,3,0.08); border: 1px solid rgba(255,183,3,0.3); border-radius: var(--r-md);
+  color: var(--gold); font-size: 12.5px; font-family: 'Inter', sans-serif;
+}
+#stratRobustnessAlert.show { display: flex; }
+
 /* Heatmap */
 /* PHASE 25: 6 four-hour blocks instead of 24 hour columns. */
 #stratHeatmap { display: grid; grid-template-columns: 34px repeat(6, 1fr); gap: 2px; margin-top: 6px; }
@@ -639,6 +667,12 @@
 }
 #stratShadowTagBars .stratBarVal .svLead, #stratShadowComboBars .stratBarVal .svLead { color: var(--txt3); }
 #stratShadowTagBars .stratBarVal .svFrag, #stratShadowComboBars .stratBarVal .svFrag { white-space: nowrap; }
+/* Replication badge -- same green/red vocabulary as .stratShadowBadge.dodged/.missed
+   above, so "checked and it held up" / "checked and it didn't" read consistently with
+   the rest of the shadow section's color language. No badge at all (replicated=None)
+   means "not enough data in one half yet to judge" -- silence, not a third color. */
+#stratShadowTagBars .svRepOk, #stratShadowComboBars .svRepOk   { color: #5fd6bc; font-weight: 700; }
+#stratShadowTagBars .svRepBad, #stratShadowComboBars .svRepBad { color: #ff8a95; font-weight: 700; }
 /* Combo labels (e.g. "EMA 13 + EMA 21 + Sweep") run far longer than single-tag names --
    the shared 170px/ellipsis .stratBarLabel truncated them mid-combo. Widened + allowed to
    wrap instead of ellipsis-clipping, scoped to the two combo containers only (single-tag

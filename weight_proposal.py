@@ -37,6 +37,7 @@ Self-test:      python -X utf8 weight_proposal.py --selftest
 """
 
 import json
+import math
 import os
 import sys
 from datetime import datetime, timezone
@@ -65,15 +66,48 @@ RIDGE_LAMBDA  = 1.0   # L2 penalty strength. Handles the heavy collinearity
 BOOTSTRAP_B   = 1000  # resamples for the confidence interval
 SEED          = 42    # fixed seed so runs are reproducible
 
-# Informational only — NOT used to compute the actual proposed delta (see
-# guardrail (b) below). Shown alongside the raw coefficient so Kev can see
-# what the "naive" scaled suggestion would have been vs. what's actually
-# proposed.
+# Informational only — shown alongside the raw coefficient so Kev can see what a
+# naive linear scaling would have suggested vs. what compute_delta() below
+# actually proposes.
 SCALE = 10  # 1 point per 0.1R of estimated marginal effect
 
-# ── Guardrail (b): hard per-run ceiling ───────────────────────────────────────
-MAX_STEP = 1  # a single run may propose moving a tag's weight by AT MOST this
-              # many points, regardless of how large the estimated effect is.
+# ── Guardrail (b), decimal version (2026-07-16) ───────────────────────────────
+# Original guardrail was "at most +/-1 point per run, sign-only" -- deliberately
+# blunt to avoid a runaway feedback loop (see handoff.txt's brainstorm-item-6
+# discussion). Kept the same SPIRIT -- small, capped, evidence-gated, still never
+# auto-applies anything -- but fixed a real flaw found 2026-07-16: a flat 1-point
+# step is a wildly different-sized bet depending on which tag it lands on. A tag
+# worth 0.5 total (ema13) got wiped toward zero in one move; a tag worth 4 (gp)
+# barely moved 25%. Two changes, both in compute_delta():
+#   (a) the step is now sized as a PERCENTAGE of the tag's own current weight,
+#       not a flat absolute number -- consistent relative risk across every tag.
+#   (b) the step also scales down when the evidence is only just barely
+#       significant (its confidence interval edge sits close to zero) and
+#       toward the ceiling when the interval is comfortably clear of zero --
+#       sized off the CONSERVATIVE (nearest-to-zero) edge of the interval,
+#       never the point estimate. Same "judge a claim off its weakest defensible
+#       number, not its best case" principle risk_gauntlet.py's own EV floor
+#       already uses for tag win rates.
+MAX_STEP            = 1     # unchanged: absolute ceiling on any single proposed move, still guardrail (b)'s hard cap
+STEP_PCT_OF_WEIGHT  = 0.25  # ceiling: never propose moving more than 25% of a tag's OWN current value in one run
+STEP_ABS_FLOOR       = 0.05  # rounding floor only, so a real (if weak) significant effect never proposes literally 0.0
+STEP_EVIDENCE_REF    = 0.30  # a conservative (CI-edge) net-R/trade effect of this size or more counts as "full strength"; scales down linearly below it
+
+
+def compute_delta(coef, lo, hi, current_weight):
+    """Evidence- and scale-proportional weight-change proposal (replaces the old
+    flat sign-only +/-1 step -- see the guardrail comment above). Returns a
+    signed float, rounded to 0.01, sized as a percentage of current_weight and
+    scaled by how far the confidence interval's conservative edge sits from
+    zero. Returns 0.0 if current_weight is falsy/None (caller treats that the
+    same as the old "no proposal" case)."""
+    if not current_weight:
+        return 0.0
+    conservative = lo if coef > 0 else hi   # CI edge nearest zero -- the weakest defensible effect size
+    strength = min(abs(conservative) / STEP_EVIDENCE_REF, 1.0)
+    step = current_weight * STEP_PCT_OF_WEIGHT * strength
+    step = max(STEP_ABS_FLOOR, min(step, MAX_STEP))
+    return round(math.copysign(step, coef), 2)
 
 # Fill this in BY HAND from dexter.py's current confluence scoring point values
 # (see scan_pair_tf() in dexter.py for where each tag's points are assigned).

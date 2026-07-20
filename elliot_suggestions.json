@@ -1,48 +1,183 @@
 {
-  "generated_at": "2026-07-15 10:46:20",
+  "generated_at": "2026-07-17 07:38:00",
   "items": [
+    {
+      "id": "durable-forex-0",
+      "type": "durable_promotion_candidate",
+      "plain_english": "Forex: Chev has flagged this lesson as recurring: \"Confluences involving `sr_4h`, `fib_50`, and multiple EMAs (`ema_13`, `ema_21`, `ema_55`) have a higher win rate (recurring).\" \u2014 consider promoting it to DURABLE.",
+      "evidence": {
+        "asset_type": "forex",
+        "source": "playbook PROMOTION CANDIDATES section",
+        "raw_text": "Confluences involving `sr_4h`, `fib_50`, and multiple EMAs (`ema_13`, `ema_21`, `ema_55`) have a higher win rate (recurring)."
+      },
+      "action": "manual"
+    },
+    {
+      "id": "durable-forex-1",
+      "type": "durable_promotion_candidate",
+      "plain_english": "Forex: Chev has flagged this lesson as recurring: \"Trending market conditions improve setup quality as winners tend to reach TP rather than reverse early (recurring).\" \u2014 consider promoting it to DURABLE.",
+      "evidence": {
+        "asset_type": "forex",
+        "source": "playbook PROMOTION CANDIDATES section",
+        "raw_text": "Trending market conditions improve setup quality as winners tend to reach TP rather than reverse early (recurring)."
+      },
+      "action": "manual"
+    },
+    {
+      "id": "durable-forex-2",
+      "type": "durable_promotion_candidate",
+      "plain_english": "Forex: Chev has flagged this lesson as recurring: \"Raising TP often resulted in price hitting the raised TP (recurring).\" \u2014 consider promoting it to DURABLE.",
+      "evidence": {
+        "asset_type": "forex",
+        "source": "playbook PROMOTION CANDIDATES section",
+        "raw_text": "Raising TP often resulted in price hitting the raised TP (recurring)."
+      },
+      "action": "manual"
+    },
+    {
+      "id": "durable-stocks-0",
+      "type": "durable_promotion_candidate",
+      "plain_english": "Stocks: Chev has flagged this lesson as recurring: \"High-quality setups with SR_4H and Fib_30M confluences (recurring).\" \u2014 consider promoting it to DURABLE.",
+      "evidence": {
+        "asset_type": "stocks",
+        "source": "playbook PROMOTION CANDIDATES section",
+        "raw_text": "High-quality setups with SR_4H and Fib_30M confluences (recurring)."
+      },
+      "action": "manual"
+    },
+    {
+      "id": "durable-stocks-1",
+      "type": "durable_promotion_candidate",
+      "plain_english": "Stocks: Chev has flagged this lesson as recurring: \"Entries near Golden Pocket levels validating expected momentum (recurring).\" \u2014 consider promoting it to DURABLE.",
+      "evidence": {
+        "asset_type": "stocks",
+        "source": "playbook PROMOTION CANDIDATES section",
+        "raw_text": "Entries near Golden Pocket levels validating expected momentum (recurring)."
+      },
+      "action": "manual"
+    },
+    {
+      "id": "underperformer-ema21",
+      "type": "underperformer",
+      "plain_english": "Elliot notes ema21 is underperforming its current weight (1432 shadow trades, coefficient -0.0457) \u2014 consider lowering it (not yet statistically significant enough to approve \u2014 worth watching).",
+      "evidence": {
+        "tag": "ema21",
+        "n": 1432,
+        "coef": -0.0457,
+        "ci": [
+          -0.2497,
+          0.1516
+        ],
+        "significant": false
+      },
+      "action": "manual"
+    },
+    {
+      "id": "underperformer-fib_618",
+      "type": "underperformer",
+      "plain_english": "Elliot notes fib_618 is underperforming its current weight (55 shadow trades, coefficient -0.1656) \u2014 consider lowering it (not yet statistically significant enough to approve \u2014 worth watching).",
+      "evidence": {
+        "tag": "fib_618",
+        "n": 55,
+        "coef": -0.1656,
+        "ci": [
+          -0.4447,
+          0.1326
+        ],
+        "significant": false
+      },
+      "action": "manual"
+    },
+    {
+      "id": "underperformer-gp",
+      "type": "underperformer",
+      "plain_english": "Elliot notes gp is underperforming its current weight (377 shadow trades, coefficient -0.2146) \u2014 consider lowering it (not yet statistically significant enough to approve \u2014 worth watching).",
+      "evidence": {
+        "tag": "gp",
+        "n": 377,
+        "coef": -0.2146,
+        "ci": [
+          -0.347,
+          -0.0671
+        ],
+        "significant": true
+      },
+      "action": "manual"
+    },
+    {
+      "id": "underperformer-pattern_breakout",
+      "type": "underperformer",
+      "plain_english": "Elliot notes pattern_breakout is underperforming its current weight (130 shadow trades, coefficient -0.0248) \u2014 consider lowering it (not yet statistically significant enough to approve \u2014 worth watching).",
+      "evidence": {
+        "tag": "pattern_breakout",
+        "n": 130,
+        "coef": -0.0248,
+        "ci": [
+          -0.2663,
+          0.2179
+        ],
+        "significant": false
+      },
+      "action": "manual"
+    },
+    {
+      "id": "underperformer-sweep",
+      "type": "underperformer",
+      "plain_english": "Elliot notes sweep is underperforming its current weight (371 shadow trades, coefficient -0.0514) \u2014 consider lowering it (not yet statistically significant enough to approve \u2014 worth watching).",
+      "evidence": {
+        "tag": "sweep",
+        "n": 371,
+        "coef": -0.0514,
+        "ci": [
+          -0.1746,
+          0.077
+        ],
+        "significant": false
+      },
+      "action": "manual"
+    },
     {
       "id": "idle-gate-crypto",
       "type": "threshold_nudge",
-      "plain_english": "Crypto: the score gate rejected only 7 of 4326 setups in the last 14 days \u2014 the threshold isn't doing any filtering work right now. If that's intentional (exploration mode), ignore this; otherwise consider whether the gate should be tighter, via the tuning panel.",
+      "plain_english": "Crypto: the score gate rejected only 5 of 4492 setups in the last 14 days \u2014 the threshold isn't doing any filtering work right now. If that's intentional (exploration mode), ignore this; otherwise consider whether the gate should be tighter, via the tuning panel.",
       "evidence": {
         "asset_type": "crypto",
-        "gate_rejects": 7,
-        "total_decisions": 4326,
-        "pct": 0.16,
+        "gate_rejects": 5,
+        "total_decisions": 4492,
+        "pct": 0.11,
         "window_days": 14,
-        "window_start": "2026-07-01",
-        "window_end": "2026-07-15"
+        "window_start": "2026-07-03",
+        "window_end": "2026-07-17"
       },
       "action": "manual"
     },
     {
       "id": "idle-gate-forex",
       "type": "threshold_nudge",
-      "plain_english": "Forex: the score gate rejected only 3 of 1724 setups in the last 14 days \u2014 the threshold isn't doing any filtering work right now. If that's intentional (exploration mode), ignore this; otherwise consider whether the gate should be tighter, via the tuning panel.",
+      "plain_english": "Forex: the score gate rejected only 3 of 2200 setups in the last 14 days \u2014 the threshold isn't doing any filtering work right now. If that's intentional (exploration mode), ignore this; otherwise consider whether the gate should be tighter, via the tuning panel.",
       "evidence": {
         "asset_type": "forex",
         "gate_rejects": 3,
-        "total_decisions": 1724,
-        "pct": 0.17,
+        "total_decisions": 2200,
+        "pct": 0.14,
         "window_days": 14,
-        "window_start": "2026-07-01",
-        "window_end": "2026-07-15"
+        "window_start": "2026-07-03",
+        "window_end": "2026-07-17"
       },
       "action": "manual"
     },
     {
       "id": "idle-gate-stock",
       "type": "threshold_nudge",
-      "plain_english": "Stocks: the score gate rejected only 6 of 393 setups in the last 14 days \u2014 the threshold isn't doing any filtering work right now. If that's intentional (exploration mode), ignore this; otherwise consider whether the gate should be tighter, via the tuning panel.",
+      "plain_english": "Stocks: the score gate rejected only 2 of 436 setups in the last 14 days \u2014 the threshold isn't doing any filtering work right now. If that's intentional (exploration mode), ignore this; otherwise consider whether the gate should be tighter, via the tuning panel.",
       "evidence": {
         "asset_type": "stock",
-        "gate_rejects": 6,
-        "total_decisions": 393,
-        "pct": 1.53,
+        "gate_rejects": 2,
+        "total_decisions": 436,
+        "pct": 0.46,
         "window_days": 14,
-        "window_start": "2026-07-01",
-        "window_end": "2026-07-15"
+        "window_start": "2026-07-03",
+        "window_end": "2026-07-17"
       },
       "action": "manual"
     }

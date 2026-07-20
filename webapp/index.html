@@ -384,6 +384,17 @@
           <div class="stratSectionLabel stratSectionSpaced">🗣️ Why Chev Himself Skips (last 24h)<span class="stratSectionSub">— his own stated reasoning, grouped into categories</span></div>
           <div id="stratSkipCategoryBars"></div>
 
+          <!-- PHASE 2 FOLLOW-UP (2026-07-17): noise-vs-signal check on each skip category,
+               ALL resolved history (not the 24h window above) -- /api/strategy/skip_robustness,
+               backed by skip_category_robustness() in dexter.py, same discovery_ts discipline
+               tag_lift_report() already uses for scan tags. Progress bar = how close to
+               enough independent evidence (effective N, overlap-downweighted) to trust a
+               verdict at all -- not raw count. -->
+          <div class="stratSectionLabel stratSectionSpaced">📊 Skip Reason Robustness <span class="stratSectionSub">— which of the above are a real edge vs. still just noise</span><span class="stratLearnIcon" data-learn="skip_robustness" title="What is this?">ⓘ</span></div>
+          <div class="stratShadowCaveat">Each bar is progress toward enough INDEPENDENT evidence to trust a verdict — overlapping same-direction bets in the same window get downweighted, so this fills slower than the raw counts above. "Robust" means the edge survived being checked against data it wasn't found on; "Not robust" means it looked real once but didn't hold up — leave it alone, don't chase it.</div>
+          <div id="stratRobustnessAlert"><span>🔔</span> <span id="stratRobustnessAlertText"></span></div>
+          <div id="stratSkipRobustnessBars"></div>
+
           <!-- PHASE 7B-2: counterfactual shadow outcomes — see counterfactual_report.py /
                /api/strategy/counterfactual. Visually quarantined (dashed violet border) so
                these numbers can never be mistaken for real performance. -->

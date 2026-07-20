@@ -1,32 +1,36 @@
 CHEV TRADING PLAYBOOK — FOREX
-Last updated: 2026-07-15 10:37:02 | Based on 42 FOREX trades
+Last updated: 2026-07-17 07:27:21 | Based on 49 FOREX trades
 ========================================
 
 ### CONFLUENCE CONDITIONS
-- Shadow combos with high win rates (≥80%) like `bb_squeeze,ema13,ema21,ema55,fast_anchor_or_high,fast_anchor_or_low,fib_50,pattern_high_conf` are producing the best results.
-- RSI divergence signals are more reliable in trending markets; in ranging markets, they often lead to false positives.
-- SR levels need to be 4H for better confirmation when there is a clear trend direction.
+Window: 2026-07-10 -> 2026-07-17, n=15, regime: mixed
+- Confluences involving `sr_4h`, `fib_50`, and multiple EMAs (`ema_13`, `ema_21`, `ema_55`) have a higher win rate (recurring).
+- RSI divergence signals are more reliable in trending markets; in ranging markets, they often lead to false positives (recurring).
 
 ### MARKET STRUCTURE RULES
-- Trending market conditions improve setup quality as winners tend to reach TP rather than reverse early.
-- High-confidence patterns like `fast_anchor_or_high,fast_anchor_or_low,pattern_high_conf` perform well in trending markets but not in ranging ones.
-- In ranging markets, setups with strong support/resistance levels are more reliable.
+Window: 2026-07-10 -> 2026-07-17, n=15, regime: mixed
+- Trending market conditions improve setup quality as winners tend to reach TP rather than reverse early (recurring).
+- Entries near the upper or lower boundaries of expected ranges are more likely to fail.
 
 ### ENTRY QUALITY STANDARDS
-- High-conviction entries have multiple confluences (e.g., `bb_squeeze`, `ema13`, `fast_anchor_or_high`) and clear trend direction.
-- Winners typically had a combination of technical indicators like `fib_50` and strong support/resistance levels, while losers lacked these structural elements.
+Window: 2026-07-10 -> 2026-07-17, n=15, regime: mixed
+- High-conviction entries have multiple confluences (e.g., `sr_4h`, `fib_50`, EMAs) and clear trend direction.
+- Marginal setups often fail due to tight stop-loss placements near structural levels.
 
 ### TRADE MANAGEMENT PATTERNS
-- Raising TP often resulted in price hitting the raised TP (e.g., `bb_squeeze,ema13,ema21,ema55,fast_anchor_or_high,fast_anchor_or_low,fib_50,pattern_high_conf`).
-- Moving SL early did not protect profit and often led to being stopped out before reaching TP.
-- Leaving trades alone with original SL/TP resulted in more wins than managed adjustments.
+Window: 2026-07-10 -> 2026-07-17, n=15, regime: mixed
+- Raising TP often resulted in price hitting the raised TP (recurring).
+- Moving SL early can lead to premature stop-outs if market structure is not decisively trending.
 
 ### REASONING QUALITY
-- 63% of reasoning was validated by price action (2 VALIDATED, 17 PARTIAL).
+Window: 2026-07-10 -> 2026-07-17, n=15, regime: mixed
+- 63% of reasoning was validated by price action (recurring).
 - Invalidated reasoning often stemmed from misreading market structure or timeframe.
-- A+ setups showed better validation rates compared to B setups, indicating higher structural confidence.
 
 ### ASSET NOTES
+Window: 2026-07-10 -> 2026-07-17, n=15, regime: mixed
+- NZD/USD and EUR/USD showed consistent performance with strong confluences.
+- USD/CHF trades were choppy near support levels.
 **TRENDING MARKET BEHAVIOUR — CRITICAL**
 - In a confirmed uptrend (4H HH/HL, net move > +2%), resistance levels are CONTINUATION ZONES, not reversal points. Shorting resistance in an uptrend is the lowest-probability trade in forex. The pair will walk through resistance, not bounce from it.
 - In a confirmed downtrend (4H LH/LL, net move < -2%), support levels are CONTINUATION ZONES. Longing support in a downtrend is similarly low probability.
@@ -39,25 +43,27 @@ Last updated: 2026-07-15 10:37:02 | Based on 42 FOREX trades
 - Cryptos and forex performed similarly in trending markets but differently in ranging ones; stocks were more prone to false breakouts.
 - Crypto setups with `bb_squeeze` and strong trend indicators had the highest win rate.
 
+
 ### JANE'S PATTERNS
-- Jane is consistently profitable on setups like `fast_anchor_or_high,fast_anchor_or_low,pattern_breakout_vol`.
-- Her instincts diverge from models in ranging markets where she overestimates breakout potential; her setups were often invalidated here.
+Window: 2026-07-10 -> 2026-07-17, n=15, regime: mixed
+- Jane is consistently profitable on setups like `fast_anchor_or_high`, `fast_anchor_or_low`, and `pattern_breakout_vol`.
 
 ### SHADOW COMBO INTELLIGENCE
-- Shadow combos with high win rates (≥80%) such as `bb_squeeze,ema13,ema21,ema55,fast_anchor_or_high,fast_anchor_or_low,fib_50,pattern_high_conf` have not yet been confirmed by real trades.
-- Combos like `fast_anchor_pdl,pattern_high_conf` with 100% win rate (shadow only) still lack real-trade confirmation.
+Window: 2026-07-10 -> 2026-07-17, n=15, regime: mixed
+- Shadow combos with high win rates (≥80%) such as `bb_squeeze`, `ema_13`, `ema_21`, `fib_50`, and `pattern_high_conf` have not yet been confirmed by real trades.
 
-### INSUFFICIENT DATA
-- Insufficient data — revisit next session.
+### PROMOTION CANDIDATES
+Window: 2026-07-10 -> 2026-07-17, n=15, regime: mixed
+- Confluences involving `sr_4h`, `fib_50`, and multiple EMAs (`ema_13`, `ema_21`, `ema_55`) have a higher win rate (recurring).
+- Trending market conditions improve setup quality as winners tend to reach TP rather than reverse early (recurring).
+- Raising TP often resulted in price hitting the raised TP (recurring).
 
 ### STRUCTURAL RISK FACTORS
-- **Ranging Market Conditions**: The presence of a ranging market context (often indicated by tight Bollinger Bands and limited directional momentum) should have flagged higher risk due to potential whipsaws around support/resistance levels.
-  
-- **Tight Stop-Loss Placement**: Tight stop-losses near structural levels in choppy or ranging markets increase the likelihood of being stopped out due to normal price fluctuations. A wider stop placement relative to market volatility would have reduced this risk.
-
-- **Multiple Confluences Near Structural Boundaries**: Entries taken near the upper or lower boundaries of expected ranges (e.g., close to EMA resistances/supports) in a ranging market are more vulnerable to reversal and should be treated with caution, requiring additional confirmation from other indicators.
+- **Ranging Market Conditions**: Treat setups with tight stop-loss placements as marginal given the potential for choppy price action and whipsaws in range-bound markets.
+- **Proximity to Structural Levels**: Require an additional confluence or a broader stop-loss when entering near well-defined structural levels (e.g., EMAs, Fibonacci retracement) that are close to support/resistance areas.
+- **High Confluence with Tight Stops**: Flag setups where high-quality entry locations based on multiple indicators (EMA crossovers, RSI divergence, Bollinger Bands squeeze) have tight stop-losses as susceptible to normal price fluctuations and false breakouts.
 
 ### WIN/LOSS INSIGHT
 WIN/LOSS INSIGHT:
-- The winning trades consistently had confluences at multiple timeframes (e.g., sr_4h with fib_1h) and included non-RSI divergence (dv), which provided additional confirmation of momentum shifts.
-- Winning setups often mentioned ranging market conditions on the 4H timeframe, allowing for more predictable price action around support/resistance levels, whereas losing trades were taken in tighter ranges or near upper boundaries where normal fluctuations could trigger stops prematurely.
+- The winning trades had multiple EMA confluences (EMA55, EMA21, EMA13) and were often within a Bollinger Bands squeeze zone, indicating potential breakout momentum.
+- Winning setups frequently mentioned additional confidence from patterns like the Golden Pocket range or Bull Channel hypothesis, while losing trades often had tight stop losses that were susceptible to normal price fluctuations.

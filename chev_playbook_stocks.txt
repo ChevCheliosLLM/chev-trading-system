@@ -1,20 +1,24 @@
 CHEV TRADING PLAYBOOK — STOCKS
-Last updated: 2026-07-15 10:38:43 | Based on 5 STOCKS trades
+Last updated: 2026-07-17 07:28:47 | Based on 5 STOCKS trades
 ========================================
 
-### Window: 2026-07-01 -> 2026-07-06, n=5, regime: trending
+Window: 2026-07-01 -> 2026-07-06, n=5, regime: mixed
 
-#### CONFLUENCE CONDITIONS
-- Combinations with high win-rates (shadow_wr > 80%) include bb_squeeze, ema13, ema21, ema55, fast_anchor_or_high, fast_anchor_or_low, fib_50, and pattern_high_conf.
-- RSI divergence signals are more reliable in trending markets when combined with strong support/resistance levels (SR).
-- SR needs to be 4H for setups to have higher win-rates compared to using only 1H SR.
+CONFLUENCE CONDITIONS
+- High-quality setups with SR_4H and Fib_30M confluences have shown better results (n=3).
+- RSI divergence (dv) has been a consistent signal in winners but not always decisive on its own (n=2).
 
-#### MARKET STRUCTURE RULES
-- Trending conditions improve setup quality, especially when combined with breakout patterns and RSI divergence.
-- Price typically reaches TP in trending markets if the setup includes strong trend-following indicators like EMA crossovers and fast anchors.
-- High-confidence setups are more likely to reach TP than reverse early when SR levels are well-defined.
+MARKET STRUCTURE RULES
+- Trending conditions, especially when combined with breakout patterns like head & shoulders, improve setup quality and increase TP hit rates (n=2).
+- Entries near Golden Pocket (gp) levels have shown strong support or resistance, validating the bullish/bearish momentum expected from breakouts (n=3).
 
-#### ENTRY QUALITY STANDARDS
+ENTRY QUALITY STANDARDS
+- High-conviction entries are characterized by multiple confluences like SR_4H, Fib_30M, and EMA13/55, which have been validated in winners (n=2).
+- Marginal setups lacking clear structural levels or with conflicting indicators often lead to losses (n=2).
+
+TRADE MANAGEMENT PATTERNS
+- Insufficient data — revisit next session.
+
 ### TRENDING MARKET BEHAVIOUR — CRITICAL
 - In a confirmed uptrend (4H HH/HL, net move > +3%), resistance levels are CONTINUATION ZONES, not reversal zones. Stocks in strong uptrends break resistance with force — shorting resistance in an uptrend is almost always wrong.
 - In a confirmed downtrend (4H LH/LL, net move < -3%), support levels break down. Longing support in a downtrend is similarly low probability.
@@ -28,55 +32,19 @@ Last updated: 2026-07-15 10:38:43 | Based on 5 STOCKS trades
 - Winners often had strong trend-following indicators like EMA crossovers and RSI divergence in the same direction.
 - Marginal setups lacked clear SR levels or were missing key confluence signals.
 
-#### TRADE MANAGEMENT PATTERNS
+REASONING QUALITY
+- 60% of reasoning is being validated by price action, indicating a need for more precise confluence analysis (n=5).
+- Invalidated reasoning typically stems from misreading structural levels or overestimating the strength of support/resistance zones (n=2).
+
+ASSET NOTES
 - Insufficient data — revisit next session.
 
-#### REASONING QUALITY
-- 60% of reasoning is validated by price action (n=5).
-- Invalidated reasoning often stemmed from misreading market structure, particularly in setups without clear SR levels.
-- A+ setups show better validation rates than B setups, indicating higher structural confidence.
-
-#### ASSET NOTES
+JANE'S PATTERNS
 - Insufficient data — revisit next session.
 
-#### JANE'S PATTERNS
-- Insufficient data — revisit next session.
+SHADOW COMBO INTELLIGENCE
+- Combinations like SR_4H, Fib_30M, and EMA13/55 have shown high shadow win-rates but need more real-trade confirmation (tentative, n=2).
 
-#### SHADOW COMBO INTELLIGENCE
-- Combinations like bb_squeeze, ema13/21/55, fast_anchor_or_high/low, fib_50, and pattern_high_conf have high shadow win-rates (shadow_wr > 80%) but need real-trade confirmation.
-- Tentative (n=0) combinations still lack real-trade validation.
-
-### Window: 2026-07-01 -> 2026-07-06, n=5, regime: trending
-
-#### CONFLUENCE CONDITIONS
-- Combinations with high win-rates (shadow_wr > 80%) include bb_squeeze, ema13, ema21, ema55, fast_anchor_or_high, fast_anchor_or_low, fib_50, and pattern_high_conf.
-- RSI divergence signals are more reliable in trending markets when combined with strong support/resistance levels (SR).
-- SR needs to be 4H for setups to have higher win-rates compared to using only 1H SR.
-
-#### MARKET STRUCTURE RULES
-- Trending conditions improve setup quality, especially when combined with breakout patterns and RSI divergence.
-- Price typically reaches TP in trending markets if the setup includes strong trend-following indicators like EMA crossovers and fast anchors.
-- High-confidence setups are more likely to reach TP than reverse early when SR levels are well-defined.
-
-#### ENTRY QUALITY STANDARDS
-- High-conviction entries have multiple confluence signals, such as bb_squeeze, ema13/21/55, fast_anchor_or_high/low, and fib_50.
-- Winners often had strong trend-following indicators like EMA crossovers and RSI divergence in the same direction.
-- Marginal setups lacked clear SR levels or were missing key confluence signals.
-
-#### TRADE MANAGEMENT PATTERNS
-- Insufficient data — revisit next session.
-
-#### REASONING QUALITY
-- 60% of reasoning is validated by price action (n=5).
-- Invalidated reasoning often stemmed from misreading market structure, particularly in setups without clear SR levels.
-- A+ setups show better validation rates than B setups, indicating higher structural confidence.
-
-#### ASSET NOTES
-- Insufficient data — revisit next session.
-
-#### JANE'S PATTERNS
-- Insufficient data — revisit next session.
-
-#### SHADOW COMBO INTELLIGENCE
-- Combinations like bb_squeeze, ema13/21/55, fast_anchor_or_high/low, fib_50, and pattern_high_conf have high shadow win-rates (shadow_wr > 80%) but need real-trade confirmation.
-- Tentative (n=0) combinations still lack real-trade validation.
+PROMOTION CANDIDATES
+- High-quality setups with SR_4H and Fib_30M confluences (recurring).
+- Entries near Golden Pocket levels validating expected momentum (recurring).

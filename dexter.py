@@ -656,6 +656,144 @@ def rr_citation_matches_config(reason_text, detail_text, exploration_mode, tol=0
     return any(abs(stated_floor - f) <= tol for f in real_floors)
 
 
+# PHASE 2 FOLLOW-UP (2026-07-17, backtest_skip_category_robustness.py): noise-vs-signal
+# check on Chev's SKIP reason categories. Reuses labeller.py's own noise-control tools
+# (_wilson_ci, _compute_k_map, MIN_N_EFF, the discovery_ts persistence machinery
+# tag_lift_report() already uses) rather than inventing new statistics -- this IS that
+# same discipline, just keyed by classify_chev_skip_reason() category instead of scan
+# tag. Lives in dexter.py (not labeller.py) because classify_chev_skip_reason does too,
+# and dexter.py -> labeller.py is already a safe one-way import; the reverse would risk
+# a circular import into a file with heavy top-level side effects.
+#
+# CRITICAL, learned the hard way during the manual version of this analysis: the
+# baseline a category is compared against must be the EXTERNAL, non-contaminated
+# NOT_ESCALATED population at matched score -- NEVER the SKIP population's own average.
+# A category that's 30-40% of all SKIPs (e.g. INVALIDATION_TOO_CLOSE) can never look
+# different from a baseline that's mostly itself; that self-referential comparison
+# produced a false "not robust" verdict that directly contradicted an independently
+# verified 486-record realistic-stop re-simulation. Discovery keys are prefixed
+# "skipcat:" in labels_discovery.json so they never collide with tag_lift_report's own
+# "tag|src" keys in the same file.
+def skip_category_robustness():
+    closed = [r for r in labeller._load_closed()
+              if labeller._numeric_label(r.get("label")) is not None
+              and (r.get("dexter_score") or 0) >= 6 and r.get("id") and r.get("ts_epoch")]
+    skip_pop = sorted([r for r in closed if r.get("chev_decision") == "SKIP"],
+                       key=lambda r: r["ts_epoch"])
+    ctrl_pop = sorted([r for r in closed if r.get("chev_decision") == "NOT_ESCALATED"],
+                       key=lambda r: r["ts_epoch"])
+    if not skip_pop:
+        return []
+
+    k_map = labeller._compute_k_map(skip_pop)
+
+    def _stats(recs):
+        n = len(recs)
+        wins = sum(1 for r in recs if r.get("label") == 1)
+        eff_n = sum(1.0 / k_map.get(r["id"], 1) for r in recs)
+        ci = labeller._wilson_ci(n, wins)
+        wr = wins / n if n else 0.0
+        return n, eff_n, wr, ci
+
+    def _ctrl_base_rate(ts_lo, ts_hi):
+        window = [r for r in ctrl_pop if ts_lo <= r["ts_epoch"] < ts_hi]
+        return labeller._base_rate(window) if window else None
+
+    by_cat = {}
+    for r in skip_pop:
+        by_cat.setdefault(classify_chev_skip_reason(r.get("chev_reason")), []).append(r)
+
+    with labeller._lock:
+        dmap = labeller._load_discovery_map()
+    dmap_updated = False
+
+    out = []
+    for cat, recs in by_cat.items():
+        key = f"skipcat:{cat}"
+        n_all, eff_all, wr_all, ci_all = _stats(recs)
+
+        # Discovery: first point where running eff_N clears MIN_N_EFF AND the category's
+        # running CI lower bound clears the control's base rate over that SAME window --
+        # never against the category's own future data (lookahead) or its own average
+        # (contamination). Persisted once found; never revised, same as tag_lift_report.
+        if key not in dmap:
+            cum = []
+            for r in recs:
+                cum.append(r)
+                eff_cum = sum(1.0 / k_map.get(x["id"], 1) for x in cum)
+                if eff_cum >= labeller.MIN_N_EFF:
+                    _, _, _, ci_cum = _stats(cum)
+                    window_br = _ctrl_base_rate(recs[0]["ts_epoch"], r["ts_epoch"] + 1)
+                    if window_br is not None and ci_cum[0] > window_br:
+                        dmap[key] = int(r["ts_epoch"])
+                        dmap_updated = True
+                        break
+
+        discovery_ts = dmap.get(key)
+        status = "insufficient_data"
+        post_actionable = None
+        post_wr = None
+        if eff_all >= labeller.MIN_N_EFF:
+            if discovery_ts:
+                post = [r for r in recs if r["ts_epoch"] > discovery_ts]
+                if post:
+                    _, eff_p, wr_p, ci_p = _stats(post)
+                    post_br = _ctrl_base_rate(discovery_ts, recs[-1]["ts_epoch"] + 1)
+                    post_actionable = (post_br is not None and eff_p >= labeller.MIN_N_EFF
+                                        and ci_p[0] > post_br)
+                    post_wr = round(wr_p, 3)
+                    status = "robust" if post_actionable else "awaiting_confirmation"
+                else:
+                    status = "awaiting_confirmation"
+            else:
+                status = "not_robust"  # cleared eff_N but never cleared the control -- no edge found
+
+        out.append({
+            "category":         cat,
+            "n":                n_all,
+            "eff_n":            round(eff_all, 1),
+            "min_n_eff":        labeller.MIN_N_EFF,
+            "progress_pct":     min(100, round(100 * eff_all / labeller.MIN_N_EFF)),
+            "win_rate":         round(wr_all, 3),
+            "ci_lo":            round(ci_all[0], 3),
+            "ci_hi":            round(ci_all[1], 3),
+            "discovered_at":    (datetime.fromtimestamp(discovery_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                                  if discovery_ts else None),
+            "post_win_rate":    post_wr,
+            "status":           status,
+        })
+
+    if dmap_updated:
+        with labeller._lock:
+            labeller._save_discovery_map(dmap)
+
+    out.sort(key=lambda x: -x["n"])
+    return out
+
+
+SKIP_ROBUSTNESS_CACHE_SECS = 300  # same 300s pattern as /api/strategy/counterfactual --
+_skip_robustness_cache = {"ts": 0.0, "payload": None}
+
+
+@flask_app.route("/api/strategy/skip_robustness")
+def api_strategy_skip_robustness():
+    """Read-only. skip_category_robustness() above, cached 300s -- it scans the full
+    labels_closed.jsonl history and writes labels_discovery.json, too heavy for the 25s
+    auto-poll the rest of the diagnostics pane uses. GET-only; the discovery-map write
+    only happens on a cache-miss recompute, never on a cache hit."""
+    now = time.time()
+    cache_age = now - _skip_robustness_cache["ts"]
+    if _skip_robustness_cache["payload"] is None or cache_age >= SKIP_ROBUSTNESS_CACHE_SECS:
+        _skip_robustness_cache["payload"] = skip_category_robustness()
+        _skip_robustness_cache["ts"] = now
+        cache_age = 0.0
+    return jsonify({
+        "cache_age_secs": round(cache_age, 1),
+        "min_n_eff":      labeller.MIN_N_EFF,
+        "categories":     _skip_robustness_cache["payload"],
+    })
+
+
 @flask_app.route("/api/strategy/funnel")
 def api_strategy_funnel():
     """Pipeline attrition for the window: pre-escalation NOT_ESCALATED reasons (from
@@ -4963,6 +5101,7 @@ def _preserve_critical_section(existing_text, generated_text):
 
 
 ELLIOT_SUGGESTIONS_FILE = os.path.join(CHEV_TOOLS_ROOT, "elliot_suggestions.json")
+SKIP_ROBUSTNESS_SUGGESTIONS_CACHE = os.path.join(CHEV_TOOLS_ROOT, "skip_robustness_suggestions.json")
 ELLIOT_GATE_MIN_N = 30       # PHASE D's explicit floor: fewer resolved gate-blocked shadow
                              # records than this for an asset -> emit nothing for it.
 ELLIOT_ONE_SIDED_PTS = 10.0  # percentage-point gap (shadow_wr vs base rate) that counts as
@@ -5097,6 +5236,113 @@ def _elliot_durable_candidates():
     return items
 
 
+def _load_skip_robustness_suggestion_cache():
+    try:
+        with open(SKIP_ROBUSTNESS_SUGGESTIONS_CACHE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _generate_skip_robustness_suggestion(categories):
+    """One LLM call reviewing every skip-reason category that just crossed into ROBUST or
+    AWAITING_CONFIRMATION in skip_category_robustness() -- reuses the exact statistical-
+    honesty rules _run_learning_session's playbook rewrite already enforces (see that
+    prompt, ~5611), and the SAME model (default MODEL_ID, chev-chelios) for the same
+    reason: this is reflective analysis over already-computed numbers, not real-time
+    escalation judgment (that's ESCALATION_MODEL_ID's job). Fed the EXACT numbers only --
+    asked to interpret and recommend, never to compute or invent a new statistic itself."""
+    rows = "\n".join(
+        f"  {c['category']}: n={c['n']} eff_N={c['eff_n']:.1f}/{c['min_n_eff']} "
+        f"win_rate={c['win_rate']*100:.0f}% CI=[{c['ci_lo']*100:.0f}%-{c['ci_hi']*100:.0f}%] "
+        f"status={c['status']} discovered={c['discovered_at'] or 'n/a'}"
+        + (f" post_discovery_win_rate={c['post_win_rate']*100:.0f}%" if c.get("post_win_rate") is not None else "")
+        for c in categories
+    )
+    prompt = (
+        "Dexter's Examiner just found that one or more of your own SKIP reason categories has "
+        "enough independent evidence to trust a verdict. These numbers are already computed by "
+        "skip_category_robustness() -- your job is to interpret them and recommend a concrete "
+        "next step, not compute anything new.\n\n"
+        "CRITICAL — read this before interpreting win_rate, or you WILL get the direction backwards:\n"
+        "  Every row below describes setups that were SKIPPED, not taken. win_rate is the fraction of\n"
+        "  those SKIPPED setups that would have WON if taken (the Examiner's own triple-barrier check\n"
+        "  against real forward price action) -- it is NOT a measure of whether the skip itself was\n"
+        "  correct. A HIGH win_rate (e.g. 68%) means the opposite of 'skipping here is working' -- it\n"
+        "  means Chev is skipping WINNERS, this category is a mistake, and the fix should make him skip\n"
+        "  LESS on this reason, not more. A LOW win_rate would mean the skips were justified. Get this\n"
+        "  backwards and you will recommend reinforcing the exact behavior that's losing trades.\n\n"
+        f"CATEGORIES:\n{rows}\n\n"
+        "STATISTICAL HONESTY (hard rule for everything you write below):\n"
+        "  State every win-rate or performance claim with its sample size in parentheses, e.g. '68% (n=776)'.\n"
+        "  No absolute language ('always', 'never', 'guaranteed') unless n >= 20.\n"
+        "  status=not_robust means the pattern looked real once but did not survive being checked against\n"
+        "    data it wasn't found on -- never recommend a code or prompt change based on it, name it\n"
+        "    explicitly as noise, not signal.\n"
+        "  status=robust or awaiting_confirmation are the only kinds worth recommending action on.\n\n"
+        "For each category worth acting on, write:\n"
+        "1. WHAT: one sentence, the pattern in plain English.\n"
+        "2. WHY IT MATTERS: what it's costing or could gain, using the real numbers above.\n"
+        "3. SUGGESTED FIX: a concrete, specific change -- a prompt wording, a threshold, a code check -- not\n"
+        "   a vague direction. If you don't have enough context to know exactly what governs this, say so\n"
+        "   and name what would need investigating instead of guessing.\n"
+        "4. CONFIDENCE: low/medium/high, and why.\n\n"
+        "If nothing here is actually worth acting on yet, say exactly that -- do not manufacture a\n"
+        "recommendation to fill space."
+    )
+    return _call_chev([{"role": "user", "content": prompt}], timeout=120)
+
+
+def _elliot_skip_robustness_items():
+    """Step 5: the one place in Elliot's Suggestions that asks an LLM to interpret numbers
+    rather than just reword them (every other _elliot_* function above is pure bucketing/
+    templating of stats already computed elsewhere) -- 'which of these is real vs noise,
+    and what's the concrete fix' is a judgment call the deterministic approach can't make.
+    Advisory only: action='manual', same as durable_promotion_candidate above -- nothing
+    here ever mutates a prompt, weight, or threshold on its own.
+    Cached per exact (category, status, discovered_at) combination so re-running
+    _run_learning_session (every 10 closed trades, x3 asset classes) doesn't re-call the
+    LLM for an unchanged verdict -- only regenerates when something actually changes."""
+    try:
+        categories = skip_category_robustness()
+    except Exception as e:
+        print(f"[Elliot] skip_category_robustness failed: {e}")
+        return []
+    worth_showing = [c for c in categories if c["status"] in ("robust", "awaiting_confirmation")]
+    if not worth_showing:
+        return []
+
+    state_key = "|".join(sorted(f"{c['category']}:{c['status']}:{c['discovered_at']}" for c in worth_showing))
+    cache = _load_skip_robustness_suggestion_cache()
+    if cache.get("state_key") == state_key and cache.get("suggestion"):
+        suggestion_text = cache["suggestion"]
+    else:
+        suggestion_text = _generate_skip_robustness_suggestion(worth_showing)
+        if not suggestion_text:
+            return []  # LLM call failed -- don't cache a failure, retry next session
+        try:
+            _atomic_write_json(SKIP_ROBUSTNESS_SUGGESTIONS_CACHE, {
+                "state_key": state_key, "suggestion": suggestion_text,
+                "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            })
+        except Exception as e:
+            print(f"[Elliot] skip robustness suggestion cache write failed: {e}")
+
+    return [{
+        # Deterministic id (NOT Python's hash() -- string hashing is randomized per
+        # process via PYTHONHASHSEED, which would silently change this id on every
+        # restart with nothing else different, breaking any dismiss/seen tracking a
+        # future frontend feature might add keyed on id, unlike every other Elliot
+        # item id above which is already fully deterministic). Plain slug, no hashlib
+        # import needed for something this small.
+        "id": "skip_robustness-" + re.sub(r"[^a-z0-9]+", "-", state_key.lower())[:60].strip("-"),
+        "type": "skip_robustness_suggestion",
+        "plain_english": suggestion_text,
+        "evidence": {"categories": worth_showing},
+        "action": "manual",
+    }]
+
+
 def _elliot_dec_asset_type(symbol):
     """Same heuristic as counterfactual_report._symbol_asset_type -- equivalence verified
     by a standalone scratch test (PHASE F). Kept as a local one-liner rather than a call
@@ -5213,8 +5459,9 @@ def build_elliot_suggestions():
     """Elliot's Suggestions (PHASE D, LEARNING GAPS + SUGGESTION ENGINE series). Assembles
     one consolidated, plain-English digest from existing files only -- no new statistics
     invented anywhere in this function, only rewordings/bucketings of numbers other parts of
-    the system already compute. Writes elliot_suggestions.json. Never raises into its caller
-    -- see the try/except at the call site in _run_learning_session."""
+    the system already compute (EXCEPT _elliot_skip_robustness_items below, which is a
+    deliberate, documented exception -- see its own docstring). Writes elliot_suggestions.json.
+    Never raises into its caller -- see the try/except at the call site in _run_learning_session."""
     overrides = _read_weight_overrides_file()
     pending_tags = {e.get("tag") for e in overrides.get("entries", [])}
 
@@ -5223,8 +5470,10 @@ def build_elliot_suggestions():
     underperformer_items = _elliot_underperformer_items(pending_tags, already_surfaced)
     durable_items = _elliot_durable_candidates()
     threshold_items = _elliot_threshold_nudges()
+    skip_robustness_items = _elliot_skip_robustness_items()
 
-    all_items = weight_lab_items + durable_items + underperformer_items + threshold_items
+    all_items = (weight_lab_items + durable_items + underperformer_items + threshold_items
+                 + skip_robustness_items)
     payload = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "items": all_items,
