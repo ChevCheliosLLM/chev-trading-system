@@ -31,8 +31,16 @@
   let _engineReadoutActive = false;
 
   function _drawEngineOverlays() {
-    if (!_engineData) return;
-    const d = _engineData;
+    // Sections 5 (Trendline Rays, _tlRaysData) and 6 (SCAN patterns,
+    // _scanPatternsData) have their OWN data sources, independent of the
+    // ENGINE-tab data (_engineData) that only "Run Dexter"/PAT populate.
+    // Bailing on !_engineData here silently swallowed the ray overlay whenever
+    // the user clicked TL without first loading engine data -- the fetch
+    // succeeded and reported a count, but nothing drew. Only bail when there is
+    // genuinely nothing to draw; sections 1-4 already guard every `d.xxx`
+    // access, so `d = {}` makes them no-op safely without an early return.
+    if (!_engineData && !_tlRaysData && !_scanPatternsData) return;
+    const d = _engineData || {};
     dctx.save();
 
     // 1. Balance zone
@@ -1041,9 +1049,9 @@
     });
   })();
 
-  // "Quick TL (local)" — the TL dropdown's escape hatch back to the legacy
-  // client-side detector (chat.js drawTrendlines(), unchanged). TL's primary
-  // click no longer calls it directly, but the old behaviour stays reachable.
+  // (The old "Quick TL (local)" dropdown button was removed 2026-07-21 -- the
+  // main TL button now IS the Quick TL control, see the lyrTlBtn wiring below.
+  // This guarded listener is left as a harmless no-op if the element is absent.)
   (function() {
     const qb = document.getElementById('ctpQuickTlBtn');
     if (qb) qb.addEventListener('click', function() { drawTrendlines(); });
@@ -1204,7 +1212,13 @@
       ['lyrRsiBtn', function() { showRSIDiv(); }],
       ['lyrPatBtn', function() { drawPatternLines(); }],
       ['lyrScanBtn', function() { drawScanPatterns(); }],
-      ['lyrTlBtn',  function() { drawRegistryRays(); }],
+      // The TL button is now the single trendline control: it draws the client
+      // "Quick TL" lines (chat.js drawTrendlines) so they appear instantly and
+      // honour the dropdown's tweak options. The server ray registry still runs
+      // the SAME algorithm (dexter.py _fit_ray_trendline) in the scan loop to
+      // track these lines as support/resistance for trades -- that's backend
+      // plumbing, not this button. (drawRegistryRays is retired from the UI.)
+      ['lyrTlBtn',  function() { drawTrendlines(); }],
       ['lyrTlArrow', function(e) { e.stopPropagation(); _ctpShow('tl'); }],
       ['lyrFibArrow', function(e) { e.stopPropagation(); _ctpShow('fib'); }],
       ['lyrRsiArrow', function(e) { e.stopPropagation(); _rsiArrowClick(); }],

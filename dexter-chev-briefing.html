@@ -1,0 +1,567 @@
+<title>The Handoff — What Dexter Tells Chev</title>
+<style>
+  :root {
+    --bg: #f2ede1;
+    --surface: #fffcf5;
+    --surface-2: #fffefa;
+    --ink: #211d17;
+    --ink-dim: #6b6353;
+    --line: rgba(33,29,23,0.14);
+    --dexter: #0d7d72;
+    --dexter-strong: #095f57;
+    --dexter-soft: #e2f2ef;
+    --chev: #96700f;
+    --chev-strong: #7a5a0c;
+    --chev-soft: #f8edd3;
+    --shadow: 0 1px 2px rgba(33,29,23,0.06), 0 8px 24px rgba(33,29,23,0.08);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0e13;
+    --surface: #12161d;
+    --surface-2: #161b23;
+    --ink: #ece7d9;
+    --ink-dim: #a39c8b;
+    --line: rgba(236,231,217,0.12);
+    --dexter: #4fd1c5;
+    --dexter-strong: #7fe3da;
+    --dexter-soft: rgba(79,209,197,0.1);
+    --chev: #d4af37;
+    --chev-strong: #e8c65c;
+    --chev-soft: rgba(212,175,55,0.1);
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 32px rgba(0,0,0,0.4);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0e13;
+      --surface: #12161d;
+      --surface-2: #161b23;
+      --ink: #ece7d9;
+      --ink-dim: #a39c8b;
+      --line: rgba(236,231,217,0.12);
+      --dexter: #4fd1c5;
+      --dexter-strong: #7fe3da;
+      --dexter-soft: rgba(79,209,197,0.1);
+      --chev: #d4af37;
+      --chev-strong: #e8c65c;
+      --chev-soft: rgba(212,175,55,0.1);
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 32px rgba(0,0,0,0.4);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--chev-soft); }
+
+  .page { max-width: 1180px; margin: 0 auto; padding: 56px 24px 80px; }
+
+  /* ---------- Intro ---------- */
+  .intro { max-width: 760px; margin: 0 auto 8px; text-align: center; }
+  .eyebrow {
+    font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+    font-style: italic;
+    font-size: 15px;
+    color: var(--ink-dim);
+    margin: 0 0 14px;
+    letter-spacing: 0.01em;
+  }
+  h1 {
+    font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+    font-weight: 400;
+    font-size: clamp(32px, 5vw, 50px);
+    line-height: 1.12;
+    margin: 0 0 20px;
+    text-wrap: balance;
+  }
+  h1 .flow {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 0.65em;
+    color: var(--ink-dim);
+    vertical-align: middle;
+  }
+  h1 .flow b.d { color: var(--dexter-strong); font-style: normal; }
+  h1 .flow b.c { color: var(--chev-strong); font-style: normal; }
+  .lede {
+    font-size: 17px;
+    color: var(--ink-dim);
+    max-width: 620px;
+    margin: 0 auto 48px;
+    text-wrap: balance;
+  }
+
+  /* ---------- Dossier grid ---------- */
+  .dossier-grid {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 0 28px;
+    align-items: start;
+  }
+  @media (max-width: 880px) {
+    .dossier-grid { grid-template-columns: 1fr; gap: 40px; }
+    .spine { display: none; }
+  }
+
+  .side-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 20px 22px;
+    border-radius: 6px;
+    margin-bottom: 18px;
+  }
+  .dexter-side .side-head { background: var(--dexter-soft); border-left: 3px solid var(--dexter); }
+  .chev-side .side-head { background: var(--chev-soft); border-radius: 16px; border-top: 3px solid var(--chev); }
+  .side-icon { font-size: 26px; line-height: 1; margin-top: 2px; }
+  .side-head h2 {
+    margin: 0 0 4px;
+    font-family: Georgia, serif;
+    font-size: 23px;
+    font-weight: 700;
+  }
+  .dexter-side .side-head h2 { color: var(--dexter-strong); }
+  .chev-side .side-head h2 { color: var(--chev-strong); }
+  .side-head p { margin: 0; font-size: 13.5px; color: var(--ink-dim); }
+
+  .spine {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 100px;
+    gap: 10px;
+    position: sticky;
+    top: 40px;
+  }
+  .spine-line {
+    width: 2px;
+    flex: 1;
+    min-height: 320px;
+    background: linear-gradient(180deg, var(--dexter), var(--chev));
+    opacity: 0.5;
+    border-radius: 2px;
+  }
+  .spine-label {
+    writing-mode: vertical-rl;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.16em;
+    color: var(--ink-dim);
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  /* ---------- Cards (details/summary) ---------- */
+  .cards { display: flex; flex-direction: column; gap: 8px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow);
+  }
+  .dexter-side .card { border-radius: 5px; border-left: 3px solid var(--dexter); }
+  .chev-side .card { border-radius: 14px; }
+
+  .card summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 13px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .card summary::-webkit-details-marker { display: none; }
+  .card summary::marker { content: ""; }
+  .card summary:focus-visible { outline: 2px solid var(--dexter); outline-offset: -2px; border-radius: 4px; }
+
+  .card-num {
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 11px;
+    color: var(--dexter);
+    background: var(--dexter-soft);
+    border-radius: 3px;
+    padding: 2px 6px;
+    flex-shrink: 0;
+    min-width: 26px;
+    text-align: center;
+  }
+  .card-title { font-weight: 600; font-size: 14.5px; flex: 1; }
+  .card-sub { display: block; font-size: 12.5px; color: var(--ink-dim); font-weight: 400; margin-top: 2px; }
+  .card-chevron {
+    color: var(--ink-dim);
+    font-size: 12px;
+    transition: transform 0.15s ease;
+    flex-shrink: 0;
+  }
+  .card[open] .card-chevron { transform: rotate(90deg); }
+
+  .card-body {
+    padding: 2px 16px 16px 54px;
+    font-size: 13.5px;
+    color: var(--ink-dim);
+  }
+  .card-body .how-label {
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--dexter);
+    display: block;
+    margin-bottom: 5px;
+  }
+  .card-body p { margin: 0 0 8px; }
+  .card-body p:last-child { margin-bottom: 0; }
+
+  /* ---------- Chev side (prose blocks, not accordions) ---------- */
+  .chev-block {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    padding: 18px 20px;
+    margin-bottom: 12px;
+  }
+  .chev-block h3 {
+    font-family: Georgia, serif;
+    font-size: 16px;
+    margin: 0 0 8px;
+    color: var(--chev-strong);
+  }
+  .chev-block p { margin: 0 0 10px; font-size: 14px; color: var(--ink-dim); }
+  .chev-block p:last-child { margin-bottom: 0; }
+  .chev-block .quote {
+    font-family: Georgia, serif;
+    font-style: italic;
+    font-size: 14.5px;
+    color: var(--ink);
+    border-left: 2px solid var(--chev);
+    padding-left: 12px;
+    margin: 10px 0;
+  }
+  .veto-strip {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    background: var(--chev-soft);
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--ink);
+    margin-top: 4px;
+  }
+  .veto-strip .mark { font-size: 18px; }
+
+  /* ---------- Example prompt toggle ---------- */
+  .example-section {
+    margin-top: 64px;
+    text-align: center;
+  }
+  .example-toggle-input { position: absolute; opacity: 0; pointer-events: none; }
+  .example-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow);
+    border-radius: 999px;
+    padding: 12px 24px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    transition: border-color 0.15s ease;
+  }
+  .example-toggle-label:hover { border-color: var(--chev); }
+  .example-toggle-input:focus-visible + .example-toggle-label { outline: 2px solid var(--chev); outline-offset: 2px; }
+  .example-toggle-label .arrow { font-size: 11px; color: var(--ink-dim); transition: transform 0.2s ease; }
+  .example-toggle-input:checked + .example-toggle-label .arrow { transform: rotate(180deg); }
+  .example-toggle-input:checked + .example-toggle-label .show-text::before { content: "Hide"; }
+  .example-toggle-label .show-text::before { content: "Show"; }
+  .example-toggle-label .show-text { display: inline; }
+
+  .example-doc {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+    text-align: left;
+    margin-top: 18px;
+  }
+  .example-toggle-input:checked ~ .example-doc { max-height: 4000px; }
+  .example-doc-inner {
+    background: #14110c;
+    color: #d9d2bf;
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    padding: 24px 26px;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12.5px;
+    line-height: 1.65;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  /* The example readout is a deliberate fixed dark terminal look, on purpose,
+     regardless of page theme -- it's meant to look like an actual console. */
+  .example-doc-caption {
+    font-size: 12px;
+    color: var(--ink-dim);
+    margin: 12px 0 0;
+    font-style: italic;
+  }
+  .ex-h { color: #e8c65c; }
+  .ex-d { color: #7fe3da; }
+  .ex-warn { color: #ff9d6c; }
+  .ex-dim { color: #8a8371; }
+
+  footer {
+    margin-top: 60px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--ink-dim);
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+  }
+</style>
+
+<div class="page">
+
+  <div class="intro">
+    <p class="eyebrow">Inside the Chev Chelios trading system</p>
+    <h1>What Dexter tells Chev <span class="flow">— <b class="d">the analyst</b> → <b class="c">the trader</b></span></h1>
+    <p class="lede">Every time a setup is worth a look, Dexter writes Chev one long briefing — everything it noticed about the market — and Chev has to read the whole thing and decide what to do. Here's exactly what's in that briefing, where every number actually comes from, and what happens after Chev makes his call.</p>
+  </div>
+
+  <div class="dossier-grid">
+
+    <!-- ===================== DEXTER SIDE ===================== -->
+    <section class="side dexter-side">
+      <div class="side-head">
+        <span class="side-icon">🛰️</span>
+        <div>
+          <h2>Dexter</h2>
+          <p>The scanner. Watches every market non-stop, never gets tired, never has a gut feeling — only numbers.</p>
+        </div>
+      </div>
+
+      <div class="cards">
+
+        <details class="card">
+          <summary><span class="card-num">01</span><span class="card-title">Live price &amp; recent candles<span class="card-sub">The current price, plus a stretch of price history</span></span><span class="card-chevron">▸</span></summary>
+          <div class="card-body">
+            <span class="how-label">Where the number comes from</span>
+            <p>Pulled live, right now, from Binance's price feed for crypto pairs (other feeds handle forex and stocks). Chev sees the actual recent candles for the timeframe in question, plus a couple of neighbouring timeframes for context — not a huge historical archive, just enough to see the recent story.</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="card-num">02</span><span class="card-title">Trend &amp; momentum indicators<span class="card-sub">EMA, RSI, ATR, VWAP, Bollinger Bands, MACD</span></span><span class="card-chevron">▸</span></summary>
+          <div class="card-body">
+            <span class="how-label">Where the number comes from</span>
+            <p>Standard, well-known charting-industry formulas — the same ones any charting app uses — run directly on the price history Dexter just pulled. Nothing exotic: is price trending up or down, is it "overbought," how jumpy has it been lately.</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="card-num">03</span><span class="card-title">Support &amp; resistance, per timeframe<span class="card-sub">Separate levels for the 15-min, 30-min, 1-hour and 4-hour charts</span></span><span class="card-chevron">▸</span></summary>
+          <div class="card-body">
+            <span class="how-label">Where the number comes from</span>
+            <p>Dexter counts how many times price has bounced off roughly the same level, on each timeframe's own history. A level that's been touched several times gets flagged as more reliable than one that's only been touched once or twice — and levels that hold up across several timeframes at once are flagged as the strongest kind.</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="card-num">04</span><span class="card-title">Fibonacci levels<span class="card-sub">Pullback levels from the latest real price swing</span></span><span class="card-chevron">▸</span></summary>
+          <div class="card-body">
+            <span class="how-label">Where the number comes from</span>
+            <p>Dexter finds the most recent genuine high-to-low (or low-to-high) swing in price, then works out the standard Fibonacci percentages between those two points. It's anchored to an actual move that happened, not picked arbitrarily.</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="card-num">05</span><span class="card-title">Volume profile<span class="card-sub">Where the heaviest trading actually happened, price-wise</span></span><span class="card-chevron">▸</span></summary>
+          <div class="card-body">
+            <span class="how-label">Where the number comes from</span>
+            <p>Dexter adds up how much volume traded at every price level during a detected move, then finds the single price with the most activity (the "point of control") and the price range that contains the bulk of all the volume.</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="card-num">06</span><span class="card-title">Order book snapshot <span class="card-sub" style="text-transform:none">(crypto only)</span><span class="card-sub">Real buy/sell orders sitting on the exchange right now</span></span><span class="card-chevron">▸</span></summary>
+          <div class="card-body">
+            <span class="how-label">Where the number comes from</span>
+            <p>Pulled live, directly from the exchange's own order book — including unusually large stacked orders ("walls") and thin gaps where price could move fast with little resistance.</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="card-num">07</span><span class="card-title">Futures positioning <span class="card-sub" style="text-transform:none">(crypto only)</span><span class="card-sub">Are traders leaning long or short right now?</span></span><span class="card-chevron">▸</span></summary>
+          <div class="card-body">
+            <span class="how-label">Where the number comes from</span>
+            <p>Pulled from Binance's futures market data — the funding rate (a signal for whether longs or shorts are "too crowded") and how much money is currently sitting in open futures positions.</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="card-num">08</span><span class="card-title">Market regime<span class="card-sub">Trending up, trending down, ranging, or just noisy chop</span></span><span class="card-chevron">▸</span></summary>
+          <div class="card-body">
+            <span class="how-label">Where the number comes from</span>
+            <p>A standard trend-strength measurement run on the 4-hour chart. Dexter attaches a plain-English note to whatever it finds — e.g. "you're trading with the trend" or "this is counter-trend, hold yourself to a much higher bar."</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="card-num">09</span><span class="card-title">The structural read<span class="card-sub">Dexter's own deeper "story" of the market</span></span><span class="card-chevron">▸</span></summary>
+          <div class="card-body">
+            <span class="how-label">Where the number comes from</span>
+            <p>Dexter's own custom logic looks for meaningful turning points in price, the moves between them, and builds a running hypothesis of what price is likely to do next — a second, independent opinion that gets checked against Dexter's simpler confluence read for agreement.</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="card-num">10</span><span class="card-title">Executable geometry<span class="card-sub">The real minimum stop, reward ratio, and target — before Chev picks numbers</span></span><span class="card-chevron">▸</span></summary>
+          <div class="card-body">
+            <span class="how-label">Where the number comes from</span>
+            <p>Calculated straight from the account's actual trading costs (fees, slippage) and risk rules — not a guess. Chev is shown the real floor up front, so he isn't left guessing a number only to be told afterward that it wasn't good enough.</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="card-num">11</span><span class="card-title">Where the idea dies, and where it wins<span class="card-sub">Specific invalidation and target prices</span></span><span class="card-chevron">▸</span></summary>
+          <div class="card-body">
+            <span class="how-label">Where the number comes from</span>
+            <p>Worked out from the size of the recent price move, the nearest real structural levels, and the account's own minimum-reward rules — a concrete "this proves the idea wrong" price, and a concrete "this is a genuine win" price.</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="card-num">12</span><span class="card-title">Housekeeping &amp; context<span class="card-sub">Open trades, past losses, playbook rules, news events</span></span><span class="card-chevron">▸</span></summary>
+          <div class="card-body">
+            <span class="how-label">Where the number comes from</span>
+            <p>Pulled from the account's own trade history and a live economic calendar: Chev's currently open positions (so he doesn't stack similar risk twice), a warning if a very similar setup lost money recently, his own written trading rulebook, a few of his own recent trades for reference, which trading session is active, and any major news events coming up.</p>
+          </div>
+        </details>
+
+      </div>
+    </section>
+
+    <div class="spine" aria-hidden="true">
+      <div class="spine-line"></div>
+      <div class="spine-label">ONE MESSAGE, EVERY TIME</div>
+    </div>
+
+    <!-- ===================== CHEV SIDE ===================== -->
+    <section class="side chev-side">
+      <div class="side-head">
+        <span class="side-icon">🎙️</span>
+        <div>
+          <h2>Chev</h2>
+          <p>The trader. Reads the whole case file, has a personality, makes the call — but doesn't get the last word.</p>
+        </div>
+      </div>
+
+      <div class="chev-block">
+        <h3>What he actually receives</h3>
+        <p>The exact same long report on the left, delivered as one message — plus his own separate rulebook that never changes: his personality, his trading philosophy, the things he's banned from doing, and the precise format he has to answer in.</p>
+      </div>
+
+      <div class="chev-block">
+        <h3>How he processes it</h3>
+        <p>He reads it like a written case file, not a spreadsheet. He writes out his reasoning in plain language first, then commits to specifics in a fixed format: direction, entry, stop, target, and which of the clues above (his "tags") actually convinced him.</p>
+        <div class="quote">"Confluence at the 0.618 level, RSI showing hidden bullish divergence, and I'm with the 4H trend — I'm taking this long."</div>
+      </div>
+
+      <div class="chev-block">
+        <h3>Can he do his own math?</h3>
+        <p>Yes — but only with what's already in front of him. He can work out his own risk/reward ratio from the entry, stop and target he just proposed, or compare his own read against Dexter's structural engine and note whether they agree. What he <em>can't</em> do is go fetch new data himself — everything he reasons about was already handed to him in that one message.</p>
+      </div>
+
+      <div class="chev-block">
+        <h3>Does he get the final word?</h3>
+        <p>No — and this is the important part. After Chev replies, a set of automatic checks re-verify everything: do his numbers match the real live price (catching anything that looks made up), does the trade clear the account's actual risk rules, does it structurally hold up.</p>
+        <div class="veto-strip">
+          <span class="mark">🛡️</span>
+          <span>Any one of those checks can block the trade even after Chev says "post it." Chev proposes — the system's own math has the actual veto power.</span>
+        </div>
+      </div>
+
+    </section>
+  </div>
+
+  <div class="example-section">
+    <input type="checkbox" id="showExample" class="example-toggle-input">
+    <label for="showExample" class="example-toggle-label">
+      <span>📄</span>
+      <span class="show-text"></span>
+      <span> a full example briefing</span>
+      <span class="arrow">▾</span>
+    </label>
+
+    <div class="example-doc">
+      <div class="example-doc-inner">
+<span class="ex-dim">// Illustrative example, reconstructed to show the real shape and section</span>
+<span class="ex-dim">// headers of a briefing — numbers below are made up for demonstration.</span>
+
+<span class="ex-h">=== YOUR CURRENT OPEN POSITIONS ===</span>
+  OPEN  ETHUSDT LONG entry=3412.50 SL=3365.00 TP=3510.00  R:R=2.1
+
+<span class="ex-h">=== LIVE MARKET SNAPSHOT — SOLUSDT 1H ===</span>
+Current price: 142.318
+TREND        : BULLISH — higher highs and higher lows, price above SMA50
+EMA ALIGNMENT: BULLISH STACK (13&gt;21&gt;55) — strong uptrend alignment
+RSI          : 58.2 — neutral zone
+KEY LEVELS
+  Resistance : 146.200  [multi-tf]  (+2.72% away)
+  Support    : 140.850  [multi-tf]  (-1.03% away)
+
+<span class="ex-h">MARKET REGIME:</span>
+  4H: TRENDING_UP (ADX=31.4, +DI=28.1, -DI=12.6)
+  LONG is WITH the 4H trend. SHORT is counter-trend — requires
+  significantly stronger confluence to justify.
+
+<span class="ex-h">EXECUTABLE GEOMETRY</span> — hard limits the risk rules will enforce on any trade:
+  scalp: min SL 0.35% (cost floor) | min R:R 1.20:1 | min TP 0.85% from entry
+  day:   min SL 0.60% (ATR floor)  | min R:R 1.50:1 | min TP 1.65% from entry
+  swing: min SL 1.10% (ATR floor)  | min R:R 2.00:1 | min TP 3.30% from entry
+
+<span class="ex-h">=== HIGHER / LOWER TIMEFRAME CONTEXT ===</span>
+
+<span class="ex-h">4H CONTEXT</span>  (last close: 2026-07-12 16:00)
+TREND        : BULLISH — higher highs and higher lows, price above SMA50
+KEY LEVELS
+  Resistance : 148.900  [multi-tf]  (+4.63% away)
+  Support    : 139.200  [multi-tf]  (-2.19% away)
+
+<span class="ex-warn">⚠ COUNTER-TREND ALERT</span> — only shown if the proposed direction
+fights the 4H trend. Lists the extra conditions required to qualify.
+
+<span class="ex-h">=== DEXTER'S DETECTED CONFLUENCE ===</span>
+Primary timeframe: 1H  |  Expected trade type: day
+Active session: NEW YORK — Good liquidity.
+Distance from confluence level: 1.03%
+
+<span class="ex-h">=== YOUR TRADING PLAYBOOK ===</span>
+  (Chev's own written rules for this asset type)
+
+<span class="ex-h">=== RELEVANT RECENT TRADES ===</span>
+  • ETHUSDT LONG → WIN (+$41.20) | tags: sr_4h,ema_stack
+  • ADAUSDT SHORT → LOSS (-$18.60) | tags: rsi_ob,sr_1h
+
+<span class="ex-dim">Reply format Chev must follow:</span>
+<span class="ex-h">TRADE:</span> LONG entry=142.30 SL=140.80 TP=146.00 tags=sr_4h,ema_stack,rsi_1h
+<span class="ex-h">STRUCTURAL READ:</span> Agrees with Dexter's structural engine — same zone.
+      </div>
+      <p class="example-doc-caption">This is a reconstruction to show the shape of a real briefing, not a copy-pasted live one — the actual message is longer, and every section above only appears when it's actually relevant to that setup.</p>
+    </div>
+  </div>
+
+  <footer>
+    Built to explain — not to change — how Dexter and Chev actually talk to each other.
+  </footer>
+
+</div>

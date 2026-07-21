@@ -573,6 +573,7 @@
     const cs = candles.slice(-N);
     if (cs.length < 30) return [];
     const highs = cs.map(c => c.high), lows = cs.map(c => c.low), times = cs.map(c => c.time);
+    const closes = cs.map(c => c.close);
     const last  = cs.length - 1;
 
     // ATR-ish tolerance — mean true range of the last 14 bars
@@ -601,42 +602,59 @@
     }
 
     // Build & validate candidate lines for one side.
-    //   'res' → line sits ABOVE prices (no high pierces above line + tol)
-    //   'sup' → line sits BELOW prices (no low  pierces below line - tol)
+    //   'res' → line rides ABOVE the highs (a resistance trend line)
+    //   'sup' → line rides BELOW the lows  (a support trend line)
+    // A "pierce" is a candle that CLOSES beyond the line — wicks may poke
+    // through and still count as a respectful touch; only a close-through
+    // breaks it. By default zero closes may pierce (opts.allowPierce = 0); the
+    // TL menu's "Allowed pierces" control raises that so the user can test
+    // whether a slightly more permissive line hugs the trend better. Every
+    // same-side pivot pair is considered (not just recent ones), the pierce
+    // test runs all the way from the first anchor to the CURRENT bar (the line
+    // must stay unbroken through to now, not merely between its two anchors),
+    // and selection is driven by how many pivots the line touches/respects —
+    // then span — with any permitted pierces penalised so a cleaner line wins.
+    const allowPierce = Math.max(0, opts.allowPierce || 0);
+    const touchTol    = tol;            // how near a pivot must sit to count as a touch/respect
+    const pierceEps   = atr * 0.05;     // ignore negligible float-noise overshoot
     function build(pivots, vals, kind) {
       if (pivots.length < 2) return [];
-      const isRes  = kind === 'res';
-      const recent = pivots.slice(-Math.min(pivots.length, opts.recentB || 6));
-      const cands  = [];
-      recent.forEach(b => {
-        pivots.forEach(a => {
-          if (a >= b || (b - a) < (opts.minSpan || 8)) return;
+      const isRes = kind === 'res';
+      const cands = [];
+      for (let bi = 0; bi < pivots.length; bi++) {
+        const b = pivots[bi];
+        for (let ai = 0; ai < bi; ai++) {
+          const a = pivots[ai];
+          if ((b - a) < (opts.minSpan || 8)) continue;
           const slope = (vals[b] - vals[a]) / (b - a);
-          // Classic trend line direction: resistance must ride a series of
-          // DESCENDING lower highs, support a series of ASCENDING higher lows.
-          // Require the line to move by at least one tolerance over its span so
-          // it's genuinely trending (flat lines belong to the S/R tool, not here).
+          // Classic direction: resistance rides descending highs, support rides
+          // ascending lows — require at least one tolerance of slope over the span
+          // (flat lines belong to the S/R tool, not here).
           const rise = slope * (b - a);
-          if (isRes ? (rise > -tol) : (rise < tol)) return;
-          // Reject if any bar between the anchors pierces through the line
-          let ok = true;
-          for (let i = a; i <= b; i++) {
+          if (isRes ? (rise > -tol) : (rise < tol)) continue;
+          // Count close-through pierces from the first anchor to the current bar.
+          let pierces = 0;
+          for (let i = a; i <= last; i++) {
             const line = vals[a] + slope * (i - a);
-            if (isRes ? (highs[i] > line + tol) : (lows[i] < line - tol)) { ok = false; break; }
+            if (isRes ? (closes[i] > line + pierceEps) : (closes[i] < line - pierceEps)) {
+              if (++pierces > allowPierce) break;
+            }
           }
-          if (!ok) return;
-          // Touches: same-side pivots lying within tol of the line
+          if (pierces > allowPierce) continue;
+          // Touches / respects: same-side pivots whose extreme sits within touchTol.
           let touches = 0;
-          pivots.forEach(pi => {
-            if (Math.abs(vals[pi] - (vals[a] + slope * (pi - a))) <= tol) touches++;
-          });
-          if (touches < 2) return;
+          for (const pi of pivots) {
+            if (Math.abs(vals[pi] - (vals[a] + slope * (pi - a))) <= touchTol) touches++;
+          }
+          if (touches < 2) continue;
           const projNow = vals[a] + slope * (last - a);
           const distNow = Math.abs(projNow - vals[last]) / (atr || 1);
-          const score   = touches * 1000 + (b - a) + b * 0.5 - distNow * 20;
-          cands.push({ a, slope, touches, projNow, score, kind });
-        });
-      });
+          // Touches dominate, then span; permitted pierces and a line sitting far
+          // from current price are penalised.
+          const score = touches * 1000 + (b - a) - pierces * 120 - distNow * 20;
+          cands.push({ a, slope, touches, pierces, projNow, score, kind });
+        }
+      }
       cands.sort((x, y) => y.score - x.score);
       const kept = [];
       for (const c of cands) {
@@ -649,7 +667,7 @@
       return kept.map(c => ({
         t1: times[c.a], p1: vals[c.a],
         t2: times[last], p2: vals[c.a] + c.slope * (last - c.a),
-        kind: c.kind, touches: c.touches,
+        kind: c.kind, touches: c.touches, pierces: c.pierces,
       }));
     }
 
@@ -660,20 +678,28 @@
   function _tlOpts() {
     const ps = document.querySelector('input[name="tlPerSide"]:checked');
     const st = document.querySelector('input[name="tlStrict"]:checked');
+    const pc = document.querySelector('input[name="tlPierce"]:checked');
     return {
-      perSide: ps ? parseInt(ps.value, 10) : 2,
+      perSide: ps ? parseInt(ps.value, 10) : 1,
       tolAtr:  st ? parseFloat(st.value) : 0.6,
+      allowPierce: pc ? parseInt(pc.value, 10) : 0,
     };
   }
   function _clearTrendlineDrawings() {
     for (let i = drawings.length-1; i >= 0; i--) { if (drawings[i]._tl) drawings.splice(i,1); }
   }
   function _pushTrendlineDrawings(lines) {
+    // Drawn as a 'ray', not a 'trendline' segment: the ray renderer (drawing.js)
+    // starts at point1 (the origin pivot, t1/p1) and extends through point2
+    // (t2/p2, the line's value at the latest bar — both points sit on the fitted
+    // line) out to the chart edge, so the trendline projects indefinitely to the
+    // right and keeps re-extending as the user pans/zooms. That's the S/R ray the
+    // future trade logic reasons about, now shown the same way on the chart.
     lines.forEach(L => drawings.push({
-      type: 'trendline',
+      type: 'ray',
       time1: L.t1, price1: L.p1, time2: L.t2, price2: L.p2,
       color: L.kind === 'res' ? '#f23645' : '#089981',
-      lineWidth: 1.4, dashed: false, opacity: 0.9,
+      lineWidth: 1.4, opacity: 0.9,
       visible: true, _tl: true,
     }));
   }
@@ -696,7 +722,7 @@
     try {
       const lines = _computeTrendlines(currentCandles, _tlOpts());
       if (!lines.length) {
-        showNotification('Trendlines', 'No clean trendlines found — try Loose sensitivity (▾)', 'info', 'lets-see.png', 4000);
+        showNotification('Trendlines', 'No clean trendlines found — try Loose sensitivity or allow a pierce (▾)', 'info', 'lets-see.png', 4000);
         btn.textContent = 'TL'; card.classList.remove('active');
         vis.checked = false; vis.disabled = true;
         return;
@@ -705,10 +731,16 @@
       saveDrawings(); redrawAll(); updateObjTree();
       const res = lines.filter(l => l.kind === 'res').length;
       const sup = lines.length - res;
+      // Surface touch/pierce counts so the "allowed pierces" experiment is legible:
+      // best = the most-respected line drawn; pierced = how many carry a permitted pierce.
+      const bestTouch = Math.max(...lines.map(l => l.touches || 0));
+      const pierced   = lines.filter(l => (l.pierces || 0) > 0).length;
+      const detail = `${res} resistance · ${sup} support · best ${bestTouch} touches`
+                   + (pierced ? ` · ${pierced} with a pierce` : ' · none pierced');
       btn.textContent = `TL (${lines.length})`;
       card.classList.add('active');
       vis.checked = true; vis.disabled = false;
-      showNotification('Trendlines drawn', `${res} resistance · ${sup} support`, 'success', 'ruler.png', 3500);
+      showNotification('Trendlines drawn', detail, 'success', 'ruler.png', 3500);
     } catch (e) {
       showNotification('Trendlines error', e.message, 'error', 'oh-no.png', 5000);
       btn.textContent = 'TL'; card.classList.remove('active');
@@ -720,7 +752,7 @@
   // Reactive: when the Trendlines dropdown changes, recompute live if lines are
   // already showing (mirrors the Fib checkbox behavior). If nothing is drawn yet,
   // the change just sets the preference for the next draw.
-  ['tlPerSide','tlStrict'].forEach(name => {
+  ['tlPerSide','tlStrict','tlPierce'].forEach(name => {
     document.querySelectorAll('input[name="' + name + '"]').forEach(radio => {
       radio.addEventListener('change', () => {
         if (!drawings.some(d => d._tl)) return;   // only live-update when active

@@ -976,17 +976,20 @@
           <label><input type="checkbox" id="vpCk4h"> 4h</label>
         </div>
         <div id="ctpTlBody">
-          <button class="ctpQuickTlBtn" id="ctpQuickTlBtn" data-tip="Draws the old browser-side quick detector — separate from Dexter's tracked rays">Quick TL (local)</button>
-          <div class="drop-sep"></div>
-          <div class="ctpGroupLbl">Lines per side (Quick TL settings)</div>
-          <label><input type="radio" name="tlPerSide" value="1"> 1</label>
-          <label><input type="radio" name="tlPerSide" value="2" checked> 2</label>
+          <div class="ctpGroupLbl">Lines per side</div>
+          <label><input type="radio" name="tlPerSide" value="1" checked> 1</label>
+          <label><input type="radio" name="tlPerSide" value="2"> 2</label>
           <label><input type="radio" name="tlPerSide" value="3"> 3</label>
           <div class="drop-sep"></div>
           <div class="ctpGroupLbl">Sensitivity</div>
           <label><input type="radio" name="tlStrict" value="0.4"> Tight — fewer, cleaner</label>
           <label><input type="radio" name="tlStrict" value="0.6" checked> Normal</label>
           <label><input type="radio" name="tlStrict" value="0.9"> Loose — more lines</label>
+          <div class="drop-sep"></div>
+          <div class="ctpGroupLbl">Allowed pierces (experiment)</div>
+          <label><input type="radio" name="tlPierce" value="0" checked> None — line must not be pierced</label>
+          <label><input type="radio" name="tlPierce" value="1"> Allow 1 close-through</label>
+          <label><input type="radio" name="tlPierce" value="2"> Allow 2 close-throughs</label>
         </div>
       </div>
       <!-- PHASE 6 Task 3: click a live trade's entry line to show this. Read-only --
@@ -1305,14 +1308,14 @@
             <button class="ltbName" id="lyrScanBtn">SCAN</button>
             <div class="ltbDesc">Chev's Patterns</div>
           </div>
-          <div class="layerToolBtn hasDropdown" id="lyrTlCard" data-tip="Dexter's tracked trendline rays">
+          <div class="layerToolBtn hasDropdown" id="lyrTlCard" data-tip="Trendlines (support/resistance) — tweak in the ▾ menu">
             <input type="checkbox" class="toolVis" id="lyrTlVis" disabled data-tip="Show/hide">
             <span class="toolDot"></span>
             <div class="ltbDrop">
               <button class="ltbName" id="lyrTlBtn">TL</button>
               <span class="ltbArrow" id="lyrTlArrow" data-tip="TL options"><svg class="icon sm"><use href="#icon-chevron-down"/></svg></span>
             </div>
-            <div class="ltbDesc">Dexter's Rays</div>
+            <div class="ltbDesc">Trendlines</div>
           </div>
         </div>
       </div>
@@ -1470,10 +1473,10 @@
 <script src="js/ui/jane.js?v=20260709-2"></script>
 <script src="js/charts/indicators.js?v=20260709-2"></script>
 <script src="js/charts/rsi-canvas.js?v=20260709-2"></script>
-<script src="js/ui/chat.js?v=20260717-1"></script>
+<script src="js/ui/chat.js?v=20260721-3"></script>
 <script src="js/charts/timeframe-load.js?v=20260709-2"></script>
 <script src="js/charts/drawing.js?v=20260715-1"></script>
-<script src="js/charts/engine.js?v=20260722-3"></script>
+<script src="js/charts/engine.js?v=20260721-5"></script>
 <script src="js/ui/weight-lab.js?v=20260713-2"></script>
 <script src="js/ui/sparklines.js?v=20260709-2"></script>
 <script src="js/ui/radar.js?v=20260709-2"></script>

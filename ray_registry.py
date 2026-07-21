@@ -34,8 +34,18 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-# ── Persistence paths (mirrors labeller.py's DATA_DIR convention) ───────────
-DATA_DIR           = r"C:\ChevTools"
+# ── Persistence paths (mirrors dexter.py's CHEV_TOOLS_ROOT convention) ──────
+# 2026-07-20: was a hardcoded r"C:\ChevTools" -- on Linux that's a RELATIVE
+# path whose directory never exists, so save_registry() threw FileNotFoundError
+# on every scan (swallowed by scan_pair_tf's catch-all), the registry restarted
+# from {} each cycle, and /api/rays never had a single ray to serve. Resolve
+# the same way dexter.py ~line 34 does, falling back to this module's own
+# directory (= dexter's CHEV_TOOLS_ROOT fallback on machines without ~/ChevTools).
+DATA_DIR = os.getenv("CHEV_TOOLS_ROOT",
+                     r"C:\ChevTools" if os.name == "nt"
+                     else os.path.expanduser("~/ChevTools"))
+if not os.path.isdir(DATA_DIR):
+    DATA_DIR = os.path.dirname(os.path.abspath(__file__))
 REGISTRY_PATH      = os.path.join(DATA_DIR, "ray_registry.json")
 RAY_IDENTITY_LOG_PATH = os.path.join(DATA_DIR, "ray_identity_log.jsonl")
 
@@ -130,17 +140,23 @@ PIERCE_TOL_ATR = 0.6
 # ~587) -- the two systems agree on what "pierced" means, even though what
 # they measure differs (see count_boundary_pierces()'s docstring).
 
-PIERCE_MAX = 0
-# Any confirmed pierce disqualifies narration. A constant, not a hardcoded
-# literal at the call site, specifically so a future loosening is a
-# deliberate, visible edit here -- not a silent drift.
+PIERCE_MAX = 1
+# 2026-07-21: loosened 0 -> 1 (moderate widening, at Kev's request). A single
+# confirmed close-through no longer disqualifies narration; two or more still
+# do. Rationale: with PIERCE_MAX=0 only 322/441 live rays cleared this gate and
+# most real support/resistance lines get poked through once before holding, so
+# an all-or-nothing pierce test hid too many otherwise-valid rays. A constant,
+# not a hardcoded literal at the call site, so this stays a deliberate, visible
+# edit -- not a silent drift.
 
-TRENDING_MIN_SLOPE_NORM = 0.15
-# Same threshold as _run_pattern_engine's flat_thr = atr * 0.15 (dexter.py
-# ~8514) -- slope_norm is already expressed in ATR-per-bar, the same units
-# that threshold uses, so this is the identical bar for "is this line
-# actually trending" as the pattern engine's own flat/rising/falling split.
-# Cited here so the two never drift apart silently.
+TRENDING_MIN_SLOPE_NORM = 0.08
+# 2026-07-21: loosened 0.15 -> 0.08 (moderate widening, at Kev's request). Was
+# tied to _run_pattern_engine's flat_thr = atr * 0.15; deliberately decoupled
+# now so more gently-sloped rays narrate (at 0.15, 354/441 live rays read as
+# "flat" and were suppressed). slope_norm is still ATR-per-bar, so 0.08 means
+# "at least 0.08 ATR of drift per bar." NOTE: this no longer matches the pattern
+# engine's flat/rising/falling split -- an intentional divergence, kept here so
+# the reason for the gap is visible rather than looking like an oversight.
 
 # ── Breakout threshold (replicated, not imported) ───────────────────────────
 # Same formula as patterns.py's _atr_breakout_pct (patterns.py ~line 59-68):
@@ -190,6 +206,14 @@ class RayRecord:
     pending_break: bool = False
     first_touch_ts: Optional[int] = None
     last_touch_ts: Optional[int] = None
+    # Phase R8 (pivot-pair trendline): the historical swing pivot the current
+    # fit is anchored to. Lets /api/rays draw the line riding real past
+    # structure (pivot -> now -> horizon) instead of only projecting forward
+    # off the last reconcile bar. Legacy-safe: pre-R8 records load with 0 and
+    # api_rays falls back to the old last-bar anchor. The drawn line still uses
+    # the ray's slope; origin only sets where the visible segment begins.
+    origin_ts: int = 0
+    origin_price: float = 0.0
 
 
 _unknown_tf_warned: Set[str] = set()
@@ -310,6 +334,7 @@ def _retire_pre_r7_5m(registry: Dict[str, List[RayRecord]]) -> List[dict]:
 def reconcile(registry: Dict[str, List[RayRecord]], symbol: str, timeframe: str,
               side: str, slope_raw: float, slope_norm: float,
               value_at_current_bar: float, current_bar_ts: int, atr: float,
+              origin_ts: int = 0, origin_price: float = 0.0,
               log_path: str = RAY_IDENTITY_LOG_PATH) -> RayRecord:
     """
     The identity function. Mutates `registry` in place (adding/updating a
@@ -340,6 +365,8 @@ def reconcile(registry: Dict[str, List[RayRecord]], symbol: str, timeframe: str,
         matched.anchor_ts = current_bar_ts
         matched.value_at_anchor = value_at_current_bar
         matched.last_seen_ts = current_bar_ts
+        matched.origin_ts = origin_ts            # track the latest fit's origin pivot
+        matched.origin_price = origin_price
         result = matched
         log_lines.append({"decision": "MATCHED", "id": matched.id, "symbol": symbol,
                            "timeframe": timeframe, "side": side, **info,
@@ -350,6 +377,7 @@ def reconcile(registry: Dict[str, List[RayRecord]], symbol: str, timeframe: str,
             slope_raw=slope_raw, slope_norm=slope_norm,
             anchor_ts=current_bar_ts, value_at_anchor=value_at_current_bar,
             born_ts=current_bar_ts, last_seen_ts=current_bar_ts,
+            origin_ts=origin_ts, origin_price=origin_price,
         )
         rays_for_key.append(new_ray)
         result = new_ray
@@ -990,7 +1018,7 @@ if __name__ == "__main__":
     check("12a: empty rays list -> empty string (nothing at all, not 'none found')",
           format_ray_block_for_chev([], current_price=100.0, timeframe="1h") == "")
 
-    # Phase R6: slopes must clear TRENDING_MIN_SLOPE_NORM (0.15 abs) to be
+    # Phase R6: slopes must clear TRENDING_MIN_SLOPE_NORM (0.08 abs) to be
     # narratable at all, and stay within SLOPE_MATCH_TOL (0.15) of each other
     # for the channel line to render -- -0.2 and -0.15 satisfy both.
     _fmt_upper = RayRecord(id="fu", symbol="BTCUSDT", timeframe="15m", side="upper",
@@ -1053,8 +1081,15 @@ if __name__ == "__main__":
         _r6_pierce_bar, lambda ts: _project_value(_r6_pierce_ray, ts), "lower", _r6_atr)
     check("13a: mid-span close beyond tolerance counts as exactly one pierce",
           _r6_pierces == 1)
-    _r6_pierce_ray.pierce_count += _r6_pierces
-    check("13a-narratable: a pierced ray is not narratable", not is_narratable(_r6_pierce_ray))
+    # PIERCE_MAX loosening (2026-07-21): a ray pierced up to PIERCE_MAX times is
+    # still narratable; one beyond the cap is not. Written against the constant
+    # so it tracks any future retuning instead of pinning a literal.
+    _r6_pierce_ray.pierce_count = PIERCE_MAX
+    check("13a-narratable: a ray pierced up to PIERCE_MAX is still narratable",
+          is_narratable(_r6_pierce_ray))
+    _r6_pierce_ray.pierce_count = PIERCE_MAX + 1
+    check("13a-narratable: a ray pierced beyond PIERCE_MAX is not narratable",
+          not is_narratable(_r6_pierce_ray))
 
     # 13b: wick-through (trap) in the SAME scan -> zero pierces, wick_rejection
     # still increments -- the two walks must not double-count or interfere.

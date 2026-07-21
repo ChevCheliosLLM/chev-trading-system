@@ -2363,8 +2363,12 @@ def api_analysis_vp():
         anchor = _detect_vp_anchor(df)
         if anchor is None:
             return jsonify({"error": "No significant structure detected — price may be at equilibrium. Try a different timeframe."}), 400
-        start_idx = anchor["idx"]
-        end_idx   = len(df) - 1
+        start_idx  = anchor["idx"]
+        end_idx    = len(df) - 1
+        n_candles  = end_idx - start_idx + 1
+        min_needed = VP_MIN_CANDLES.get(tf, VP_MIN_CANDLES_DEFAULT)
+        if n_candles < min_needed:
+            return jsonify({"error": f"VP window too short ({n_candles} candles on {tf}) — need at least {min_needed} for a reliable profile. Try a higher timeframe."}), 400
         vp = _ca_volume_profile(df, start_idx, end_idx)
         if not vp:
             return jsonify({"error": "Insufficient price range in structure"}), 400
@@ -2379,7 +2383,7 @@ def api_analysis_vp():
             "bin_edges":   vp["bin_edges"],
             "bin_volumes": [round(v, 2) for v in vp["bin_volumes"]],
             "n_bins":      len(vp["bin_volumes"]),
-            "candles":                end_idx - start_idx + 1,
+            "candles":                n_candles,
             "anchor_price":           anchor["price"],
             "anchor_type":            anchor["anchor_type"],
             "anchor_method":          anchor["method"],
@@ -2401,23 +2405,55 @@ def api_analysis_vp_stack():
     symbol = flask_request.args.get("symbol", "SOLUSDT")
     clean  = symbol.upper().replace("BINANCE:", "").replace(":", "").replace("/", "")
     atype  = _an_asset_type(symbol)
-    TFS    = [("15m", "#5dade2"), ("1h", "#2962ff"), ("4h", "#e67e22")]
+    # Each slot: (key, data_tf, color, lookback). The `key` is the UI label the
+    # frontend filters on (its 15m/1h/4h checkbox); the `data_tf` is the timeframe
+    # whose candles/algorithm actually drive that slot — shifted up one rung so
+    # each checkbox now runs the algorithm of the next-higher timeframe.
+    #   lookback=None -> window starts at the auto-detected auction anchor (the
+    #                    normal, current-auction VP).
+    #   lookback=int  -> bypass the anchor and profile that many most-recent
+    #                    candles instead, a deeper "more data" distribution that
+    #                    spans well beyond the current auction window.
+    VP_SLOTS = [
+        ("15m", "1h", "#5dade2", None),                   # 15m slot runs the 1h algorithm
+        ("1h",  "4h", "#2962ff", None),                   # 1h slot runs the 4h algorithm
+        ("4h",  "4h", "#e67e22", VP_DEEP_4H_LOOKBACK),    # 4h slot — deep 4h, more data
+    ]
     results = []
     try:
-        for ftf, color in TFS:
+        for key, ftf, color, lookback in VP_SLOTS:
             try:
                 sym = clean if atype == "crypto" else symbol
                 df  = fetch_candles(sym, atype, ftf, 700)
-                anchor = _detect_vp_anchor(df)
-                if anchor is None:
+                end_idx = len(df) - 1
+                if lookback is None:
+                    anchor = _detect_vp_anchor(df)
+                    if anchor is None:
+                        continue
+                    start_idx     = anchor["idx"]
+                    anchor_method = anchor["method"]
+                    anchor_conf   = anchor["confidence"]
+                    anchor_confd  = anchor.get("confirmed", False)
+                    anchor_active = anchor.get("active", True)
+                    anchor_inval  = anchor.get("invalidation_reason")
+                else:
+                    # Fixed deep window — no anchor detection, just the last N bars.
+                    start_idx     = max(0, end_idx - lookback + 1)
+                    anchor_method = f"fixed_lookback_{lookback}"
+                    anchor_conf   = None
+                    anchor_confd  = False
+                    anchor_active = True
+                    anchor_inval  = None
+                n_candles  = end_idx - start_idx + 1
+                min_needed = VP_MIN_CANDLES.get(ftf, VP_MIN_CANDLES_DEFAULT)
+                if n_candles < min_needed:
+                    print(f"[VpStack/{key}] skipped — only {n_candles} candles in window, need {min_needed}")
                     continue
-                start_idx = anchor["idx"]
-                end_idx   = len(df) - 1
                 vp = _ca_volume_profile(df, start_idx, end_idx)
                 if not vp:
                     continue
                 results.append({
-                    "tf": ftf, "color": color,
+                    "tf": key, "color": color,
                     "start_t": int(df.index[start_idx].timestamp()),
                     "end_t":   int(df.index[end_idx].timestamp()),
                     "poc": round(float(vp["poc"]), 5),
@@ -2425,15 +2461,15 @@ def api_analysis_vp_stack():
                     "val": round(float(vp["val"]), 5),
                     "bin_edges":   vp["bin_edges"],
                     "bin_volumes": [round(v, 2) for v in vp["bin_volumes"]],
-                    "candles":             end_idx - start_idx + 1,
-                    "anchor_method":       anchor["method"],
-                    "anchor_confidence":   anchor["confidence"],
-                    "anchor_confirmed":    anchor.get("confirmed", False),
-                    "anchor_active":       anchor.get("active", True),
-                    "anchor_invalidation": anchor.get("invalidation_reason"),
+                    "candles":             n_candles,
+                    "anchor_method":       anchor_method,
+                    "anchor_confidence":   anchor_conf,
+                    "anchor_confirmed":    anchor_confd,
+                    "anchor_active":       anchor_active,
+                    "anchor_invalidation": anchor_inval,
                 })
             except Exception as e:
-                print(f"[VpStack/{ftf}] {e}")
+                print(f"[VpStack/{key}] {e}")
         return jsonify({"symbol": symbol, "timeframes": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2953,6 +2989,19 @@ def api_rays():
             p_horizon = value_now + ray.slope_raw * h_bars
             life_hours = round(ray.lifetime_span_bars * tf_seconds / 3600.0, 1)
 
+            # Phase R8: draw the solid segment from the historical pivot the fit
+            # anchors to (origin_ts) through to now, so the line visibly rides
+            # the past tops/bottoms instead of launching off the last reconcile
+            # bar. p is taken ON the ray's own line (via _project_value) so the
+            # whole thing stays a single straight line at the ray's slope. Pre-R8
+            # records have origin_ts == 0 -> fall back to the old anchor.
+            if ray.origin_ts and ray.origin_ts < current_bar_ts:
+                t_start = ray.origin_ts
+                p_start = ray_registry._project_value(ray, ray.origin_ts)
+            else:
+                t_start = ray.anchor_ts
+                p_start = ray.value_at_anchor
+
             label = f"{slope_class.capitalize()} {side_word} · respected {ray.respect_count}x · {life_hours:g}h"
             age_seconds = current_bar_ts - ray.last_seen_ts
             if age_seconds > scan_cycle_seconds:
@@ -2963,7 +3012,7 @@ def api_rays():
                 "respect_count": ray.respect_count, "wick_rejection_count": ray.wick_rejection_count,
                 "lifetime_hours": life_hours, "horizon_bars": round(h_bars, 1),
                 "last_seen_ts": ray.last_seen_ts,
-                "t_anchor": ray.anchor_ts, "p_anchor": round(ray.value_at_anchor, 8),
+                "t_anchor": t_start, "p_anchor": round(p_start, 8),
                 "t_now": current_bar_ts, "p_now": round(value_now, 8),
                 "t_horizon": t_horizon, "p_horizon": round(p_horizon, 8),
                 "label": label,
@@ -7847,6 +7896,24 @@ def _detect_auction_anchor(df, max_lookback=200, pivot_bars=5):
     return None
 
 
+# Minimum candles the anchor-to-now window must span for a VP to be meaningful.
+# Too few candles means the profile covers only a handful of bars — not enough
+# price action history to identify a real auction range.
+VP_MIN_CANDLES = {
+    "15m": 20,   # ~5 hours
+    "30m": 20,   # ~10 hours
+    "1h":  24,   # ~1 day
+    "4h":  12,   # ~2 days
+    "1d":   7,   # ~1 week
+}
+VP_MIN_CANDLES_DEFAULT = 20
+
+# Fixed lookback (in 4h candles) for the "deep" 4h VP slot — bypasses the
+# auction-anchor window so the profile spans far more history (~180 × 4h ≈ 30
+# days) than the current-auction VP. This is the "takes more data" slot.
+VP_DEEP_4H_LOOKBACK = 180
+
+
 def _detect_vp_anchor(df, max_lookback=200, pivot_bars=5, recent_window=40):
     """VP-only auction anchor — finds the TRUE start of the current auction/range,
     not just the most recent clean pivot.
@@ -9504,6 +9571,132 @@ def _run_pattern_engine(df, window=3, lookback=100, breakout_pct=0.012):
     return results
 
 
+# ── Ray trendline config (Phase R9) ──────────────────────────────────────────
+# The ray registry is now fed by a server-side PORT of the client "Quick TL"
+# algorithm (webapp/js/ui/chat.js _computeTrendlines), which Kev tuned and
+# adopted as the SINGLE trendline algorithm -- the earlier dedicated pivot-pair
+# fit (R8) is retired. It has to run server-side because trades are evaluated by
+# the scan loop / Chev with no browser open, and these lines are used as
+# support/resistance for those trades. Kept in sync with the JS BY HAND (same
+# "standalone local copy" tradeoff as labeller.py's constants): if you change
+# the scoring / pierce / touch rules in one, mirror them in the other.
+RAY_TL_LOOKBACK        = 260    # bars of history searched (matches Quick TL default)
+RAY_TL_PIVOT_K         = 3      # fractal half-width for swing detection
+RAY_TL_MIN_SPAN        = 8      # min bars between the two anchor pivots
+RAY_TL_TOL_ATR         = 0.6    # touch tolerance + trending threshold, in ATR
+RAY_TL_PIERCE_EPS_ATR  = 0.05   # ignore negligible close-through overshoot
+RAY_TL_ALLOWED_PIERCES = 0      # closes allowed beyond the line (0 = strict "must
+                                # not be pierced"). Raise only if the Quick TL
+                                # "Allowed pierces" experiment shows a permissive
+                                # line hugs the trend better -- one place to change.
+
+
+def _fit_ray_trendline(df, side, atr):
+    """
+    Server-side port of the client "Quick TL" trendline (chat.js
+    _computeTrendlines) -- the single trendline algorithm. Its output feeds the
+    ray registry, so the drawn line becomes a tracked, forward-extending ray
+    usable as support/resistance for trades. Replaces the retired R8 fit.
+
+    For 'upper' it rides a series of DESCENDING swing highs (a resistance trend
+    line); for 'lower', ASCENDING swing lows (support). Over every same-type
+    pivot pair spanning >= RAY_TL_MIN_SPAN bars it draws the line, counts the
+    candles that CLOSE through it from the first anchor to the current bar
+    (wicks may poke through and still count as a respectful touch -- only a
+    close breaks it), rejects the line if that exceeds RAY_TL_ALLOWED_PIERCES,
+    counts how many pivots touch/respect it, and keeps the single best line
+    (touches dominate, then span; permitted pierces and distance-from-price
+    are penalised).
+
+    Returns dict(slope_raw, value_at_last_bar, origin_ts, origin_price,
+    touches, pierces, span_bars) -- or None when no clean line exists (the
+    caller then simply doesn't mint/update a ray for that side).
+    """
+    if df is None or not atr or atr <= 0:
+        return None
+    sub = df.tail(RAY_TL_LOOKBACK)
+    n   = len(sub)
+    if n < 30:
+        return None
+    highs  = sub["high"].values.astype(float)
+    lows   = sub["low"].values.astype(float)
+    closes = sub["close"].values.astype(float)
+    ts     = [int(t.timestamp()) for t in sub.index]
+    last   = n - 1
+
+    is_upper = (side == "upper")
+    vals     = highs if is_upper else lows
+
+    # Fractal pivots: strict local extreme within +/- k bars (mirrors Quick TL).
+    k = RAY_TL_PIVOT_K
+    pivots = []
+    for i in range(k, n - k):
+        is_ext = True
+        for j in range(i - k, i + k + 1):
+            if j == i:
+                continue
+            if (highs[j] >= highs[i]) if is_upper else (lows[j] <= lows[i]):
+                is_ext = False
+                break
+        if is_ext:
+            pivots.append(i)
+    if len(pivots) < 2:
+        return None
+
+    tol        = atr * RAY_TL_TOL_ATR
+    pierce_eps = atr * RAY_TL_PIERCE_EPS_ATR
+    allow      = max(0, RAY_TL_ALLOWED_PIERCES)
+
+    best = None  # (score, slope, a, touches, pierces, span)
+    for bi in range(len(pivots)):
+        b = pivots[bi]
+        for ai in range(bi):
+            a = pivots[ai]
+            if (b - a) < RAY_TL_MIN_SPAN:
+                continue
+            slope = (vals[b] - vals[a]) / (b - a)
+            # Classic direction: resistance must descend, support must ascend,
+            # by at least one tolerance over the span.
+            rise = slope * (b - a)
+            if (rise > -tol) if is_upper else (rise < tol):
+                continue
+            # Close-through pierces from the first anchor to the current bar.
+            pierces = 0
+            for i in range(a, n):
+                line = vals[a] + slope * (i - a)
+                if (closes[i] > line + pierce_eps) if is_upper else (closes[i] < line - pierce_eps):
+                    pierces += 1
+                    if pierces > allow:
+                        break
+            if pierces > allow:
+                continue
+            # Touches / respects: same-type pivots within tol of the line.
+            touches = sum(1 for p in pivots
+                          if abs(vals[p] - (vals[a] + slope * (p - a))) <= tol)
+            if touches < 2:
+                continue
+            proj_now = vals[a] + slope * (last - a)
+            dist_now = abs(proj_now - vals[last]) / (atr or 1)
+            # Touches dominate, then span; permitted pierces and a line sitting
+            # far from current price are penalised.
+            score = touches * 1000 + (b - a) - pierces * 120 - dist_now * 20
+            if best is None or score > best[0]:
+                best = (score, slope, a, touches, pierces, b - a)
+
+    if best is None:
+        return None
+    _, slope, a, touches, pierces, span = best
+    return {
+        "slope_raw":         float(slope),
+        "value_at_last_bar": float(vals[a] + slope * (last - a)),
+        "origin_ts":         ts[a],
+        "origin_price":      float(vals[a]),
+        "touches":           int(touches),
+        "pierces":           int(pierces),
+        "span_bars":         int(span),
+    }
+
+
 def _ema_proximity_pct(price, ema_val):
     """Return how close price is to an EMA as a percentage (absolute)."""
     if not ema_val or ema_val == 0:
@@ -10165,8 +10358,12 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
         ray_score   = 0.0
         try:
             _ray_atr = float(primary_df["ATR"].iloc[-1]) if "ATR" in primary_df.columns else None
-            _ray_geo = all_patterns[0].get("geometry") if all_patterns else None
-            if _ray_atr and _ray_atr > 0 and _ray_geo:
+            # Phase R8: the ray registry is fed by its OWN pivot-pair boundary
+            # fit (_fit_ray_trendline), not _run_pattern_engine's OLS geometry --
+            # so the SCAN/PAT overlays keep the old fit while rays get a proper
+            # trendline. Compute one clean line per side; a side with no clean
+            # line simply doesn't mint/update a ray this scan.
+            if _ray_atr and _ray_atr > 0:
                 _ray_bar_ts = int(primary_df.index[-1].timestamp())
                 _ray_levels = (
                     ([(top_r["price"], "Resistance")] if top_r else [])
@@ -10180,15 +10377,20 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                     _old_last_seen = {r.id: r.last_seen_ts
                                       for _rs in _ray_reg.values() for r in _rs}
 
-                    for _side, _slope_raw, _value_now in [
-                        ("upper", _ray_geo["upper_slope_raw"], _ray_geo["upper_line"]),
-                        ("lower", _ray_geo["lower_slope_raw"], _ray_geo["lower_line"]),
-                    ]:
+                    _ray_fits = []
+                    for _side in ("upper", "lower"):
+                        _fit = _fit_ray_trendline(primary_df, _side, _ray_atr)
+                        if _fit is not None:
+                            _ray_fits.append((_side, _fit))
+
+                    for _side, _fit in _ray_fits:
                         _ray_obj = ray_registry.reconcile(
                             _ray_reg, symbol, primary_tf, _side,
-                            slope_raw=_slope_raw, slope_norm=_slope_raw / _ray_atr,
-                            value_at_current_bar=_value_now, current_bar_ts=_ray_bar_ts,
-                            atr=_ray_atr)
+                            slope_raw=_fit["slope_raw"],
+                            slope_norm=_fit["slope_raw"] / _ray_atr,
+                            value_at_current_bar=_fit["value_at_last_bar"],
+                            current_bar_ts=_ray_bar_ts, atr=_ray_atr,
+                            origin_ts=_fit["origin_ts"], origin_price=_fit["origin_price"])
 
                         # "Bars since last scan" (Task 1). A freshly minted ray has no
                         # prior identity to measure from -- give it just the current bar,
@@ -10261,8 +10463,10 @@ def scan_pair_tf(symbol, asset_type, primary_tf):
                     _dir_word   = "bearish" if _ray_obj.side == "upper" else "bullish"
                     _slope_word = ("rising" if _ray_obj.slope_norm > 0
                                    else "falling" if _ray_obj.slope_norm < 0 else "flat")
-                    _ray_now_value = (_ray_geo["upper_line"] if _ray_obj.side == "upper"
-                                     else _ray_geo["lower_line"])
+                    # The line's value at the current bar, derived from the ray's
+                    # own fitted slope/anchor (Phase R8) rather than the pattern
+                    # engine's geometry -- consistent with the fit that defined it.
+                    _ray_now_value = ray_registry._project_value(_ray_obj, _ray_bar_ts)
 
                     if abs(current_price - _ray_now_value) <= _ray_tol_now:
                         _held_hours = round(_ray_obj.lifetime_span_bars * _bar_hours, 1)
